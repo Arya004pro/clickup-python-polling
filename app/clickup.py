@@ -1,134 +1,146 @@
 import requests
-from app.config import CLICKUP_API_TOKEN, CLICKUP_SPACE_ID, CLICKUP_TEAM_ID, BASE_URL
+from functools import lru_cache
+from typing import List, Dict
+
+from app.config import (
+    CLICKUP_API_TOKEN,
+    CLICKUP_TEAM_ID,
+    BASE_URL,
+)
+
+# -------------------------
+# Shared session (IMPORTANT)
+# -------------------------
+session = requests.Session()
+session.headers.update(
+    {
+        "Authorization": CLICKUP_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+)
 
 
-HEADERS = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
-
-
-def fetch_lists_from_space():
+def _get(url: str, params: dict | None = None) -> dict:
     """
-    Fetch all lists inside a space
+    Centralized GET with error handling
     """
-    url = f"{BASE_URL}/space/{CLICKUP_SPACE_ID}/list"
-
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to fetch lists: {response.status_code} {response.text}"
-        )
-
-    return response.json().get("lists", [])
+    resp = session.get(url, params=params)
+    if resp.status_code != 200:
+        raise RuntimeError(f"ClickUp error {resp.status_code}: {resp.text}")
+    return resp.json()
 
 
-def fetch_tasks_from_list(list_id: str):
+# -------------------------------------------------
+# LIST FETCHING (cached – lists rarely change)
+# -------------------------------------------------
+@lru_cache(maxsize=1)
+def fetch_all_lists_in_space(space_id: str) -> List[Dict]:
     """
-    Fetch all tasks from a ClickUp list
+    Fetch ALL lists in a space (folders + standalone).
+    Cached for performance.
     """
-    url = f"{BASE_URL}/list/{list_id}/task"
+    lists: List[Dict] = []
 
-    params = {"archived": "false"}
-
-    response = requests.get(url, headers=HEADERS, params=params)
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to fetch tasks for list {list_id}: {response.status_code} {response.text}"
-        )
-
-    return response.json().get("tasks", [])
-
-
-def fetch_all_tasks_from_space(space_id: str):
-    all_tasks = []
-
-    # 1️⃣ Get lists in space
-    lists_url = f"{BASE_URL}/space/{space_id}/list"
-    lists_resp = requests.get(lists_url, headers=HEADERS)
-
-    if lists_resp.status_code != 200:
-        raise RuntimeError(f"Failed to fetch lists: {lists_resp.text}")
-
-    lists = lists_resp.json().get("lists", [])
-
-    # 2️⃣ Fetch tasks from each list
-    for lst in lists:
-        list_id = lst["id"]
-        page = 0
-
-        while True:
-            tasks_url = f"{BASE_URL}/list/{list_id}/task"
-            params = {
-                "page": page,
-                "include_closed": "true",
-                "archived": "false",
-            }
-
-            resp = requests.get(tasks_url, headers=HEADERS, params=params)
-
-            if resp.status_code != 200:
-                raise RuntimeError(f"Task fetch failed: {resp.text}")
-
-            batch = resp.json().get("tasks", [])
-
-            if not batch:
-                break
-
-            all_tasks.extend(batch)
-            page += 1
-
-    return all_tasks
-
-
-def fetch_time_entries_for_task(task_id: str):
-    """
-    Fetch all time entries for a given ClickUp task
-    """
-    url = f"{BASE_URL}/task/{task_id}/time"
-
-    response = requests.get(url, headers=HEADERS)
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to fetch time entries for task {task_id}: "
-            f"{response.status_code} {response.text}"
-        )
-
-    return response.json().get("data", [])
-
-
-def fetch_all_lists_in_space(space_id: str):
-    lists = []
-
-    # Projects = folders
-    folders_res = requests.get(f"{BASE_URL}/space/{space_id}/folder", headers=HEADERS)
-    folders_res.raise_for_status()
-
-    for folder in folders_res.json().get("folders", []):
-        for lst in folder.get("lists", []):
-            lists.append(lst)
+    # Folder lists (projects)
+    folders = _get(f"{BASE_URL}/space/{space_id}/folder").get("folders", [])
+    for folder in folders:
+        lists.extend(folder.get("lists", []))
 
     # Standalone lists
-    lists_res = requests.get(f"{BASE_URL}/space/{space_id}/list", headers=HEADERS)
-    lists_res.raise_for_status()
-
-    lists.extend(lists_res.json().get("lists", []))
+    standalone = _get(f"{BASE_URL}/space/{space_id}/list").get("lists", [])
+    lists.extend(standalone)
 
     return lists
 
 
-def fetch_time_entries():
+# -------------------------------------------------
+# TASK FETCHING (incremental friendly)
+# -------------------------------------------------
+def fetch_tasks_from_list(
+    list_id: str, updated_after_ms: int | None = None
+) -> List[Dict]:
     """
-    Fetch ALL time entries for the team.
-    ClickUp returns time in milliseconds.
+    Fetch tasks from a list (supports incremental sync).
     """
-    url = f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/time_entries"
+    all_tasks: List[Dict] = []
+    page = 0
 
-    response = requests.get(url, headers=HEADERS)
+    while True:
+        params = {
+            "page": page,
+            "include_closed": "true",
+            "archived": "false",
+        }
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Failed to fetch time entries: {response.status_code} {response.text}"
+        if updated_after_ms:
+            params["date_updated_gt"] = updated_after_ms
+
+        data = _get(f"{BASE_URL}/list/{list_id}/task", params)
+        tasks = data.get("tasks", [])
+
+        if not tasks:
+            break
+
+        all_tasks.extend(tasks)
+        page += 1
+
+    return all_tasks
+
+
+# -------------------------------------------------
+# PUBLIC API (⚠️ REQUIRED by main.py & scheduler)
+# -------------------------------------------------
+def fetch_all_tasks_from_space(space_id: str) -> List[Dict]:
+    """
+    Phase-2 public wrapper.
+    Keeps backward compatibility with main.py & scheduler.
+    """
+    all_tasks: List[Dict] = []
+
+    lists = fetch_all_lists_in_space(space_id)
+
+    for lst in lists:
+        all_tasks.extend(fetch_tasks_from_list(lst["id"]))
+
+    return all_tasks
+
+
+def fetch_tasks_updated_since(space_id: str, updated_after_ms: int) -> List[Dict]:
+    """
+    Phase-2 optimized:
+    Fetch ONLY tasks updated after a timestamp.
+    (Ready for Phase-3 incremental sync)
+    """
+    tasks: List[Dict] = []
+
+    lists = fetch_all_lists_in_space(space_id)
+
+    for lst in lists:
+        tasks.extend(
+            fetch_tasks_from_list(lst["id"], updated_after_ms=updated_after_ms)
         )
 
-    return response.json().get("data", [])
+    return tasks
+
+
+# -------------------------------------------------
+# TIME TRACKING (task-scoped, accurate)
+# -------------------------------------------------
+def fetch_time_entries_for_task(task_id: str) -> List[Dict]:
+    """
+    Fetch interval-based time entries for ONE task.
+    """
+    data = _get(f"{BASE_URL}/task/{task_id}/time")
+    return data.get("data", [])
+
+
+# -------------------------------------------------
+# TEAM-LEVEL TIME (kept for compatibility)
+# -------------------------------------------------
+def fetch_time_entries() -> List[Dict]:
+    """
+    Fetch ALL team time entries.
+    ⚠️ Expensive – avoid in Phase-2 sync.
+    """
+    data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/time_entries")
+    return data.get("data", [])

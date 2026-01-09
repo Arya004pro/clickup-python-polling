@@ -1,15 +1,27 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from typing import List, Dict, Optional
 
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def aggregate_time_entries(time_entries: list):
+def _ms_to_ist(ms: int) -> datetime:
     """
-    Aggregate ClickUp time entries (interval-based) into:
-    - start_time (IST)
-    - end_time (IST)
-    - tracked_minutes
+    Convert epoch milliseconds → IST datetime
+    """
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(IST)
+
+
+def aggregate_time_entries(time_entries: List[Dict]) -> Dict[str, Optional[datetime]]:
+    """
+    Aggregate ClickUp interval-based time entries into:
+    - start_time (IST)  → earliest interval start
+    - end_time (IST)    → latest interval end (ignores running timers)
+    - tracked_minutes  → sum of all interval durations
+
+    Notes:
+    - ClickUp intervals are authoritative (not task fields)
+    - Safe for completed, in-progress, and paused tasks
     """
 
     if not time_entries:
@@ -19,45 +31,32 @@ def aggregate_time_entries(time_entries: list):
             "tracked_minutes": 0,
         }
 
-    start_times_ms = []
-    end_times_ms = []
-    total_ms = 0
+    start_times: List[int] = []
+    end_times: List[int] = []
+    total_ms: int = 0
 
     for entry in time_entries:
-        intervals = entry.get("intervals", [])
-
-        for interval in intervals:
+        for interval in entry.get("intervals", []):
             start_ms = interval.get("start")
             end_ms = interval.get("end")
             duration_ms = interval.get("time")
 
-            if start_ms is not None:
-                start_times_ms.append(int(start_ms))
+            if start_ms:
+                start_times.append(int(start_ms))
 
-            if end_ms is not None:
-                end_times_ms.append(int(end_ms))
+            # end_ms may be None if timer is running
+            if end_ms:
+                end_times.append(int(end_ms))
 
-            if duration_ms is not None:
+            if duration_ms:
                 total_ms += int(duration_ms)
 
-    # Convert earliest start and latest end to IST
-    start_time = (
-        datetime.fromtimestamp(min(start_times_ms) / 1000, tz=timezone.utc).astimezone(
-            IST
-        )
-        if start_times_ms
-        else None
-    )
+    start_time = _ms_to_ist(min(start_times)) if start_times else None
 
-    end_time = (
-        datetime.fromtimestamp(max(end_times_ms) / 1000, tz=timezone.utc).astimezone(
-            IST
-        )
-        if end_times_ms
-        else None
-    )
+    # If task is currently running, end_time remains last completed interval
+    end_time = _ms_to_ist(max(end_times)) if end_times else None
 
-    tracked_minutes = total_ms // (1000 * 60)
+    tracked_minutes = total_ms // 60000  # ms → minutes
 
     return {
         "start_time": start_time,

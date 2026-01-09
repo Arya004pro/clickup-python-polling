@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-
+from app.logging_config import setup_logging
 from app.clickup import (
     fetch_all_tasks_from_space,
     fetch_time_entries_for_task,
@@ -11,28 +11,43 @@ from app.config import CLICKUP_SPACE_ID
 from app.scheduler import start_scheduler
 
 
+# -------------------------------------------------
+# Application lifespan (startup / shutdown)
+# -------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ===== Startup =====
+    # Startup
+    setup_logging()
     start_scheduler()
     yield
-    # ===== Shutdown =====
-    # (Scheduler auto-stops on process exit)
+    # Shutdown
+    # Scheduler stops automatically on process exit
 
 
 app = FastAPI(lifespan=lifespan)
 
-print(">>> SPACE_ID =", CLICKUP_SPACE_ID)
 
-
+# -------------------------------------------------
+# Debug / test endpoints (kept intentionally)
+# -------------------------------------------------
 @app.get("/test/tasks")
 def test_tasks():
+    """
+    Fetch all tasks from ClickUp (debug endpoint).
+    """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
-    return {"total_tasks": len(tasks), "sample": tasks[:2]}
+    return {
+        "space_id": CLICKUP_SPACE_ID,
+        "total_tasks": len(tasks),
+        "sample": tasks[:2],
+    }
 
 
 @app.get("/test/time")
-def test_time():
+def test_time_aggregation():
+    """
+    Test time aggregation logic with dummy data.
+    """
     sample = [
         {"start": 1700000000000, "end": 1700003600000, "duration": 3600000},
         {"start": 1700007200000, "end": 1700010800000, "duration": 3600000},
@@ -42,12 +57,14 @@ def test_time():
 
 @app.get("/test/tasks-with-time")
 def test_tasks_with_time():
+    """
+    Fetch a few tasks and show aggregated time data.
+    """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
     results = []
 
-    for task in tasks[:5]:  # limit for safety
+    for task in tasks[:5]:  # safety limit
         task_id = task["id"]
-
         time_entries = fetch_time_entries_for_task(task_id)
         aggregated = aggregate_time_entries(time_entries)
 
@@ -64,22 +81,40 @@ def test_tasks_with_time():
     return results
 
 
+# -------------------------------------------------
+# Sync endpoints
+# -------------------------------------------------
 @app.get("/sync/tasks")
 def sync_tasks():
+    """
+    Trigger full sync manually.
+    """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
     count = sync_tasks_to_supabase(tasks)
-    return {"status": "success", "tasks_synced": count}
+    return {
+        "status": "success",
+        "tasks_synced": count,
+    }
 
 
 @app.get("/test/sync")
 def test_sync():
+    """
+    Debug sync endpoint.
+    """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
     count = sync_tasks_to_supabase(tasks)
-    return {"tasks_fetched": len(tasks), "tasks_synced": count}
+    return {
+        "tasks_fetched": len(tasks),
+        "tasks_synced": count,
+    }
 
 
 @app.get("/test/time/{task_id}")
 def test_time_for_task(task_id: str):
+    """
+    Fetch and aggregate time entries for a single task.
+    """
     entries = fetch_time_entries_for_task(task_id)
     aggregated = aggregate_time_entries(entries)
 
