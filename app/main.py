@@ -9,6 +9,7 @@ from app.time_tracking import aggregate_time_entries
 from app.sync import sync_tasks_to_supabase
 from app.config import CLICKUP_SPACE_ID
 from app.scheduler import start_scheduler
+from app.employee_sync import sync_employees_to_supabase
 
 
 # -------------------------------------------------
@@ -90,7 +91,7 @@ def sync_tasks():
     Trigger full sync manually.
     """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
-    count = sync_tasks_to_supabase(tasks)
+    count = sync_tasks_to_supabase(tasks, full_sync=True)
     return {
         "status": "success",
         "tasks_synced": count,
@@ -103,7 +104,7 @@ def test_sync():
     Debug sync endpoint.
     """
     tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
-    count = sync_tasks_to_supabase(tasks)
+    count = sync_tasks_to_supabase(tasks, full_sync=True)
     return {
         "tasks_fetched": len(tasks),
         "tasks_synced": count,
@@ -124,3 +125,9 @@ def test_time_for_task(task_id: str):
         "aggregated": aggregated,
         "sample_entries": entries[:3],
     }
+
+
+@app.get("/sync/employees")
+def sync_employees():
+    count = sync_employees_to_supabase()
+    return {"employees_synced": count}
