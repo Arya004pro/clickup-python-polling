@@ -10,6 +10,7 @@ from app.sync import sync_tasks_to_supabase
 from app.config import CLICKUP_SPACE_ID
 from app.scheduler import start_scheduler
 from app.employee_sync import sync_employees_to_supabase
+from app.supabase_db import supabase
 
 
 # -------------------------------------------------
@@ -131,3 +132,63 @@ def test_time_for_task(task_id: str):
 def sync_employees():
     count = sync_employees_to_supabase()
     return {"employees_synced": count}
+
+
+@app.get("/employees", tags=["Employees"])
+def get_employees():
+    """
+    Fetch all employees from Supabase.
+    """
+    resp = supabase.table("employees").select("id, name, email, role").execute()
+
+    return {"count": len(resp.data or []), "employees": resp.data}
+
+
+@app.get("/tasks/by-employee", tags=["Tasks"])
+def get_tasks_by_employee(employee_id: str):
+    resp = (
+        supabase.table("tasks")
+        .select("""
+            clickup_task_id,
+            title,
+            description,
+            status,
+            status_type,
+            task_type,
+
+            assignee_name,
+            assigned_by,
+
+            tags,
+            priority,
+
+            due_date,
+            start_date,
+
+            date_created,
+            date_updated,
+            date_done,
+            date_closed,
+
+            time_estimate_minutes,
+            tracked_minutes,
+
+            space_name,
+            folder_name,
+            list_name,
+
+            followers,
+            summary,
+
+            in_progress_by,
+            completed_by
+        """)
+        .eq("employee_id", employee_id)
+        .execute()
+    )
+
+    return {
+        "employee_id": employee_id,
+        "tasks_count": len(resp.data or []),
+        "tasks": resp.data,
+    }

@@ -136,6 +136,11 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         status_type = status_obj.get("type", "")  # open / custom / closed
 
         # ----------------------------
+        # Archived (SAFE)
+        # ----------------------------
+        archived = bool(task.get("archived", False))
+
+        # ----------------------------
         # Task Type
         # ----------------------------
         if task.get("milestone"):
@@ -345,6 +350,7 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "date_done": _to_iso(date_done),
             "date_closed": _to_iso(date_closed),
             "priority": priority,
+            "archived": archived,
             "time_estimate_minutes": time_estimate_minutes,
             "employee_id": employee_id,
             "assignee_name": assignee_name,
