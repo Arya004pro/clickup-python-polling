@@ -47,17 +47,15 @@ def fetch_all_lists_in_space(space_id: str) -> List[Dict]:
 # =================================================
 # TASK FETCHING (STABLE)
 # =================================================
-def fetch_tasks_from_list(
-    list_id: str,
-    updated_after_ms: Optional[int] = None,
-) -> List[Dict]:
-    all_tasks: List[Dict] = []
+def fetch_tasks_from_list(list_id: str, updated_after_ms: Optional[int] = None):
+    all_tasks = []
     page = 0
 
     while True:
         params = {
             "page": page,
             "include_closed": "true",
+            "archived": "false",
         }
 
         if updated_after_ms is not None:

@@ -1,5 +1,4 @@
 import logging
-import time
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -36,12 +35,7 @@ _run_count: int = 0
 # -------------------------------------------------
 def scheduled_sync():
     """
-    Phase-2 optimized scheduler
-
-    Rules:
-    - Employees ALWAYS synced first
-    - Full task sync every 3rd run (~6 min)
-    - Incremental otherwise
+    Stable scheduler logic
     """
     global _last_sync_ms, _run_count
 
@@ -49,18 +43,18 @@ def scheduled_sync():
 
     try:
         # -------------------------------------------------
-        # 1️⃣ Sync employees FIRST (critical)
+        # 1️⃣ Sync employees FIRST
         # -------------------------------------------------
         emp_count = sync_employees_to_supabase()
         logger.info(f"👥 Synced {emp_count} employees")
 
         # -------------------------------------------------
-        # 2️⃣ Decide FULL vs INCREMENTAL task sync
+        # 2️⃣ Decide FULL vs INCREMENTAL
         # -------------------------------------------------
         do_full_sync = _last_sync_ms is None or _run_count % 6 == 0
 
         if do_full_sync:
-            logger.info("🔄 FULL task sync (deletion check enabled)")
+            logger.info("🔄 FULL task sync")
             tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
 
             synced = sync_tasks_to_supabase(
@@ -69,7 +63,8 @@ def scheduled_sync():
             )
         else:
             logger.info(f"⚡ Incremental task sync since {_last_sync_ms}")
-            BUFFER_MS = 2 * 60 * 1000  # 2 minutes buffer
+            BUFFER_MS = 2 * 60 * 1000  # 2 min safety buffer
+
             tasks = fetch_tasks_updated_since(
                 CLICKUP_SPACE_ID,
                 updated_after_ms=_last_sync_ms - BUFFER_MS,
@@ -81,9 +76,14 @@ def scheduled_sync():
             )
 
         # -------------------------------------------------
-        # 3️⃣ Update state ONLY after success
+        # 3️⃣ Advance cursor SAFELY
         # -------------------------------------------------
-        _last_sync_ms = int(time.time() * 1000)
+        if tasks:
+            newest_update = max(
+                int(task["date_updated"]) for task in tasks if task.get("date_updated")
+            )
+            _last_sync_ms = newest_update
+
         _run_count += 1
 
         logger.info(
