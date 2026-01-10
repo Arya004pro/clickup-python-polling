@@ -12,6 +12,8 @@ from app.clickup import (
     fetch_tasks_updated_since,
 )
 from app.config import CLICKUP_SPACE_ID
+from app.time_sync import sync_time_entries
+
 
 
 # -------------------------------------------------
@@ -49,31 +51,28 @@ def scheduled_sync():
         logger.info(f"👥 Synced {emp_count} employees")
 
         # -------------------------------------------------
-        # 2️⃣ Decide FULL vs INCREMENTAL
+        # 2️⃣ Task sync (existing logic)
         # -------------------------------------------------
         do_full_sync = _last_sync_ms is None or _run_count % 6 == 0
 
         if do_full_sync:
             logger.info("🔄 FULL task sync")
             tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
-
-            synced = sync_tasks_to_supabase(
-                tasks,
-                full_sync=True,
-            )
+            synced = sync_tasks_to_supabase(tasks, full_sync=True)
         else:
-            logger.info(f"⚡ Incremental task sync since {_last_sync_ms}")
-            BUFFER_MS = 2 * 60 * 1000  # 2 min safety buffer
-
+            logger.info("⚡ Incremental task sync")
+            BUFFER_MS = 2 * 60 * 1000
             tasks = fetch_tasks_updated_since(
                 CLICKUP_SPACE_ID,
                 updated_after_ms=_last_sync_ms - BUFFER_MS,
             )
+            synced = sync_tasks_to_supabase(tasks, full_sync=False)
 
-            synced = sync_tasks_to_supabase(
-                tasks,
-                full_sync=False,
-            )
+        # -------------------------------------------------
+        # NEW: Incremental time sync (v3)
+        # -------------------------------------------------
+        time_synced = sync_time_entries(updated_after_ms=_last_sync_ms)
+        logger.info(f"⏱️ Synced time for {time_synced} tasks")
 
         # -------------------------------------------------
         # 3️⃣ Advance cursor SAFELY
