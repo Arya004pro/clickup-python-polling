@@ -25,18 +25,9 @@ def _to_iso(dt):
 
 
 # -------------------------------------------------
-# Main Sync
+# Main Sync (STABLE – PRIORITY VERSION)
 # -------------------------------------------------
 def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
-    """
-    Sync ClickUp tasks + interval-based time tracking into Supabase.
-
-    Rules:
-    - Full sync → handle deletions
-    - Incremental sync → NEVER mark deletions
-    - Responsibility is derived from ASSIGNEE, not time entries
-    """
-
     if not tasks:
         return 0
 
@@ -82,16 +73,22 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         status_type = status_obj.get("type", "")  # open / custom / closed
 
         # ----------------------------
-        # Assignee resolution (ROBUST & CORRECT)
+        # Priority
+        # ----------------------------
+        priority_obj = task.get("priority")
+        priority = priority_obj.get("priority") if priority_obj else None
+
+        # ----------------------------
+        # Assignee
         # ----------------------------
         employee_id = None
         assignee_name = None
 
         assignees = task.get("assignees") or []
-
         user = None
+
         if assignees:
-            user = assignees[0]  # primary assignee
+            user = assignees[0]
         elif task.get("assignee"):
             user = task["assignee"]
         elif task.get("creator"):
@@ -103,30 +100,49 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             assignee_name = user.get("username")
 
         # ----------------------------
-        # Assigned by (task creator)
+        # Assigned by
         # ----------------------------
         assigned_by = None
         creator = task.get("creator")
-
         if creator:
             assigned_by = creator.get("username")
 
         # ----------------------------
-        # Responsibility tracking (FIXED)
+        # Due Date (DATE ONLY)
+        # ----------------------------
+        due_date = None
+        due_date_ms = task.get("due_date")
+        if due_date_ms:
+            due_date = datetime.fromtimestamp(
+                int(due_date_ms) / 1000
+            ).date().isoformat()
+
+        # ----------------------------
+        # Time tracking
+        # ----------------------------
+        time_entries = fetch_time_entries_for_task(clickup_task_id)
+        aggregated = aggregate_time_entries(time_entries)
+
+        # ----------------------------
+        # Responsibility (STRICT)
         # ----------------------------
         in_progress_by = None
         completed_by = None
 
-        if status_type in ("open", "custom"):
-            in_progress_by = employee_id
-        elif status_type == "closed":
-            completed_by = employee_id
+        if time_entries:
+            first_user = time_entries[0].get("user", {})
+            in_progress_by = employee_map.get(str(first_user.get("id")))
+
+            if status_type == "closed":
+                last_user = time_entries[-1].get("user", {})
+                completed_by = employee_map.get(str(last_user.get("id")))
 
         # ----------------------------
-        # Time tracking (for metrics ONLY)
+        # Tags
         # ----------------------------
-        time_entries = fetch_time_entries_for_task(clickup_task_id)
-        aggregated = aggregate_time_entries(time_entries)
+        tags_list = task.get("tags") or []
+        tags_names = [t.get("name") for t in tags_list if t.get("name")]
+        tags_str = ", ".join(tags_names) if tags_names else None
 
         # ----------------------------
         # Payload
@@ -135,15 +151,16 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "clickup_task_id": clickup_task_id,
             "title": task.get("name", ""),
             "description": task.get("text_content", ""),
+            "tags": tags_str,
             "status": status_text,
             "status_type": status_type,
-            # Ownership & accountability
-            "employee_id": employee_id,  # assignee
+            "priority": priority,
+            "employee_id": employee_id,
             "assignee_name": assignee_name,
             "assigned_by": assigned_by,
             "in_progress_by": in_progress_by,
             "completed_by": completed_by,
-            # Time
+            "due_date": due_date,
             "start_time": _to_iso(aggregated["start_time"]),
             "end_time": _to_iso(aggregated["end_time"]),
             "tracked_minutes": aggregated["tracked_minutes"],

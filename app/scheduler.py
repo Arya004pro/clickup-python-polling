@@ -57,7 +57,7 @@ def scheduled_sync():
         # -------------------------------------------------
         # 2️⃣ Decide FULL vs INCREMENTAL task sync
         # -------------------------------------------------
-        do_full_sync = _last_sync_ms is None or _run_count % 5 == 0
+        do_full_sync = _last_sync_ms is None or _run_count % 6 == 0
 
         if do_full_sync:
             logger.info("🔄 FULL task sync (deletion check enabled)")
@@ -69,9 +69,10 @@ def scheduled_sync():
             )
         else:
             logger.info(f"⚡ Incremental task sync since {_last_sync_ms}")
+            BUFFER_MS = 2 * 60 * 1000  # 2 minutes buffer
             tasks = fetch_tasks_updated_since(
                 CLICKUP_SPACE_ID,
-                updated_after_ms=_last_sync_ms,
+                updated_after_ms=_last_sync_ms - BUFFER_MS,
             )
 
             synced = sync_tasks_to_supabase(
@@ -121,8 +122,8 @@ def start_scheduler():
         minutes=2,
         id="clickup_sync_job",
         replace_existing=True,
-        max_instances=1,  # 🔒 no overlap
-        coalesce=True,  # 🔁 skip missed runs
+        max_instances=1,  #  no overlap
+        coalesce=True,  #  skip missed runs
     )
 
     _scheduler.start()

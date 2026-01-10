@@ -9,7 +9,7 @@ from app.config import (
 )
 
 # =================================================
-# Shared HTTP session (IMPORTANT)
+# Shared HTTP session
 # =================================================
 session = requests.Session()
 session.headers.update(
@@ -21,9 +21,6 @@ session.headers.update(
 
 
 def _get(url: str, params: Optional[dict] = None) -> dict:
-    """
-    Centralized GET with strict error handling.
-    """
     resp = session.get(url, params=params)
     if resp.status_code != 200:
         raise RuntimeError(f"ClickUp error {resp.status_code}: {resp.text}")
@@ -31,42 +28,29 @@ def _get(url: str, params: Optional[dict] = None) -> dict:
 
 
 # =================================================
-# LIST FETCHING (cached – lists rarely change)
+# LIST FETCHING (cached)
 # =================================================
 @lru_cache(maxsize=1)
 def fetch_all_lists_in_space(space_id: str) -> List[Dict]:
-    """
-    Fetch ALL lists in a space:
-    - Folder lists (projects)
-    - Standalone lists
-
-    Cached for performance.
-    """
     lists: List[Dict] = []
 
-    # Folder lists
-    folders_resp = _get(f"{BASE_URL}/space/{space_id}/folder")
-    for folder in folders_resp.get("folders", []):
+    folders = _get(f"{BASE_URL}/space/{space_id}/folder").get("folders", [])
+    for folder in folders:
         lists.extend(folder.get("lists", []))
 
-    # Standalone lists
-    standalone_resp = _get(f"{BASE_URL}/space/{space_id}/list")
-    lists.extend(standalone_resp.get("lists", []))
+    standalone = _get(f"{BASE_URL}/space/{space_id}/list").get("lists", [])
+    lists.extend(standalone)
 
     return lists
 
 
 # =================================================
-# TASK FETCHING (incremental-friendly)
+# TASK FETCHING (STABLE)
 # =================================================
 def fetch_tasks_from_list(
     list_id: str,
     updated_after_ms: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    Fetch tasks from a list.
-    Supports incremental sync via updated timestamp.
-    """
     all_tasks: List[Dict] = []
     page = 0
 
@@ -74,7 +58,6 @@ def fetch_tasks_from_list(
         params = {
             "page": page,
             "include_closed": "true",
-            "archived": "false",
         }
 
         if updated_after_ms is not None:
@@ -93,19 +76,12 @@ def fetch_tasks_from_list(
 
 
 # =================================================
-# PUBLIC API (⚠️ REQUIRED by main.py & scheduler)
+# PUBLIC API (USED BY scheduler & main)
 # =================================================
 def fetch_all_tasks_from_space(space_id: str) -> List[Dict]:
-    """
-    FULL space fetch.
-    Used for:
-    - First scheduler run
-    - Full syncs
-    """
     all_tasks: List[Dict] = []
 
     lists = fetch_all_lists_in_space(space_id)
-
     for lst in lists:
         all_tasks.extend(fetch_tasks_from_list(lst["id"]))
 
@@ -116,14 +92,9 @@ def fetch_tasks_updated_since(
     space_id: str,
     updated_after_ms: int,
 ) -> List[Dict]:
-    """
-    Incremental fetch:
-    Returns ONLY tasks updated after given timestamp.
-    """
     tasks: List[Dict] = []
 
     lists = fetch_all_lists_in_space(space_id)
-
     for lst in lists:
         tasks.extend(
             fetch_tasks_from_list(
@@ -136,37 +107,22 @@ def fetch_tasks_updated_since(
 
 
 # =================================================
-# TIME TRACKING (task-scoped, accurate)
+# TIME TRACKING
 # =================================================
 def fetch_time_entries_for_task(task_id: str) -> List[Dict]:
-    """
-    Fetch interval-based time entries for ONE task.
-    """
     data = _get(f"{BASE_URL}/task/{task_id}/time")
     return data.get("data", [])
 
 
-# =================================================
-# TEAM-LEVEL TIME (legacy / compatibility)
-# =================================================
 def fetch_time_entries() -> List[Dict]:
-    """
-    Fetch ALL team time entries.
-    ⚠️ Expensive – avoid using in sync logic.
-    """
     data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/time_entries")
     return data.get("data", [])
 
 
 # =================================================
-# TEAM MEMBERS (EMPLOYEES)
+# TEAM MEMBERS
 # =================================================
 def fetch_team_members() -> List[Dict]:
-    """
-    Fetch ALL users in the ClickUp team.
-    Independent of tasks.
-    Used for employee table sync.
-    """
     data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}")
 
     ROLE_MAP = {
@@ -180,16 +136,12 @@ def fetch_team_members() -> List[Dict]:
 
     for member in data.get("team", {}).get("members", []):
         user = member.get("user", {})
-
-        role_num = user.get("role")
-        role_text = ROLE_MAP.get(role_num)
-
         members.append(
             {
                 "clickup_user_id": str(user.get("id")),
                 "name": user.get("username"),
                 "email": user.get("email"),
-                "role": role_text,
+                "role": ROLE_MAP.get(user.get("role")),
             }
         )
 
