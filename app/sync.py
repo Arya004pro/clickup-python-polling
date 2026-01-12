@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from app.supabase_db import supabase
 from app.clickup import fetch_time_entries_for_task
 from app.time_tracking import aggregate_time_entries
-from zoneinfo import ZoneInfo
 from app.config import CLICKUP_SPACE_ID
 
 
@@ -41,6 +42,9 @@ def clickup_ms_to_local_date(ms: int | None):
     )
 
 
+# -------------------------------------------------
+# Location Map
+# -------------------------------------------------
 def get_list_location_map(space_id: str) -> dict:
     """
     Correctly maps list_id -> space / folder / list info
@@ -49,27 +53,24 @@ def get_list_location_map(space_id: str) -> dict:
 
     location_map = {}
 
-    # ---------- Space ----------
+    # Space
     space_resp = _get(f"{BASE_URL}/space/{space_id}")
     space_name = space_resp.get("name")
 
-    # ---------- Folder lists ----------
+    # Folder lists
     folders_resp = _get(f"{BASE_URL}/space/{space_id}/folder")
     for folder in folders_resp.get("folders", []):
-        folder_id = folder["id"]
-        folder_name = folder["name"]
-
         for lst in folder.get("lists", []):
             location_map[lst["id"]] = {
                 "space_id": space_id,
                 "space_name": space_name,
-                "folder_id": folder_id,
-                "folder_name": folder_name,
+                "folder_id": folder["id"],
+                "folder_name": folder["name"],
                 "list_id": lst["id"],
                 "list_name": lst["name"],
             }
 
-    # ---------- Standalone lists (NO folder) ----------
+    # Standalone lists
     lists_resp = _get(f"{BASE_URL}/space/{space_id}/list")
     for lst in lists_resp.get("lists", []):
         location_map[lst["id"]] = {
@@ -88,7 +89,7 @@ list_location_map = get_list_location_map(CLICKUP_SPACE_ID)
 
 
 # -------------------------------------------------
-# Main Sync (STABLE – PRIORITY VERSION)
+# Main Sync
 # -------------------------------------------------
 def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
     if not tasks:
@@ -99,7 +100,7 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
     now_utc = datetime.now(timezone.utc).isoformat()
 
     # =====================================================
-    # 1. Detect deleted tasks (ONLY on FULL sync)
+    # 1. Detect deleted tasks (FULL sync only)
     # =====================================================
     if full_sync:
         incoming_ids = {task["id"] for task in tasks}
@@ -116,14 +117,11 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
 
         for task_id in deleted_ids:
             supabase.table("tasks").update(
-                {
-                    "is_deleted": True,
-                    "updated_at": now_utc,
-                }
+                {"is_deleted": True, "updated_at": now_utc}
             ).eq("clickup_task_id", task_id).execute()
 
     # =====================================================
-    # 2. Upsert active / updated tasks
+    # 2. Upsert tasks
     # =====================================================
     for task in tasks:
         clickup_task_id = task["id"]
@@ -133,154 +131,124 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         # ----------------------------
         status_obj = task.get("status", {})
         status_text = status_obj.get("status", "")
-        status_type = status_obj.get("type", "")  # open / custom / closed
+        status_type = status_obj.get("type", "")
 
         # ----------------------------
-        # Archived (SAFE)
+        # Task Type (CORRECT)
         # ----------------------------
-        archived = bool(task.get("archived", False))
+        # ClickUp uses custom_item_id to distinguish item types:
+        #   0 or None = task
+        #   1 = milestone
+        #   2 = form response
+        #   3 = meeting note
+        # Fallback to explicit type field or milestone flag if present.
+        CUSTOM_ITEM_TYPE_MAP = {
+            0: "task",
+            1: "milestone",
+            2: "form response",
+            3: "meeting note",
+        }
 
-        # ----------------------------
-        # Task Type
-        # ----------------------------
-        if task.get("milestone"):
+        custom_item_id = task.get("custom_item_id")
+        raw_type = task.get("type") or task.get("custom_type") or task.get("task_type")
+
+        if custom_item_id is not None and custom_item_id in CUSTOM_ITEM_TYPE_MAP:
+            task_type = CUSTOM_ITEM_TYPE_MAP[custom_item_id]
+        elif task.get("is_milestone"):
             task_type = "milestone"
-        elif task.get("form_id"):
-            task_type = "form_response"
+        elif raw_type:
+            task_type = raw_type
         else:
             task_type = "task"
 
         # ----------------------------
-        # Dates from ClickUp (ms)
+        # Dates
         # ----------------------------
-        date_created = None
-        date_updated = None
-        date_closed = None
-        date_done = None
+        date_created = (
+            datetime.fromtimestamp(int(task["date_created"]) / 1000, tz=timezone.utc)
+            if task.get("date_created")
+            else None
+        )
 
-        if task.get("date_created"):
-            date_created = datetime.fromtimestamp(
-                int(task["date_created"]) / 1000,
-                tz=timezone.utc,
-            )
+        date_updated = (
+            datetime.fromtimestamp(int(task["date_updated"]) / 1000, tz=timezone.utc)
+            if task.get("date_updated")
+            else None
+        )
 
-        if task.get("date_updated"):
-            date_updated = datetime.fromtimestamp(
-                int(task["date_updated"]) / 1000,
-                tz=timezone.utc,
-            )
+        date_done = (
+            datetime.fromtimestamp(int(task["date_done"]) / 1000, tz=timezone.utc)
+            if task.get("date_done")
+            else None
+        )
 
-        # Closed = system closed only
-        if status_type == "closed" and task.get("date_closed"):
-            date_closed = datetime.fromtimestamp(
-                int(task["date_closed"]) / 1000,
-                tz=timezone.utc,
-            )
-
-        # Done = custom "Done" status
-        # Done = ClickUp-provided date_done
-        if task.get("date_done"):
-            date_done = datetime.fromtimestamp(
-                int(task["date_done"]) / 1000,
-                tz=timezone.utc,
-            )
+        date_closed = (
+            datetime.fromtimestamp(int(task["date_closed"]) / 1000, tz=timezone.utc)
+            if status_type == "closed" and task.get("date_closed")
+            else None
+        )
 
         # ----------------------------
-        # Location / List (FIXED)
+        # Location
         # ----------------------------
-        space_id = None
-        space_name = None
-        folder_id = None
-        folder_name = None
-        list_id = None
-        list_name = None
-
-        task_list = task.get("list")
-        if task_list:
-            list_id = task_list.get("id")
-
-            location = list_location_map.get(list_id)
-            if location:
-                list_name = location["list_name"]
-                folder_id = location["folder_id"]
-                folder_name = location["folder_name"]
-                space_id = location["space_id"]
-                space_name = location["space_name"]
+        location = list_location_map.get(task.get("list", {}).get("id"), {})
 
         # ----------------------------
         # Priority
         # ----------------------------
-        priority_obj = task.get("priority")
-        priority = priority_obj.get("priority") if priority_obj else None
+        priority = (
+            task.get("priority", {}).get("priority") if task.get("priority") else None
+        )
 
         # ----------------------------
-        # Time Estimate (ms → minutes)
+        # Time Estimate
         # ----------------------------
-        time_estimate_minutes = None
-        time_estimate_ms = task.get("time_estimate")
-
-        if time_estimate_ms:
-            time_estimate_minutes = int(time_estimate_ms) // 60000
+        time_estimate_minutes = (
+            int(task["time_estimate"]) // 60000 if task.get("time_estimate") else None
+        )
 
         # ----------------------------
-        # Assignee
+        # Assignees (MULTI)
         # ----------------------------
-        employee_id = None
-        assignee_name = None
-
         assignees = task.get("assignees") or []
-        user = None
 
-        if assignees:
-            user = assignees[0]
-        elif task.get("assignee"):
-            user = task["assignee"]
-        elif task.get("creator"):
-            user = task["creator"]
+        assignee_ids = [str(a.get("id")) for a in assignees if a.get("id") is not None]
+        assignee_names = [
+            a.get("username") for a in assignees if isinstance(a.get("username"), str)
+        ]
 
-        if user:
-            clickup_user_id = str(user.get("id"))
-            employee_id = employee_map.get(clickup_user_id)
-            assignee_name = user.get("username")
+        assignee_name = ", ".join(assignee_names) if assignee_names else None
+        assignee_ids_str = ", ".join(assignee_ids) if assignee_ids else None
+
+        employee_ids = [
+            employee_map[str(a.get("id"))]
+            for a in assignees
+            if a.get("id") is not None and str(a.get("id")) in employee_map
+        ]
+        # Preserve existing single-employee linkage for backwards compatibility
+        employee_id = employee_ids[0] if employee_ids else None
 
         # ----------------------------
         # Assigned by
         # ----------------------------
-        assigned_by = None
-        creator = task.get("creator")
-        if creator:
-            assigned_by = creator.get("username")
+        assigned_by = task.get("creator", {}).get("username")
 
         # ----------------------------
         # Followers
         # ----------------------------
         followers = None
         watchers = task.get("watchers") or []
-
-        if watchers:
-            follower_names = [
-                str(w.get("username"))
-                for w in watchers
-                if isinstance(w.get("username"), str)
-            ]
-            followers = ", ".join(follower_names) if follower_names else None
+        follower_names = [
+            w.get("username") for w in watchers if isinstance(w.get("username"), str)
+        ]
+        if follower_names:
+            followers = ", ".join(follower_names)
 
         # ----------------------------
-        # Start Date (DATE ONLY)
+        # Dates (start / due)
         # ----------------------------
-        start_date = None
-        start_date_ms = task.get("start_date")
-
-        if start_date_ms:
-            start_date = clickup_ms_to_local_date(task.get("start_date"))
-
-        # ----------------------------
-        # Due Date (DATE ONLY)
-        # ----------------------------
-        due_date = None
-        due_date_ms = task.get("due_date")
-        if due_date_ms:
-            due_date = clickup_ms_to_local_date(task.get("due_date"))
+        start_date = clickup_ms_to_local_date(task.get("start_date"))
+        due_date = clickup_ms_to_local_date(task.get("due_date"))
 
         # ----------------------------
         # Time tracking
@@ -289,41 +257,20 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         aggregated = aggregate_time_entries(time_entries)
 
         # ----------------------------
-        # Responsibility (STRICT)
-        # ----------------------------
-        in_progress_by = None
-        completed_by = None
-
-        if time_entries:
-            first_user = time_entries[0].get("user", {})
-            in_progress_by = employee_map.get(str(first_user.get("id")))
-
-            if status_type == "closed":
-                last_user = time_entries[-1].get("user", {})
-                completed_by = employee_map.get(str(last_user.get("id")))
-
-        # ----------------------------
         # Tags
         # ----------------------------
-        tags_list = task.get("tags") or []
-        tags_names = [t.get("name") for t in tags_list if t.get("name")]
-        tags_str = ", ".join(tags_names) if tags_names else None
+        tags = (
+            ", ".join(t.get("name") for t in (task.get("tags") or []) if t.get("name"))
+            or None
+        )
 
         # ----------------------------
-        # Summary
+        # Summary (Custom Field)
         # ----------------------------
         summary = None
-
-        for field in task.get("custom_fields", []) or []:
+        for field in task.get("custom_fields", []):
             if field.get("name") == "Summary":
-                value = field.get("value")
-
-                # 🔒 force safe string
-                if isinstance(value, (dict, list)):
-                    summary = str(value)
-                else:
-                    summary = value
-
+                summary = str(field.get("value"))
                 break
 
         # ----------------------------
@@ -331,34 +278,33 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         # ----------------------------
         payload = {
             "clickup_task_id": clickup_task_id,
-            "title": task.get("name", ""),
-            "description": task.get("text_content", ""),
-            "tags": tags_str,
+            "title": task.get("name"),
+            "description": task.get("text_content"),
+            "type": task_type,
             "status": status_text,
-            "task_type": task_type,
             "status_type": status_type,
-            "space_id": space_id,
-            "space_name": space_name,
-            "folder_id": folder_id,
-            "folder_name": folder_name,
+            "priority": priority,
+            "tags": tags,
             "summary": summary,
-            "list_id": list_id,
-            "list_name": list_name,
+            "assignee_name": assignee_name,
+            "assignee_ids": assignee_ids_str,
+            "employee_id": employee_id,
+            "employee_ids": employee_ids or None,
+            "assigned_by": assigned_by,
+            "followers": followers,
+            "space_id": location.get("space_id"),
+            "space_name": location.get("space_name"),
+            "folder_id": location.get("folder_id"),
+            "folder_name": location.get("folder_name"),
+            "list_id": location.get("list_id"),
+            "list_name": location.get("list_name"),
             "date_created": _to_iso(date_created),
-            "start_date": start_date,
             "date_updated": _to_iso(date_updated),
             "date_done": _to_iso(date_done),
             "date_closed": _to_iso(date_closed),
-            "priority": priority,
-            "archived": archived,
-            "time_estimate_minutes": time_estimate_minutes,
-            "employee_id": employee_id,
-            "assignee_name": assignee_name,
-            "assigned_by": assigned_by,
-            "followers": followers,
-            "in_progress_by": in_progress_by,
-            "completed_by": completed_by,
+            "start_date": start_date,
             "due_date": due_date,
+            "time_estimate_minutes": time_estimate_minutes,
             "start_time": _to_iso(aggregated["start_time"]),
             "end_time": _to_iso(aggregated["end_time"]),
             "tracked_minutes": aggregated["tracked_minutes"],
@@ -366,10 +312,7 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "updated_at": now_utc,
         }
 
-        supabase.table("tasks").upsert(
-            payload,
-            on_conflict="clickup_task_id",
-        ).execute()
+        supabase.table("tasks").upsert(payload, on_conflict="clickup_task_id").execute()
 
         synced_count += 1
 

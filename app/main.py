@@ -154,10 +154,12 @@ def get_tasks_by_employee(employee_id: str):
             description,
             status,
             status_type,
-            task_type,
+            type,
 
             assignee_name,
+            assignee_ids,
             assigned_by,
+            employee_ids,
 
             tags,
             priority,
