@@ -236,6 +236,47 @@ def fetch_all_time_entries_batch(task_ids: List[str]) -> Dict[str, List[Dict]]:
 
 
 # =================================================
+# ASSIGNED COMMENTS
+# =================================================
+def fetch_assigned_comment(task_id: str) -> Optional[str]:
+    """
+    Fetch all unresolved assigned comments for a task.
+    Returns comments joined by ' | ' or None.
+    """
+    try:
+        data = _get(f"{BASE_URL}/task/{task_id}/comment")
+        comments = []
+        for c in data.get("comments", []):
+            if c.get("assignee") and not c.get("resolved"):
+                text = c.get("comment_text", "").strip()
+                if text:
+                    comments.append(text)
+        return " | ".join(comments) if comments else None
+    except RuntimeError:
+        pass
+    return None
+
+
+def fetch_assigned_comments_batch(task_ids: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Fetch assigned comments for multiple tasks concurrently.
+    Returns dict: task_id -> comment text (or None)
+    """
+    result: Dict[str, Optional[str]] = {}
+
+    def fetch_one(task_id: str):
+        return task_id, fetch_assigned_comment(task_id)
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(fetch_one, tid) for tid in task_ids]
+        for future in as_completed(futures):
+            task_id, comment = future.result()
+            result[task_id] = comment
+
+    return result
+
+
+# =================================================
 # TEAM MEMBERS
 # =================================================
 def fetch_team_members() -> List[Dict]:

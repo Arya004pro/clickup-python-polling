@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.supabase_db import supabase
-from app.clickup import fetch_all_time_entries_batch, fetch_all_spaces
+from app.clickup import (
+    fetch_all_time_entries_batch,
+    fetch_all_spaces,
+    fetch_assigned_comments_batch,
+)
 from app.time_tracking import aggregate_time_entries
 
 
@@ -142,6 +146,13 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
     task_ids = [task["id"] for task in tasks]
     time_entries_map = fetch_all_time_entries_batch(task_ids)
     print("✅ Time entries fetched")
+
+    # =====================================================
+    # 2b. Batch fetch assigned comments (concurrent)
+    # =====================================================
+    print(f"💬 Fetching assigned comments for {len(tasks)} tasks...")
+    assigned_comment_map = fetch_assigned_comments_batch(task_ids)
+    print("✅ Assigned comments fetched")
 
     # =====================================================
     # 3. Build payloads
@@ -323,6 +334,11 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
                     break
 
         # ----------------------------
+        # Assigned Comment
+        # ----------------------------
+        assigned_comment = assigned_comment_map.get(clickup_task_id)
+
+        # ----------------------------
         # Payload
         # ----------------------------
         payload = {
@@ -336,6 +352,7 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "tags": tags,
             "summary": summary,
             "sprint_points": sprint_points,
+            "assigned_comment": assigned_comment,
             "assignee_name": assignee_name,
             "assignee_ids": assignee_ids_str,
             "employee_id": employee_id,

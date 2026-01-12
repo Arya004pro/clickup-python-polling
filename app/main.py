@@ -161,6 +161,7 @@ def get_employees():
 
 @app.get("/tasks/by-employee", tags=["Tasks"])
 def get_tasks_by_employee(employee_id: str):
+    # Use 'contains' to check if employee_id is in the employee_ids array
     resp = (
         supabase.table("tasks")
         .select("""
@@ -170,6 +171,8 @@ def get_tasks_by_employee(employee_id: str):
             status,
             status_type,
             type,
+            archived,
+            assigned_comment,
 
             assignee_name,
             assignee_ids,
@@ -202,7 +205,7 @@ def get_tasks_by_employee(employee_id: str):
             in_progress_by,
             completed_by
         """)
-        .eq("employee_id", employee_id)
+        .contains("employee_ids", [employee_id])
         .execute()
     )
 
