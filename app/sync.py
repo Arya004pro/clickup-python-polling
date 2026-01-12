@@ -76,7 +76,7 @@ def get_list_location_map_for_space(space_id: str) -> dict:
             "space_id": space_id,
             "space_name": space_name,
             "folder_id": None,
-            "folder_name": "hidden",
+            "folder_name": "None",
             "list_id": lst["id"],
             "list_name": lst["name"],
         }
