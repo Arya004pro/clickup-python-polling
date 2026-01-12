@@ -51,7 +51,7 @@ def scheduled_sync():
         # -------------------------------------------------
         # 2️⃣ Task sync (ALL SPACES)
         # -------------------------------------------------
-        do_full_sync = _last_sync_ms is None or _run_count % 6 == 0
+        do_full_sync = _last_sync_ms is None or _run_count % 12 == 0
 
         # Always clear cache to pick up new spaces/lists/tasks
         clear_space_cache()
@@ -115,7 +115,7 @@ def start_scheduler():
     _scheduler.add_job(
         scheduled_sync,
         trigger="interval",
-        minutes=2,
+        minutes=0.75,  # every 45 seconds
         id="clickup_sync_job",
         replace_existing=True,
         max_instances=1,  #  no overlap
