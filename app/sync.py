@@ -2,9 +2,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.supabase_db import supabase
-from app.clickup import fetch_time_entries_for_task
+from app.clickup import fetch_all_time_entries_batch, fetch_all_spaces
 from app.time_tracking import aggregate_time_entries
-from app.config import CLICKUP_SPACE_ID
 
 
 # -------------------------------------------------
@@ -43,11 +42,11 @@ def clickup_ms_to_local_date(ms: int | None):
 
 
 # -------------------------------------------------
-# Location Map
+# Location Map (Dynamic - All Spaces)
 # -------------------------------------------------
-def get_list_location_map(space_id: str) -> dict:
+def get_list_location_map_for_space(space_id: str) -> dict:
     """
-    Correctly maps list_id -> space / folder / list info
+    Maps list_id -> space / folder / list info for a single space.
     """
     from app.clickup import _get, BASE_URL
 
@@ -85,7 +84,19 @@ def get_list_location_map(space_id: str) -> dict:
     return location_map
 
 
-list_location_map = get_list_location_map(CLICKUP_SPACE_ID)
+def get_all_list_location_map() -> dict:
+    """
+    Build location map for ALL spaces in the team.
+    Called fresh each sync to pick up new spaces.
+    """
+    location_map = {}
+    spaces = fetch_all_spaces()
+
+    for space in spaces:
+        space_map = get_list_location_map_for_space(space["id"])
+        location_map.update(space_map)
+
+    return location_map
 
 
 # -------------------------------------------------
@@ -96,8 +107,12 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         return 0
 
     employee_map = get_employee_id_map()
-    synced_count = 0
     now_utc = datetime.now(timezone.utc).isoformat()
+
+    # =====================================================
+    # 0. Build location map for ALL spaces (fresh each sync)
+    # =====================================================
+    list_location_map = get_all_list_location_map()
 
     # =====================================================
     # 1. Detect deleted tasks (FULL sync only)
@@ -121,8 +136,17 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             ).eq("clickup_task_id", task_id).execute()
 
     # =====================================================
-    # 2. Upsert tasks
+    # 2. Batch fetch time entries (concurrent)
     # =====================================================
+    print(f"⏱️  Fetching time entries for {len(tasks)} tasks...")
+    task_ids = [task["id"] for task in tasks]
+    time_entries_map = fetch_all_time_entries_batch(task_ids)
+    print("✅ Time entries fetched")
+
+    # =====================================================
+    # 3. Build payloads
+    # =====================================================
+    payloads = []
     for task in tasks:
         clickup_task_id = task["id"]
 
@@ -251,9 +275,9 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         due_date = clickup_ms_to_local_date(task.get("due_date"))
 
         # ----------------------------
-        # Time tracking
+        # Time tracking (from batch)
         # ----------------------------
-        time_entries = fetch_time_entries_for_task(clickup_task_id)
+        time_entries = time_entries_map.get(clickup_task_id, [])
         aggregated = aggregate_time_entries(time_entries)
 
         # ----------------------------
@@ -265,13 +289,38 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         )
 
         # ----------------------------
-        # Summary (Custom Field)
+        # Custom Fields (Summary) + Sprint Points
         # ----------------------------
         summary = None
         for field in task.get("custom_fields", []):
-            if field.get("name") == "Summary":
-                summary = str(field.get("value"))
-                break
+            field_name = (field.get("name") or "").lower()
+            if field_name == "summary":
+                summary = str(field.get("value")) if field.get("value") else None
+
+        # Sprint points can be in task.points (native) or custom field
+        sprint_points = None
+        if task.get("points") is not None:
+            try:
+                sprint_points = int(float(task["points"]))
+            except (ValueError, TypeError):
+                sprint_points = None
+        else:
+            # Fallback: check custom fields
+            for field in task.get("custom_fields", []):
+                field_name = (field.get("name") or "").lower()
+                if field_name in (
+                    "sprint points",
+                    "sprint_points",
+                    "points",
+                    "story points",
+                ):
+                    val = field.get("value")
+                    if val is not None:
+                        try:
+                            sprint_points = int(float(val))
+                        except (ValueError, TypeError):
+                            pass
+                    break
 
         # ----------------------------
         # Payload
@@ -286,6 +335,7 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "priority": priority,
             "tags": tags,
             "summary": summary,
+            "sprint_points": sprint_points,
             "assignee_name": assignee_name,
             "assignee_ids": assignee_ids_str,
             "employee_id": employee_id,
@@ -308,12 +358,20 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
             "start_time": _to_iso(aggregated["start_time"]),
             "end_time": _to_iso(aggregated["end_time"]),
             "tracked_minutes": aggregated["tracked_minutes"],
+            "archived": task.get("archived", False),
             "is_deleted": False,
             "updated_at": now_utc,
         }
+        payloads.append(payload)
 
-        supabase.table("tasks").upsert(payload, on_conflict="clickup_task_id").execute()
+    # =====================================================
+    # 4. Bulk upsert to Supabase
+    # =====================================================
+    print(f"💾 Upserting {len(payloads)} tasks to database...")
+    if payloads:
+        supabase.table("tasks").upsert(
+            payloads, on_conflict="clickup_task_id"
+        ).execute()
+    print("✅ Sync complete")
 
-        synced_count += 1
-
-    return synced_count
+    return len(payloads)

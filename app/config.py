@@ -10,7 +10,7 @@ load_dotenv()
 CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN")
 CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID")
 CLICKUP_SPACE_ID = os.getenv("CLICKUP_SPACE_ID")
-BASE_URL = "https://api.clickup.com/api/v2" 
+BASE_URL = "https://api.clickup.com/api/v2"
 # =========================
 # SUPABASE CONFIG
 # =========================
@@ -33,8 +33,7 @@ if not CLICKUP_API_TOKEN:
 if not CLICKUP_TEAM_ID:
     missing.append("CLICKUP_TEAM_ID")
 
-if not CLICKUP_SPACE_ID:
-    missing.append("CLICKUP_SPACE_ID")
+# CLICKUP_SPACE_ID is now optional - if not set, all spaces will be synced
 
 if not SUPABASE_URL:
     missing.append("SUPABASE_URL")

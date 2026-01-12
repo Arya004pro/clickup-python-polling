@@ -2,12 +2,13 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.logging_config import setup_logging
 from app.clickup import (
-    fetch_all_tasks_from_space,
+    fetch_all_tasks_from_team,
+    fetch_all_spaces,
     fetch_time_entries_for_task,
+    clear_space_cache,
 )
 from app.time_tracking import aggregate_time_entries
 from app.sync import sync_tasks_to_supabase
-from app.config import CLICKUP_SPACE_ID
 from app.scheduler import start_scheduler
 from app.employee_sync import sync_employees_to_supabase
 from app.supabase_db import supabase
@@ -32,14 +33,27 @@ app = FastAPI(lifespan=lifespan)
 # -------------------------------------------------
 # Debug / test endpoints (kept intentionally)
 # -------------------------------------------------
+@app.get("/test/spaces")
+def test_spaces():
+    """
+    List all spaces in the team.
+    """
+    clear_space_cache()
+    spaces = fetch_all_spaces()
+    return {
+        "total_spaces": len(spaces),
+        "spaces": [{"id": s["id"], "name": s["name"]} for s in spaces],
+    }
+
+
 @app.get("/test/tasks")
 def test_tasks():
     """
-    Fetch all tasks from ClickUp (debug endpoint).
+    Fetch all tasks from ALL spaces (debug endpoint).
     """
-    tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
+    clear_space_cache()
+    tasks = fetch_all_tasks_from_team()
     return {
-        "space_id": CLICKUP_SPACE_ID,
         "total_tasks": len(tasks),
         "sample": tasks[:2],
     }
@@ -62,7 +76,7 @@ def test_tasks_with_time():
     """
     Fetch a few tasks and show aggregated time data.
     """
-    tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
+    tasks = fetch_all_tasks_from_team()
     results = []
 
     for task in tasks[:5]:  # safety limit
@@ -89,9 +103,10 @@ def test_tasks_with_time():
 @app.get("/sync/tasks")
 def sync_tasks():
     """
-    Trigger full sync manually.
+    Trigger full sync manually (ALL spaces).
     """
-    tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
+    clear_space_cache()
+    tasks = fetch_all_tasks_from_team()
     count = sync_tasks_to_supabase(tasks, full_sync=True)
     return {
         "status": "success",
@@ -104,7 +119,7 @@ def test_sync():
     """
     Debug sync endpoint.
     """
-    tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
+    tasks = fetch_all_tasks_from_team()
     count = sync_tasks_to_supabase(tasks, full_sync=True)
     return {
         "tasks_fetched": len(tasks),
@@ -181,6 +196,8 @@ def get_tasks_by_employee(employee_id: str):
 
             followers,
             summary,
+            sprint_points,
+            archived,
 
             in_progress_by,
             completed_by

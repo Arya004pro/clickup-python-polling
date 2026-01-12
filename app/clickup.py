@@ -1,6 +1,7 @@
 import requests
 from functools import lru_cache
 from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.config import (
     CLICKUP_API_TOKEN,
@@ -28,9 +29,9 @@ def _get(url: str, params: Optional[dict] = None) -> dict:
 
 
 # =================================================
-# LIST FETCHING (cached)
+# LIST FETCHING (cached per space)
 # =================================================
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=32)
 def fetch_all_lists_in_space(space_id: str) -> List[Dict]:
     lists: List[Dict] = []
 
@@ -47,30 +48,93 @@ def fetch_all_lists_in_space(space_id: str) -> List[Dict]:
 # =================================================
 # TASK FETCHING (STABLE)
 # =================================================
-def fetch_tasks_from_list(list_id: str, updated_after_ms: Optional[int] = None):
+def fetch_tasks_from_list(
+    list_id: str,
+    updated_after_ms: Optional[int] = None,
+    include_archived: bool = True,
+):
     all_tasks = []
-    page = 0
+    seen_ids = set()
 
+    def add_tasks(tasks_list):
+        for t in tasks_list:
+            if t["id"] not in seen_ids:
+                seen_ids.add(t["id"])
+                all_tasks.append(t)
+
+    # Fetch non-archived tasks
+    page = 0
     while True:
         params = {
             "page": page,
             "include_closed": "true",
             "archived": "false",
         }
-
         if updated_after_ms is not None:
             params["date_updated_gt"] = updated_after_ms
 
         data = _get(f"{BASE_URL}/list/{list_id}/task", params)
         tasks = data.get("tasks", [])
-
         if not tasks:
             break
-
-        all_tasks.extend(tasks)
+        add_tasks(tasks)
         page += 1
 
+    # Also fetch by date_created_gt for new tasks (deduped)
+    if updated_after_ms is not None:
+        page = 0
+        while True:
+            params = {
+                "page": page,
+                "include_closed": "true",
+                "archived": "false",
+                "date_created_gt": updated_after_ms,
+            }
+            data = _get(f"{BASE_URL}/list/{list_id}/task", params)
+            tasks = data.get("tasks", [])
+            if not tasks:
+                break
+            add_tasks(tasks)
+            page += 1
+
+    # Fetch archived tasks separately
+    if include_archived:
+        page = 0
+        while True:
+            params = {
+                "page": page,
+                "include_closed": "true",
+                "archived": "true",
+            }
+            if updated_after_ms is not None:
+                params["date_updated_gt"] = updated_after_ms
+
+            data = _get(f"{BASE_URL}/list/{list_id}/task", params)
+            tasks = data.get("tasks", [])
+            if not tasks:
+                break
+            add_tasks(tasks)
+            page += 1
+
     return all_tasks
+
+
+# =================================================
+# SPACE FETCHING
+# =================================================
+@lru_cache(maxsize=1)
+def fetch_all_spaces() -> List[Dict]:
+    """Fetch all spaces in the team."""
+    data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/space")
+    spaces = data.get("spaces", [])
+    print(f"📂 Found {len(spaces)} spaces: {[s['name'] for s in spaces]}")
+    return spaces
+
+
+def clear_space_cache():
+    """Clear cached spaces and lists (call when new space is created)."""
+    fetch_all_spaces.cache_clear()
+    fetch_all_lists_in_space.cache_clear()
 
 
 # =================================================
@@ -78,10 +142,30 @@ def fetch_tasks_from_list(list_id: str, updated_after_ms: Optional[int] = None):
 # =================================================
 def fetch_all_tasks_from_space(space_id: str) -> List[Dict]:
     all_tasks: List[Dict] = []
-
     lists = fetch_all_lists_in_space(space_id)
-    for lst in lists:
-        all_tasks.extend(fetch_tasks_from_list(lst["id"]))
+
+    # Fetch from all lists concurrently
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {
+            executor.submit(fetch_tasks_from_list, lst["id"]): lst for lst in lists
+        }
+        for future in as_completed(futures):
+            all_tasks.extend(future.result())
+
+    return all_tasks
+
+
+def fetch_all_tasks_from_team() -> List[Dict]:
+    """Fetch tasks from ALL spaces in the team."""
+    all_tasks: List[Dict] = []
+    spaces = fetch_all_spaces()
+
+    for space in spaces:
+        space_id = space["id"]
+        space_name = space["name"]
+        print(f"  → Fetching from space: {space_name}")
+        tasks = fetch_all_tasks_from_space(space_id)
+        all_tasks.extend(tasks)
 
     return all_tasks
 
@@ -104,6 +188,18 @@ def fetch_tasks_updated_since(
     return tasks
 
 
+def fetch_all_tasks_updated_since_team(updated_after_ms: int) -> List[Dict]:
+    """Fetch updated tasks from ALL spaces."""
+    all_tasks: List[Dict] = []
+    spaces = fetch_all_spaces()
+
+    for space in spaces:
+        tasks = fetch_tasks_updated_since(space["id"], updated_after_ms)
+        all_tasks.extend(tasks)
+
+    return all_tasks
+
+
 # =================================================
 # TIME TRACKING
 # =================================================
@@ -115,6 +211,28 @@ def fetch_time_entries_for_task(task_id: str) -> List[Dict]:
 def fetch_time_entries() -> List[Dict]:
     data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/time_entries")
     return data.get("data", [])
+
+
+def fetch_all_time_entries_batch(task_ids: List[str]) -> Dict[str, List[Dict]]:
+    """
+    Fetch time entries for multiple tasks concurrently.
+    Returns dict: task_id -> list of time entries
+    """
+    result: Dict[str, List[Dict]] = {tid: [] for tid in task_ids}
+
+    def fetch_one(task_id: str):
+        try:
+            return task_id, _get(f"{BASE_URL}/task/{task_id}/time").get("data", [])
+        except Exception:
+            return task_id, []
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(fetch_one, tid) for tid in task_ids]
+        for future in as_completed(futures):
+            task_id, entries = future.result()
+            result[task_id] = entries
+
+    return result
 
 
 # =================================================

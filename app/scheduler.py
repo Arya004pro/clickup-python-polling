@@ -8,12 +8,11 @@ from apscheduler.jobstores.memory import MemoryJobStore
 from app.employee_sync import sync_employees_to_supabase
 from app.sync import sync_tasks_to_supabase
 from app.clickup import (
-    fetch_all_tasks_from_space,
-    fetch_tasks_updated_since,
+    fetch_all_tasks_from_team,
+    fetch_all_tasks_updated_since_team,
+    clear_space_cache,
 )
-from app.config import CLICKUP_SPACE_ID
 from app.time_sync import sync_time_entries
-
 
 
 # -------------------------------------------------
@@ -51,19 +50,21 @@ def scheduled_sync():
         logger.info(f"👥 Synced {emp_count} employees")
 
         # -------------------------------------------------
-        # 2️⃣ Task sync (existing logic)
+        # 2️⃣ Task sync (ALL SPACES)
         # -------------------------------------------------
         do_full_sync = _last_sync_ms is None or _run_count % 6 == 0
 
+        # Always clear cache to pick up new spaces/lists/tasks
+        clear_space_cache()
+
         if do_full_sync:
-            logger.info("🔄 FULL task sync")
-            tasks = fetch_all_tasks_from_space(CLICKUP_SPACE_ID)
+            logger.info("🔄 FULL task sync (all spaces)")
+            tasks = fetch_all_tasks_from_team()
             synced = sync_tasks_to_supabase(tasks, full_sync=True)
         else:
-            logger.info("⚡ Incremental task sync")
+            logger.info("⚡ Incremental task sync (all spaces)")
             BUFFER_MS = 2 * 60 * 1000
-            tasks = fetch_tasks_updated_since(
-                CLICKUP_SPACE_ID,
+            tasks = fetch_all_tasks_updated_since_team(
                 updated_after_ms=_last_sync_ms - BUFFER_MS,
             )
             synced = sync_tasks_to_supabase(tasks, full_sync=False)
