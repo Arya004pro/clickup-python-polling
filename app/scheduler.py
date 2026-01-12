@@ -12,7 +12,6 @@ from app.clickup import (
     fetch_all_tasks_updated_since_team,
     clear_space_cache,
 )
-from app.time_sync import sync_time_entries
 
 
 # -------------------------------------------------
@@ -69,11 +68,8 @@ def scheduled_sync():
             )
             synced = sync_tasks_to_supabase(tasks, full_sync=False)
 
-        # -------------------------------------------------
-        # NEW: Incremental time sync (v3)
-        # -------------------------------------------------
-        time_synced = sync_time_entries(updated_after_ms=_last_sync_ms)
-        logger.info(f"⏱️ Synced time for {time_synced} tasks")
+        # NOTE: Time tracking is now handled by sync_tasks_to_supabase
+        # using fetch_all_time_entries_batch - no separate time sync needed
 
         # -------------------------------------------------
         # 3️⃣ Advance cursor SAFELY
