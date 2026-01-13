@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from app.supabase_db import supabase
+from app.supabase_db import (
+    get_employee_id_map,
+    get_existing_task_ids,
+    mark_tasks_deleted,
+    bulk_upsert_tasks,
+)
 from app.clickup import (
     fetch_all_time_entries_batch,
     fetch_all_spaces,
@@ -13,19 +18,6 @@ from app.time_tracking import aggregate_time_entries
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
-def get_employee_id_map() -> dict[str, str]:
-    """
-    Map clickup_user_id (str) -> employees.id (UUID)
-    """
-    resp = supabase.table("employees").select("id, clickup_user_id").execute()
-
-    return {
-        str(row["clickup_user_id"]): row["id"]
-        for row in (resp.data or [])
-        if row.get("clickup_user_id")
-    }
-
-
 def _to_iso(dt):
     return dt.isoformat() if dt else None
 
@@ -123,21 +115,11 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
     # =====================================================
     if full_sync:
         incoming_ids = {task["id"] for task in tasks}
-
-        existing_resp = (
-            supabase.table("tasks")
-            .select("clickup_task_id")
-            .eq("is_deleted", False)
-            .execute()
-        )
-
-        existing_ids = {row["clickup_task_id"] for row in (existing_resp.data or [])}
+        existing_ids = get_existing_task_ids()
         deleted_ids = existing_ids - incoming_ids
 
-        for task_id in deleted_ids:
-            supabase.table("tasks").update(
-                {"is_deleted": True, "updated_at": now_utc}
-            ).eq("clickup_task_id", task_id).execute()
+        if deleted_ids:
+            mark_tasks_deleted(list(deleted_ids), now_utc)
 
     # =====================================================
     # 2. Batch fetch time entries (concurrent)
@@ -382,13 +364,10 @@ def sync_tasks_to_supabase(tasks: list, *, full_sync: bool) -> int:
         payloads.append(payload)
 
     # =====================================================
-    # 4. Bulk upsert to Supabase
+    # 4. Bulk upsert to PostgreSQL
     # =====================================================
     print(f"💾 Upserting {len(payloads)} tasks to database...")
-    if payloads:
-        supabase.table("tasks").upsert(
-            payloads, on_conflict="clickup_task_id"
-        ).execute()
+    bulk_upsert_tasks(payloads)
     print("✅ Sync complete")
 
     return len(payloads)

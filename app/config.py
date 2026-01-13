@@ -11,11 +11,11 @@ CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN")
 CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID")
 CLICKUP_SPACE_ID = os.getenv("CLICKUP_SPACE_ID")
 BASE_URL = "https://api.clickup.com/api/v2"
+
 # =========================
-# SUPABASE CONFIG
+# DATABASE CONFIG (PostgreSQL)
 # =========================
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # =========================
 # POLLING CONFIG
@@ -35,11 +35,8 @@ if not CLICKUP_TEAM_ID:
 
 # CLICKUP_SPACE_ID is now optional - if not set, all spaces will be synced
 
-if not SUPABASE_URL:
-    missing.append("SUPABASE_URL")
-
-if not SUPABASE_SERVICE_ROLE_KEY:
-    missing.append("SUPABASE_SERVICE_ROLE_KEY")
+if not DATABASE_URL:
+    missing.append("DATABASE_URL")
 
 if missing:
     raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")

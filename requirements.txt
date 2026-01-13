@@ -2,5 +2,5 @@ fastapi
 uvicorn
 python-dotenv
 requests
-supabase
+psycopg2-binary
     

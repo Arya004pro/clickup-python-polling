@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from collections import defaultdict
 
-from app.supabase_db import supabase
+from app.supabase_db import update_task_time
 from app.clickup import fetch_time_entries
 from app.time_tracking import aggregate_time_entries
 
@@ -42,18 +42,17 @@ def sync_time_entries(updated_after_ms: int | None = None) -> int:
 
         aggregated = aggregate_time_entries(entries)
 
-        supabase.table("tasks").update(
-            {
-                "tracked_minutes": aggregated["tracked_minutes"],
-                "start_time": aggregated["start_time"].isoformat()
-                if aggregated["start_time"]
-                else None,
-                "end_time": aggregated["end_time"].isoformat()
-                if aggregated["end_time"]
-                else None,
-                "updated_at": now_utc,
-            }
-        ).eq("clickup_task_id", task_id).execute()
+        update_task_time(
+            task_id=task_id,
+            tracked_minutes=aggregated["tracked_minutes"],
+            start_time=aggregated["start_time"].isoformat()
+            if aggregated["start_time"]
+            else None,
+            end_time=aggregated["end_time"].isoformat()
+            if aggregated["end_time"]
+            else None,
+            updated_at=now_utc,
+        )
 
         updated_count += 1
 

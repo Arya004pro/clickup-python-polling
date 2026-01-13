@@ -1,4 +1,4 @@
-from app.supabase_db import supabase
+from app.supabase_db import upsert_employee
 from app.clickup import fetch_team_members
 
 
@@ -18,13 +18,7 @@ def sync_employees_to_supabase() -> int:
             "role": m.get("role"),
         }
 
-        resp = (
-            supabase.table("employees")
-            .upsert(payload, on_conflict="clickup_user_id")
-            .execute()
-        )
-
-        if resp.data:
+        if upsert_employee(payload):
             synced += 1
 
     return synced

@@ -11,7 +11,7 @@ from app.time_tracking import aggregate_time_entries
 from app.sync import sync_tasks_to_supabase
 from app.scheduler import start_scheduler
 from app.employee_sync import sync_employees_to_supabase
-from app.supabase_db import supabase
+from app.supabase_db import get_all_employees, get_tasks_by_employee_id
 
 
 # -------------------------------------------------
@@ -152,65 +152,20 @@ def sync_employees():
 @app.get("/employees", tags=["Employees"])
 def get_employees():
     """
-    Fetch all employees from Supabase.
+    Fetch all employees from database.
     """
-    resp = supabase.table("employees").select("id, name, email, role").execute()
-
-    return {"count": len(resp.data or []), "employees": resp.data}
+    employees = get_all_employees()
+    return {"count": len(employees), "employees": employees}
 
 
 @app.get("/tasks/by-employee", tags=["Tasks"])
 def get_tasks_by_employee(employee_id: str):
-    # Use 'contains' to check if employee_id is in the employee_ids array
-    resp = (
-        supabase.table("tasks")
-        .select("""
-            clickup_task_id,
-            title,
-            description,
-            status,
-            status_type,
-            type,
-            archived,
-            assigned_comment,
-
-            assignee_name,
-            assignee_ids,
-            assigned_by,
-            employee_ids,
-
-            tags,
-            priority,
-
-            due_date,
-            start_date,
-
-            date_created,
-            date_updated,
-            date_done,
-            date_closed,
-
-            time_estimate_minutes,
-            tracked_minutes,
-
-            space_name,
-            folder_name,
-            list_name,
-
-            followers,
-            summary,
-            sprint_points,
-            archived,
-
-            in_progress_by,
-            completed_by
-        """)
-        .contains("employee_ids", [employee_id])
-        .execute()
-    )
-
+    """
+    Fetch tasks assigned to a specific employee.
+    """
+    tasks = get_tasks_by_employee_id(employee_id)
     return {
         "employee_id": employee_id,
-        "tasks_count": len(resp.data or []),
-        "tasks": resp.data,
+        "tasks_count": len(tasks),
+        "tasks": tasks,
     }
