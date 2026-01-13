@@ -5,7 +5,7 @@ FastAPI Application - ClickUp to PostgreSQL Sync
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.logging_config import setup_logging
-from app.clickup import fetch_all_tasks_from_team, fetch_all_spaces, clear_space_cache
+from app.clickup import fetch_all_tasks_from_team, clear_space_cache
 from app.sync import sync_tasks_to_supabase
 from app.scheduler import start_scheduler
 from app.employee_sync import sync_employees_to_supabase
@@ -95,17 +95,3 @@ def get_task(task_id: str):
     """Get a single task by ID."""
     task = get_task_by_id(task_id)
     return task if task else {"error": "Task not found"}
-
-
-# -------------------------------------------------
-# Debug (optional - can remove in production)
-# -------------------------------------------------
-@app.get("/debug/spaces", tags=["Debug"])
-def debug_spaces():
-    """List all ClickUp spaces."""
-    clear_space_cache()
-    spaces = fetch_all_spaces()
-    return {
-        "count": len(spaces),
-        "spaces": [{"id": s["id"], "name": s["name"]} for s in spaces],
-    }
