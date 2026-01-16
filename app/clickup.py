@@ -111,6 +111,23 @@ def fetch_all_tasks_updated_since_team(updated_after_ms):
     return all_tasks
 
 
+def fetch_tasks_by_ids(task_ids):
+    """Fetch a list of tasks by their IDs concurrently."""
+    tasks = []
+
+    def fetch(tid):
+        try:
+            return _get(f"{BASE_URL}/task/{tid}")
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
+            if task := future.result():
+                tasks.append(task)
+    return tasks
+
+
 # -----------------------------------------------------------------------------
 # Time Entries (Batch)
 # -----------------------------------------------------------------------------

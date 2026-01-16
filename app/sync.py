@@ -121,7 +121,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
     comment_map = fetch_assigned_comments_batch(task_ids)
 
     # Step 1: Create a map of task IDs to names from the current batch.
-    task_id_to_name_map = {t['id']: t.get('name', t['id']) for t in tasks}
+    task_id_to_name_map = {t["id"]: t.get("name", t["id"]) for t in tasks}
 
     # Step 2: Pre-process all tasks to build a complete, two-way dependency map.
     dependency_strings_map = defaultdict(list)
@@ -140,7 +140,9 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             if not dependent_task_id or not other_task_id:
                 continue
 
-            dependent_task_name = task_id_to_name_map.get(dependent_task_id, dependent_task_id)
+            dependent_task_name = task_id_to_name_map.get(
+                dependent_task_id, dependent_task_id
+            )
             other_task_name = task_id_to_name_map.get(other_task_id, other_task_id)
 
             dep_type = dep.get("type")
@@ -148,8 +150,12 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 continue
 
             dep_strings = dependency_type_map[dep_type]
-            dependency_strings_map[other_task_id].append(f"{dep_strings[0]} '{dependent_task_name}'")
-            dependency_strings_map[dependent_task_id].append(f"{dep_strings[1]} '{other_task_name}'")
+            dependency_strings_map[other_task_id].append(
+                f"{dep_strings[0]} '{dependent_task_name}'"
+            )
+            dependency_strings_map[dependent_task_id].append(
+                f"{dep_strings[1]} '{other_task_name}'"
+            )
 
     # Build payloads
     payloads = []
