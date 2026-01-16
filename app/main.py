@@ -95,3 +95,13 @@ def get_task(task_id: str):
     """Get a single task by ID."""
     task = get_task_by_id(task_id)
     return task if task else {"error": "Task not found"}
+
+
+@app.get("/dependencies/{task_id}", tags=["Tasks"])
+def get_dependencies(task_id: str):
+    """Get dependencies for a single task by ID."""
+    task = get_task_by_id(task_id)
+    if not task:
+        return {"error": "Task not found"}
+    return {"task_id": task_id, "dependencies": task.get("dependencies")}
+

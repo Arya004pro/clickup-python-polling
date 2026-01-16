@@ -48,8 +48,22 @@ uvicorn app.main:app --reload
 | `GET /tasks/with-time`                    | Tasks with tracked time      |
 | `GET /tasks/with-comments`                | Tasks with assigned comments |
 | `GET /tasks/{task_id}`                    | Single task details          |
+| `GET /dependencies/{task_id}`             | Get task dependencies        |
 | `GET /sync/tasks`                         | Trigger manual full sync     |
 | `GET /sync/employees`                     | Sync employees from ClickUp  |
+
+...
+
+## Dependency Types
+
+The `dependencies` field for a task is a JSON array of strings. The following dependency types are supported:
+
+| Type ID | Relationship      | Example                               |
+| ------- | ----------------- | ------------------------------------- |
+| 1       | Depends On        | `blocking 'Task B'` / `waiting on 'Task A'` |
+| 2       | Related Task      | `related to 'Task C'`                 |
+| 3       | Linked Document   | `linked to 'Document D'`              |
+| 4       | Custom            | `custom 'My custom relationship'`     |
 
 ## Database Schema
 

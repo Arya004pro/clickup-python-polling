@@ -2,8 +2,10 @@
 Task Sync - ClickUp to PostgreSQL
 """
 
+import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from collections import defaultdict
 from app.supabase_db import (
     get_employee_id_map,
     get_existing_task_ids,
@@ -22,7 +24,13 @@ from app.clickup import (
 from app.time_tracking import aggregate_time_entries
 
 IST = ZoneInfo("Asia/Kolkata")
-TYPE_MAP = {0: "task", 1: "milestone", 2: "meeting notes", 3: "form response", 4: "meeting note"}
+TYPE_MAP = {
+    0: "task",
+    1: "milestone",
+    2: "meeting notes",
+    3: "form response",
+    4: "meeting note",
+}
 
 
 def _ms_to_dt(ms):
@@ -112,6 +120,37 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
     print(f"💬 Fetching comments for {len(tasks)} tasks...")
     comment_map = fetch_assigned_comments_batch(task_ids)
 
+    # Step 1: Create a map of task IDs to names from the current batch.
+    task_id_to_name_map = {t['id']: t.get('name', t['id']) for t in tasks}
+
+    # Step 2: Pre-process all tasks to build a complete, two-way dependency map.
+    dependency_strings_map = defaultdict(list)
+    dependency_type_map = {
+        1: ("blocking", "waiting on"),
+        2: ("related to", "related to"),
+        3: ("linked to", "linked from"),
+        4: ("custom", "custom"),
+    }
+    for task in tasks:
+        # This logic assumes `dependencies` means "other tasks that depend on this task".
+        for dep in task.get("dependencies", []):
+            dependent_task_id = dep.get("task_id")
+            other_task_id = dep.get("depends_on") or dep.get("task_id")
+
+            if not dependent_task_id or not other_task_id:
+                continue
+
+            dependent_task_name = task_id_to_name_map.get(dependent_task_id, dependent_task_id)
+            other_task_name = task_id_to_name_map.get(other_task_id, other_task_id)
+
+            dep_type = dep.get("type")
+            if dep_type not in dependency_type_map:
+                continue
+
+            dep_strings = dependency_type_map[dep_type]
+            dependency_strings_map[other_task_id].append(f"{dep_strings[0]} '{dependent_task_name}'")
+            dependency_strings_map[dependent_task_id].append(f"{dep_strings[1]} '{other_task_name}'")
+
     # Build payloads
     payloads = []
     for t in tasks:
@@ -129,11 +168,9 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             emp_map[str(a["id"])] for a in assignees if str(a.get("id")) in emp_map
         ]
 
-        # Improved type mapping for tasks
         custom_item_id = t.get("custom_item_id")
         type_val = None
 
-        # Prefer explicit type field if present and matches known types
         t_type = (t.get("type") or "").strip().lower()
         if t_type == "meeting note":
             type_val = "meeting note"
@@ -145,6 +182,8 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             type_val = TYPE_MAP[custom_item_id]
         else:
             type_val = t.get("type") or "task"
+
+        dep_strings = sorted(list(set(dependency_strings_map.get(tid, []))))
 
         payloads.append(
             {
@@ -191,6 +230,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 "archived": t.get("archived", False),
                 "is_deleted": False,
                 "updated_at": now,
+                "dependencies": json.dumps(dep_strings) if dep_strings else None,
             }
         )
 

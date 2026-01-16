@@ -128,7 +128,7 @@ def fetch_all_time_entries_batch(task_ids):
         except Exception:
             return tid, []
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
             tid, entries = future.result()
             result[tid] = entries
@@ -153,7 +153,7 @@ def fetch_assigned_comments_batch(task_ids):
         except Exception:
             return tid, None
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
             tid, comment = future.result()
             result[tid] = comment

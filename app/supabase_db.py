@@ -118,6 +118,7 @@ def bulk_upsert_tasks(payloads):
         "archived",
         "is_deleted",
         "updated_at",
+        "dependencies",
     ]
 
     # Build SQL dynamically - handle array types
@@ -165,6 +166,18 @@ def get_task_by_id(task_id):
         cur.execute("SELECT * FROM tasks WHERE clickup_task_id = %s", (task_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def get_task_names_by_ids(task_ids):
+    if not task_ids:
+        return {}
+    with db() as cur:
+        cur.execute(
+            "SELECT clickup_task_id, title FROM tasks WHERE clickup_task_id = ANY(%s)",
+            (list(task_ids),),
+        )
+        return {r["clickup_task_id"]: r["title"] for r in cur.fetchall()}
+
 
 
 def get_tasks_with_time():
