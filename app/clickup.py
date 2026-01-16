@@ -46,6 +46,20 @@ def clear_space_cache():
 
 
 # -----------------------------------------------------------------------------
+# Task Activity
+# -----------------------------------------------------------------------------
+def fetch_task_activity(task_id):
+    """
+    Fetch task activity to detect status changes.
+    """
+    try:
+        data = _get(f"{BASE_URL}/task/{task_id}/activity")
+        return data.get("activities", [])
+    except Exception:
+        return []
+
+
+# -----------------------------------------------------------------------------
 # Task Fetching
 # -----------------------------------------------------------------------------
 def fetch_tasks_from_list(list_id, updated_after_ms=None, include_archived=True):
@@ -121,7 +135,7 @@ def fetch_tasks_by_ids(task_ids):
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
             if task := future.result():
                 tasks.append(task)
@@ -145,7 +159,7 @@ def fetch_all_time_entries_batch(task_ids):
         except Exception:
             return tid, []
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
             tid, entries = future.result()
             result[tid] = entries

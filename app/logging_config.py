@@ -2,7 +2,7 @@ import logging
 import sys
 import time
 
-
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 class ISTFormatter(logging.Formatter):
     def converter(self, timestamp):
         return time.localtime(time.time() + 5.5 * 3600)

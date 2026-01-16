@@ -44,6 +44,18 @@ def _ms_to_date(ms):
 def _to_iso(dt):
     return dt.isoformat() if dt else None
 
+def _ms_to_ist_iso(ms):
+    """
+    Convert ClickUp ms timestamp → IST ISO string
+    """
+    if not ms:
+        return None
+    return (
+        datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
+        .astimezone(IST)
+        .isoformat()
+    )
+
 
 def get_location_map():
     """Build list_id -> location info."""
@@ -98,6 +110,13 @@ def _get_sprint_points(task):
         except Exception:
             pass
     return None
+
+def get_last_status_change_from_task(task):
+    """
+    ClickUp updates `date_updated` on every status change.
+    This matches ClickUp's own 'Last Status Change' filter behavior.
+    """
+    return _to_iso(_ms_to_dt(task.get("date_updated")))
 
 
 def sync_tasks_to_supabase(tasks, *, full_sync):
@@ -191,6 +210,11 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
 
         dep_strings = sorted(list(set(dependency_strings_map.get(tid, []))))
 
+        #last_status_change = None
+
+        last_status_change = _ms_to_ist_iso(t.get("date_updated"))
+
+
         payloads.append(
             {
                 "clickup_task_id": tid,
@@ -236,6 +260,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 "archived": t.get("archived", False),
                 "is_deleted": False,
                 "updated_at": now,
+                "last_status_change": last_status_change,
                 "dependencies": json.dumps(dep_strings) if dep_strings else None,
             }
         )
