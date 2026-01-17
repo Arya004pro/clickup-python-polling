@@ -35,12 +35,27 @@ app = FastAPI(title="ClickUp Sync API", lifespan=lifespan)
 @app.get("/sync/tasks", tags=["Sync"])
 def sync_tasks():
     """Trigger full sync manually."""
-    clear_space_cache()
-    tasks = fetch_all_tasks_from_team()
-    return {
-        "status": "success",
-        "tasks_synced": sync_tasks_to_supabase(tasks, full_sync=True),
-    }
+    import logging
+    from app import scheduler
+
+    logger = logging.getLogger("scheduler")
+    if scheduler._sync_in_progress:
+        logger.info("⏳ Sync already in progress, manual trigger skipped.")
+        return {"status": "skipped", "reason": "Sync already in progress"}
+    scheduler._sync_in_progress = True
+    try:
+        clear_space_cache()
+        tasks = fetch_all_tasks_from_team()
+        result = {
+            "status": "success",
+            "tasks_synced": sync_tasks_to_supabase(tasks, full_sync=True),
+        }
+    except Exception as e:
+        logger.error("❌ Manual sync failed", exc_info=True)
+        result = {"status": "error", "reason": str(e)}
+    finally:
+        scheduler._sync_in_progress = False
+    return result
 
 
 @app.get("/sync/employees", tags=["Sync"])
@@ -104,4 +119,3 @@ def get_dependencies(task_id: str):
     if not task:
         return {"error": "Task not found"}
     return {"task_id": task_id, "dependencies": task.get("dependencies")}
-

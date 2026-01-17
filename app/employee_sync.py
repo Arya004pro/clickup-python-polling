@@ -11,9 +11,10 @@ def sync_employees_to_supabase() -> int:
     synced = 0
 
     for m in members:
+        name = m["name"] if m["name"] else "Unknown"
         payload = {
             "clickup_user_id": m["clickup_user_id"],
-            "name": m["name"],
+            "name": name,
             "email": m.get("email"),
             "role": m.get("role"),
         }

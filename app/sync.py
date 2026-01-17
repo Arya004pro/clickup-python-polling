@@ -125,6 +125,11 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
     if not tasks:
         return 0
 
+    import time
+    import logging
+
+    logger = logging.getLogger("sync-profile")
+    t0 = time.perf_counter()
     emp_map, loc_map = get_employee_id_map(), get_location_map()
     now = datetime.now(timezone.utc).isoformat()
     task_ids = [t["id"] for t in tasks]
@@ -135,11 +140,19 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         if deleted:
             mark_tasks_deleted(list(deleted), now)
 
+    t1 = time.perf_counter()
+    logger.info(f"[PROFILE] Pre-fetch setup: {t1 - t0:.2f}s")
+
     # Batch fetch
-    print(f"⏱️  Fetching time entries for {len(tasks)} tasks...")
+    t2 = time.perf_counter()
     time_map = fetch_all_time_entries_batch(task_ids)
-    print(f"💬 Fetching comments for {len(tasks)} tasks...")
+    t3 = time.perf_counter()
+    logger.info(f"[PROFILE] Time entry fetch: {t3 - t2:.2f}s for {len(task_ids)} tasks")
+
+    t4 = time.perf_counter()
     comment_map = fetch_assigned_comments_batch(task_ids)
+    t5 = time.perf_counter()
+    logger.info(f"[PROFILE] Comment fetch: {t5 - t4:.2f}s for {len(task_ids)} tasks")
 
     # Step 1: Create a map of task IDs to names from the current batch.
     task_id_to_name_map = {t["id"]: t.get("name", t["id"]) for t in tasks}
@@ -178,6 +191,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 f"{dep_strings[1]} '{other_task_name}'"
             )
 
+    t6 = time.perf_counter()
     # Build payloads
     payloads = []
     for t in tasks:
@@ -269,15 +283,25 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             }
         )
 
-    print(f"💾 Upserting {len(payloads)} tasks...")
+    # print(f"💾 Upserting {len(payloads)} tasks...")
+    t7 = time.perf_counter()
+    logger.info(f"[PROFILE] Payload build: {t7 - t6:.2f}s for {len(payloads)} tasks")
+    upsert_start = time.perf_counter()
     bulk_upsert_tasks(payloads)
-    print("✅ Sync complete")
+    upsert_end = time.perf_counter()
+    logger.info(
+        f"[PROFILE] Bulk upsert: {upsert_end - upsert_start:.2f}s for {len(payloads)} tasks"
+    )
 
     # Incremental: refresh comments for other tasks
     if not full_sync:
         remaining = [tid for tid in get_all_task_ids() if tid not in task_ids]
         if remaining:
-            print(f"💬 Refreshing comments for {len(remaining)} other tasks...")
+            comment_refresh_start = time.perf_counter()
             bulk_update_comments(fetch_assigned_comments_batch(remaining), now)
+            comment_refresh_end = time.perf_counter()
+            logger.info(
+                f"[PROFILE] Incremental comment refresh: {comment_refresh_end - comment_refresh_start:.2f}s for {len(remaining)} tasks"
+            )
 
     return len(payloads)
