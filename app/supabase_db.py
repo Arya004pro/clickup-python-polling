@@ -117,6 +117,7 @@ def bulk_upsert_tasks(payloads):
         "tracked_minutes",
         "archived",
         "is_deleted",
+        "is_recurring",
         "last_status_change",
         "updated_at",
         "dependencies",

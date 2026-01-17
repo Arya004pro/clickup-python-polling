@@ -213,6 +213,9 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         #last_status_change = None
 
         last_status_change = _ms_to_ist_iso(t.get("date_updated"))
+        recurring_field = t.get("recurring")
+        print(f"Task: {tid}, Recurring field: {recurring_field}")
+        is_recurring = isinstance(recurring_field, list) and len(recurring_field) > 0
 
 
         payloads.append(
@@ -259,6 +262,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 "tracked_minutes": agg["tracked_minutes"],
                 "archived": t.get("archived", False),
                 "is_deleted": False,
+                "is_recurring": is_recurring,
                 "updated_at": now,
                 "last_status_change": last_status_change,
                 "dependencies": json.dumps(dep_strings) if dep_strings else None,

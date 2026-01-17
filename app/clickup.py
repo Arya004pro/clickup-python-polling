@@ -1,5 +1,5 @@
 """
-ClickUp API Client - Simplified
+ClickUp API Client
 """
 
 import requests
@@ -7,23 +7,26 @@ from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
 
-# Shared HTTP session
+# ------------------------------------------------------------------
+# Session
+# ------------------------------------------------------------------
 session = requests.Session()
-session.headers.update(
-    {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
-)
+session.headers.update({
+    "Authorization": CLICKUP_API_TOKEN,
+    "Content-Type": "application/json",
+})
 
 
 def _get(url, params=None):
-    resp = session.get(url, params=params)
-    if resp.status_code != 200:
-        raise RuntimeError(f"ClickUp error {resp.status_code}: {resp.text}")
-    return resp.json()
+    r = session.get(url, params=params)
+    if r.status_code != 200:
+        raise RuntimeError(f"ClickUp error {r.status_code}: {r.text}")
+    return r.json()
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 # Spaces & Lists
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 @lru_cache(maxsize=1)
 def fetch_all_spaces():
     spaces = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/space").get("spaces", [])
@@ -34,8 +37,8 @@ def fetch_all_spaces():
 @lru_cache(maxsize=32)
 def fetch_all_lists_in_space(space_id):
     lists = []
-    for folder in _get(f"{BASE_URL}/space/{space_id}/folder").get("folders", []):
-        lists.extend(folder.get("lists", []))
+    for f in _get(f"{BASE_URL}/space/{space_id}/folder").get("folders", []):
+        lists.extend(f.get("lists", []))
     lists.extend(_get(f"{BASE_URL}/space/{space_id}/list").get("lists", []))
     return lists
 
@@ -45,112 +48,78 @@ def clear_space_cache():
     fetch_all_lists_in_space.cache_clear()
 
 
-# -----------------------------------------------------------------------------
-# Task Activity
-# -----------------------------------------------------------------------------
-def fetch_task_activity(task_id):
-    """
-    Fetch task activity to detect status changes.
-    """
-    try:
-        data = _get(f"{BASE_URL}/task/{task_id}/activity")
-        return data.get("activities", [])
-    except Exception:
-        return []
-
-
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 # Task Fetching
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 def fetch_tasks_from_list(list_id, updated_after_ms=None, include_archived=True):
-    all_tasks, seen = [], set()
+    tasks, seen = [], set()
+    page = 0
 
-    def fetch_pages(params_base):
+    def fetch_pages(extra):
+        nonlocal page
         page = 0
         while True:
-            params = {**params_base, "page": page, "include_closed": "true"}
-            tasks = _get(f"{BASE_URL}/list/{list_id}/task", params).get("tasks", [])
-            if not tasks:
+            params = {
+                "page": page,
+                "include_closed": "true",
+                **extra,
+            }
+            data = _get(f"{BASE_URL}/list/{list_id}/task", params).get("tasks", [])
+            if not data:
                 break
-            for t in tasks:
+            for t in data:
                 if t["id"] not in seen:
                     seen.add(t["id"])
-                    all_tasks.append(t)
+                    tasks.append(t)
             page += 1
 
-    # Active tasks
-    fetch_pages(
-        {
-            "archived": "false",
-            **({"date_updated_gt": updated_after_ms} if updated_after_ms else {}),
-        }
-    )
+    base = {"archived": "false"}
+    if updated_after_ms:
+        base["date_updated_gt"] = updated_after_ms
 
-    # New tasks (by creation date)
+    fetch_pages(base)
+
     if updated_after_ms:
         fetch_pages({"archived": "false", "date_created_gt": updated_after_ms})
 
-    # Archived tasks
     if include_archived:
-        fetch_pages(
-            {
-                "archived": "true",
-                **({"date_updated_gt": updated_after_ms} if updated_after_ms else {}),
-            }
-        )
+        arch = {"archived": "true"}
+        if updated_after_ms:
+            arch["date_updated_gt"] = updated_after_ms
+        fetch_pages(arch)
 
-    return all_tasks
+    return tasks
 
 
 def fetch_all_tasks_from_team():
-    """Fetch all tasks from ALL spaces."""
     all_tasks = []
     for space in fetch_all_spaces():
         print(f"  → Fetching from space: {space['name']}")
         lists = fetch_all_lists_in_space(space["id"])
         with ThreadPoolExecutor(max_workers=5) as ex:
-            for future in as_completed(
+            for f in as_completed(
                 [ex.submit(fetch_tasks_from_list, lst["id"]) for lst in lists]
             ):
-                all_tasks.extend(future.result())
+                all_tasks.extend(f.result())
     return all_tasks
 
 
 def fetch_all_tasks_updated_since_team(updated_after_ms):
-    """Fetch updated tasks from ALL spaces."""
-    all_tasks = []
+    tasks = []
     for space in fetch_all_spaces():
         for lst in fetch_all_lists_in_space(space["id"]):
-            all_tasks.extend(fetch_tasks_from_list(lst["id"], updated_after_ms))
-    return all_tasks
-
-
-def fetch_tasks_by_ids(task_ids):
-    """Fetch a list of tasks by their IDs concurrently."""
-    tasks = []
-
-    def fetch(tid):
-        try:
-            return _get(f"{BASE_URL}/task/{tid}")
-        except Exception:
-            return None
-
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
-            if task := future.result():
-                tasks.append(task)
+            tasks.extend(fetch_tasks_from_list(lst["id"], updated_after_ms))
     return tasks
 
 
-# -----------------------------------------------------------------------------
-# Time Entries (Batch)
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Time Entries
+# ------------------------------------------------------------------
 def fetch_time_entries_for_task(task_id):
     return _get(f"{BASE_URL}/task/{task_id}/time").get("data", [])
 
 
 def fetch_all_time_entries_batch(task_ids):
-    """Fetch time entries for multiple tasks concurrently."""
     result = {tid: [] for tid in task_ids}
 
     def fetch(tid):
@@ -160,53 +129,51 @@ def fetch_all_time_entries_batch(task_ids):
             return tid, []
 
     with ThreadPoolExecutor(max_workers=10) as ex:
-        for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
-            tid, entries = future.result()
+        for f in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
+            tid, entries = f.result()
             result[tid] = entries
     return result
 
 
-# -----------------------------------------------------------------------------
-# Assigned Comments (Batch)
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Assigned Comments
+# ------------------------------------------------------------------
 def fetch_assigned_comments_batch(task_ids):
-    """Fetch assigned comments for multiple tasks concurrently."""
     result = {}
 
     def fetch(tid):
         try:
-            comments = [
+            comments = _get(f"{BASE_URL}/task/{tid}/comment").get("comments", [])
+            texts = [
                 c.get("comment_text", "").strip()
-                for c in _get(f"{BASE_URL}/task/{tid}/comment").get("comments", [])
+                for c in comments
                 if c.get("assignee") and not c.get("resolved")
             ]
-            return tid, " | ".join(filter(None, comments)) or None
+            return tid, " | ".join(filter(None, texts)) or None
         except Exception:
             return tid, None
 
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        for future in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
-            tid, comment = future.result()
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for f in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
+            tid, comment = f.result()
             result[tid] = comment
     return result
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 # Team Members
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------
 def fetch_team_members():
     ROLES = {1: "owner", 2: "admin", 3: "member", 4: "guest"}
     members = []
-    for m in (
-        _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}").get("team", {}).get("members", [])
-    ):
+
+    data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}")
+    for m in data.get("team", {}).get("members", []):
         u = m.get("user", {})
-        members.append(
-            {
-                "clickup_user_id": str(u.get("id")),
-                "name": u.get("username"),
-                "email": u.get("email"),
-                "role": ROLES.get(u.get("role")),
-            }
-        )
+        members.append({
+            "clickup_user_id": str(u.get("id")),
+            "name": u.get("username"),
+            "email": u.get("email"),
+            "role": ROLES.get(u.get("role")),
+        })
     return members
