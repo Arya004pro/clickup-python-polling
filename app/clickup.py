@@ -11,10 +11,12 @@ from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
 # Session
 # ------------------------------------------------------------------
 session = requests.Session()
-session.headers.update({
-    "Authorization": CLICKUP_API_TOKEN,
-    "Content-Type": "application/json",
-})
+session.headers.update(
+    {
+        "Authorization": CLICKUP_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+)
 
 
 def _get(url, params=None):
@@ -29,7 +31,15 @@ def _get(url, params=None):
 # ------------------------------------------------------------------
 @lru_cache(maxsize=1)
 def fetch_all_spaces():
-    spaces = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}/space").get("spaces", [])
+    team_id = CLICKUP_TEAM_ID
+    if not team_id:
+        # Fetch all teams and use the first one if not set
+        data = _get(f"{BASE_URL}/team")
+        teams = data.get("teams", [])
+        if not teams:
+            raise RuntimeError("No ClickUp teams found for the provided API token.")
+        team_id = teams[0]["id"]
+    spaces = _get(f"{BASE_URL}/team/{team_id}/space").get("spaces", [])
     print(f"📂 Found {len(spaces)} spaces: {[s['name'] for s in spaces]}")
     return spaces
 
@@ -167,13 +177,22 @@ def fetch_team_members():
     ROLES = {1: "owner", 2: "admin", 3: "member", 4: "guest"}
     members = []
 
-    data = _get(f"{BASE_URL}/team/{CLICKUP_TEAM_ID}")
+    team_id = CLICKUP_TEAM_ID
+    if not team_id:
+        data = _get(f"{BASE_URL}/team")
+        teams = data.get("teams", [])
+        if not teams:
+            raise RuntimeError("No ClickUp teams found for the provided API token.")
+        team_id = teams[0]["id"]
+    data = _get(f"{BASE_URL}/team/{team_id}")
     for m in data.get("team", {}).get("members", []):
         u = m.get("user", {})
-        members.append({
-            "clickup_user_id": str(u.get("id")),
-            "name": u.get("username"),
-            "email": u.get("email"),
-            "role": ROLES.get(u.get("role")),
-        })
+        members.append(
+            {
+                "clickup_user_id": str(u.get("id")),
+                "name": u.get("username"),
+                "email": u.get("email"),
+                "role": ROLES.get(u.get("role")),
+            }
+        )
     return members

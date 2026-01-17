@@ -44,6 +44,7 @@ def _ms_to_date(ms):
 def _to_iso(dt):
     return dt.isoformat() if dt else None
 
+
 def _ms_to_ist_iso(ms):
     """
     Convert ClickUp ms timestamp → IST ISO string
@@ -110,6 +111,7 @@ def _get_sprint_points(task):
         except Exception:
             pass
     return None
+
 
 def get_last_status_change_from_task(task):
     """
@@ -210,13 +212,11 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
 
         dep_strings = sorted(list(set(dependency_strings_map.get(tid, []))))
 
-        #last_status_change = None
+        # last_status_change = None
 
         last_status_change = _ms_to_ist_iso(t.get("date_updated"))
         recurring_field = t.get("recurring")
-        print(f"Task: {tid}, Recurring field: {recurring_field}")
         is_recurring = isinstance(recurring_field, list) and len(recurring_field) > 0
-
 
         payloads.append(
             {
