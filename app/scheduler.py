@@ -28,6 +28,8 @@ logger.propagate = True
 _scheduler: BackgroundScheduler | None = None
 _last_sync_ms: int | None = None  # ClickUp timestamps are ms
 _run_count: int = 0
+_initial_sync_done: bool = False
+_sync_in_progress: bool = False
 
 
 # -------------------------------------------------
@@ -37,7 +39,13 @@ def scheduled_sync():
     """
     Stable scheduler logic
     """
-    global _last_sync_ms, _run_count
+
+    global _last_sync_ms, _run_count, _initial_sync_done, _sync_in_progress
+
+    if _sync_in_progress:
+        logger.info("⏳ Previous sync still running, skipping this scheduled run.")
+        return
+    _sync_in_progress = True
 
     logger.info("⏳ Scheduler triggered")
 
@@ -51,7 +59,7 @@ def scheduled_sync():
         # -------------------------------------------------
         # 2️⃣ Task sync (ALL SPACES)
         # -------------------------------------------------
-        do_full_sync = _last_sync_ms is None or _run_count % 12 == 0
+        do_full_sync = True  # Always do full sync for simplicity and reliability
 
         # Always clear cache to pick up new spaces/lists/tasks
         clear_space_cache()
@@ -60,13 +68,22 @@ def scheduled_sync():
             logger.info("🔄 FULL task sync (all spaces)")
             tasks = fetch_all_tasks_from_team()
             synced = sync_tasks_to_supabase(tasks, full_sync=True)
-        else:
+            _initial_sync_done = (
+                True  # Mark initial sync as done after first successful full sync
+            )
+        elif _initial_sync_done:
             logger.info("⚡ Incremental task sync (all spaces)")
             BUFFER_MS = 2 * 60 * 1000
             tasks = fetch_all_tasks_updated_since_team(
                 updated_after_ms=_last_sync_ms - BUFFER_MS,
             )
             synced = sync_tasks_to_supabase(tasks, full_sync=False)
+        else:
+            logger.info(
+                "⏸️ Skipping incremental sync until initial full sync is complete."
+            )
+            tasks = []
+            synced = 0
 
         # NOTE: Time tracking is now handled by sync_tasks_to_supabase
         # using fetch_all_time_entries_batch - no separate time sync needed
@@ -89,6 +106,8 @@ def scheduled_sync():
 
     except Exception:
         logger.error("❌ Scheduler sync failed", exc_info=True)
+    finally:
+        _sync_in_progress = False
 
 
 # -------------------------------------------------
@@ -115,7 +134,7 @@ def start_scheduler():
     _scheduler.add_job(
         scheduled_sync,
         trigger="interval",
-        minutes=0.75,  # every 45 seconds
+        minutes=10,  # Increased to 10 minutes for complete syncs with time entries
         id="clickup_sync_job",
         replace_existing=True,
         max_instances=1,  #  no overlap

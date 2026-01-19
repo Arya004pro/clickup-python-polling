@@ -5,7 +5,7 @@ FastAPI Application - ClickUp to PostgreSQL Sync
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.logging_config import setup_logging
-from app.clickup import fetch_all_tasks_from_team, clear_space_cache
+from app.clickup import fetch_all_tasks_from_team
 from app.sync import sync_tasks_to_supabase
 from app.scheduler import start_scheduler
 from app.employee_sync import sync_employees_to_supabase
@@ -35,12 +35,33 @@ app = FastAPI(title="ClickUp Sync API", lifespan=lifespan)
 @app.get("/sync/tasks", tags=["Sync"])
 def sync_tasks():
     """Trigger full sync manually."""
-    clear_space_cache()
-    tasks = fetch_all_tasks_from_team()
-    return {
-        "status": "success",
-        "tasks_synced": sync_tasks_to_supabase(tasks, full_sync=True),
-    }
+    import logging
+    from app import scheduler
+
+    logger = logging.getLogger("scheduler")
+    if scheduler._sync_in_progress:
+        logger.info("⏳ Sync already in progress, manual trigger skipped.")
+        return {"status": "skipped", "reason": "Sync already in progress"}
+    scheduler._sync_in_progress = True
+    try:
+        tasks = fetch_all_tasks_from_team()
+        synced_count = sync_tasks_to_supabase(tasks, full_sync=True)
+        result = {
+            "status": "success",
+            "tasks_synced": synced_count,
+        }
+        # Update scheduler state to prevent immediate full sync
+        if tasks:
+            scheduler._initial_sync_done = True
+            scheduler._last_sync_ms = max(
+                int(task["date_updated"]) for task in tasks if task.get("date_updated")
+            )
+    except Exception as e:
+        logger.error("❌ Manual sync failed", exc_info=True)
+        result = {"status": "error", "reason": str(e)}
+    finally:
+        scheduler._sync_in_progress = False
+    return result
 
 
 @app.get("/sync/employees", tags=["Sync"])
@@ -104,4 +125,3 @@ def get_dependencies(task_id: str):
     if not task:
         return {"error": "Task not found"}
     return {"task_id": task_id, "dependencies": task.get("dependencies")}
-

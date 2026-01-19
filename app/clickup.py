@@ -106,7 +106,7 @@ def fetch_all_tasks_from_team():
     for space in fetch_all_spaces():
         print(f"  → Fetching from space: {space['name']}")
         lists = fetch_all_lists_in_space(space["id"])
-        with ThreadPoolExecutor(max_workers=5) as ex:
+        with ThreadPoolExecutor(max_workers=12) as ex:  # Increased for faster full sync
             for f in as_completed(
                 [ex.submit(fetch_tasks_from_list, lst["id"]) for lst in lists]
             ):
@@ -117,8 +117,16 @@ def fetch_all_tasks_from_team():
 def fetch_all_tasks_updated_since_team(updated_after_ms):
     tasks = []
     for space in fetch_all_spaces():
-        for lst in fetch_all_lists_in_space(space["id"]):
-            tasks.extend(fetch_tasks_from_list(lst["id"], updated_after_ms))
+        print(f"  → Fetching from space: {space['name']}")
+        lists = fetch_all_lists_in_space(space["id"])
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            for f in as_completed(
+                [
+                    ex.submit(fetch_tasks_from_list, lst["id"], updated_after_ms)
+                    for lst in lists
+                ]
+            ):
+                tasks.extend(f.result())
     return tasks
 
 
@@ -130,18 +138,40 @@ def fetch_time_entries_for_task(task_id):
 
 
 def fetch_all_time_entries_batch(task_ids):
+    import time
+
     result = {tid: [] for tid in task_ids}
+    BATCH_SIZE = 200  # Further increased for maximum speed
+    DELAY_BETWEEN_BATCHES = 0.0  # Removed delay for speed
+    MAX_RETRIES = 3
 
     def fetch(tid):
-        try:
-            return tid, _get(f"{BASE_URL}/task/{tid}/time").get("data", [])
-        except Exception:
-            return tid, []
+        retries = 0
+        while retries < MAX_RETRIES:
+            try:
+                data = _get(f"{BASE_URL}/task/{tid}/time").get("data", [])
+                return tid, data
+            except Exception as e:
+                if (
+                    hasattr(e, "response")
+                    and getattr(e.response, "status_code", None) == 429
+                ):
+                    wait = 2**retries
+                    time.sleep(wait)
+                    retries += 1
+                else:
+                    return tid, []
+        return tid, []
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        for f in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
-            tid, entries = f.result()
-            result[tid] = entries
+    for i in range(0, len(task_ids), BATCH_SIZE):
+        batch = task_ids[i : i + BATCH_SIZE]
+        with ThreadPoolExecutor(
+            max_workers=20
+        ) as ex:  # Increased to 20 for more parallelism
+            for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
+                tid, entries = f.result()
+                result[tid] = entries
+        # No delay between batches for maximum speed
     return result
 
 
@@ -149,24 +179,44 @@ def fetch_all_time_entries_batch(task_ids):
 # Assigned Comments
 # ------------------------------------------------------------------
 def fetch_assigned_comments_batch(task_ids):
+    import time
+
     result = {}
+    BATCH_SIZE = 100  # Increased for faster processing
+    DELAY_BETWEEN_BATCHES = 0.2  # Reduced delay
+    MAX_RETRIES = 3
 
     def fetch(tid):
-        try:
-            comments = _get(f"{BASE_URL}/task/{tid}/comment").get("comments", [])
-            texts = [
-                c.get("comment_text", "").strip()
-                for c in comments
-                if c.get("assignee") and not c.get("resolved")
-            ]
-            return tid, " | ".join(filter(None, texts)) or None
-        except Exception:
-            return tid, None
+        retries = 0
+        while retries < MAX_RETRIES:
+            try:
+                comments = _get(f"{BASE_URL}/task/{tid}/comment").get("comments", [])
+                texts = [
+                    c.get("comment_text", "").strip()
+                    for c in comments
+                    if c.get("assignee") and not c.get("resolved")
+                ]
+                return tid, " | ".join(filter(None, texts)) or None
+            except Exception as e:
+                if (
+                    hasattr(e, "response")
+                    and getattr(e.response, "status_code", None) == 429
+                ):
+                    wait = 2**retries
+                    time.sleep(wait)
+                    retries += 1
+                else:
+                    return tid, None
+        return tid, None
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        for f in as_completed([ex.submit(fetch, tid) for tid in task_ids]):
-            tid, comment = f.result()
-            result[tid] = comment
+    for i in range(0, len(task_ids), BATCH_SIZE):
+        batch = task_ids[i : i + BATCH_SIZE]
+        with ThreadPoolExecutor(max_workers=12) as ex:  # Increased workers
+            for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
+                tid, comment = f.result()
+                result[tid] = comment
+        if i + BATCH_SIZE < len(task_ids):
+            time.sleep(DELAY_BETWEEN_BATCHES)
     return result
 
 

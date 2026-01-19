@@ -24,13 +24,6 @@ from app.clickup import (
 from app.time_tracking import aggregate_time_entries
 
 IST = ZoneInfo("Asia/Kolkata")
-TYPE_MAP = {
-    0: "task",
-    1: "milestone",
-    2: "meeting notes",
-    3: "form response",
-    4: "meeting note",
-}
 
 
 def _ms_to_dt(ms):
@@ -113,14 +106,6 @@ def _get_sprint_points(task):
     return None
 
 
-def get_last_status_change_from_task(task):
-    """
-    ClickUp updates `date_updated` on every status change.
-    This matches ClickUp's own 'Last Status Change' filter behavior.
-    """
-    return _to_iso(_ms_to_dt(task.get("date_updated")))
-
-
 def sync_tasks_to_supabase(tasks, *, full_sync):
     if not tasks:
         return 0
@@ -135,10 +120,14 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         if deleted:
             mark_tasks_deleted(list(deleted), now)
 
-    # Batch fetch
-    print(f"⏱️  Fetching time entries for {len(tasks)} tasks...")
-    time_map = fetch_all_time_entries_batch(task_ids)
-    print(f"💬 Fetching comments for {len(tasks)} tasks...")
+    # Batch fetch time entries and comments
+    if full_sync:
+        print(f"🔄 Full sync: fetching time entries for {len(task_ids)} tasks")
+        time_map = fetch_all_time_entries_batch(task_ids)
+    else:
+        print(f"⚡ Incremental sync: skipping time entries for {len(task_ids)} tasks")
+        time_map = {tid: [] for tid in task_ids}  # Empty for incremental
+
     comment_map = fetch_assigned_comments_batch(task_ids)
 
     # Step 1: Create a map of task IDs to names from the current batch.
@@ -195,18 +184,14 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             emp_map[str(a["id"])] for a in assignees if str(a.get("id")) in emp_map
         ]
 
-        custom_item_id = t.get("custom_item_id")
-        type_val = None
-
+        # Determine task type
         t_type = (t.get("type") or "").strip().lower()
-        if t_type == "meeting note":
+        if t.get("is_milestone"):
+            type_val = "milestone"
+        elif t_type == "meeting note":
             type_val = "meeting note"
         elif t_type in ["form", "form response"]:
             type_val = "form response"
-        elif t.get("is_milestone"):
-            type_val = "milestone"
-        elif custom_item_id in TYPE_MAP:
-            type_val = TYPE_MAP[custom_item_id]
         else:
             type_val = t.get("type") or "task"
 
@@ -269,15 +254,13 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             }
         )
 
-    print(f"💾 Upserting {len(payloads)} tasks...")
+    # Upsert tasks
     bulk_upsert_tasks(payloads)
-    print("✅ Sync complete")
 
     # Incremental: refresh comments for other tasks
     if not full_sync:
         remaining = [tid for tid in get_all_task_ids() if tid not in task_ids]
         if remaining:
-            print(f"💬 Refreshing comments for {len(remaining)} other tasks...")
             bulk_update_comments(fetch_assigned_comments_batch(remaining), now)
 
     return len(payloads)
