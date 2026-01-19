@@ -90,8 +90,8 @@ def mark_tasks_deleted(ids, updated_at):
         return
     with db() as cur:
         cur.execute(
-            "UPDATE tasks SET is_deleted=TRUE, updated_at=%s WHERE clickup_task_id=ANY(%s)",
-            (updated_at, list(ids)),
+            "UPDATE tasks SET is_deleted=TRUE WHERE clickup_task_id=ANY(%s)",
+            (list(ids),),
         )
 
 
@@ -232,8 +232,8 @@ def get_tasks_with_comments():
 def update_task_time(task_id, tracked_minutes, start_time, end_time, updated_at):
     with db() as cur:
         cur.execute(
-            "UPDATE tasks SET tracked_minutes=%s, start_time=%s, end_time=%s, updated_at=%s WHERE clickup_task_id=%s",
-            (tracked_minutes, start_time, end_time, updated_at, task_id),
+            "UPDATE tasks SET tracked_minutes=%s, start_time=%s, end_time=%s WHERE clickup_task_id=%s",
+            (tracked_minutes, start_time, end_time, task_id),
         )
 
 
@@ -254,8 +254,8 @@ def bulk_update_comments(comment_map, updated_at):
     with db() as cur:
         for task_id, comment in comment_map.items():
             cur.execute(
-                "UPDATE tasks SET assigned_comment=%s, updated_at=%s WHERE clickup_task_id=%s",
-                (comment, updated_at, task_id),
+                "UPDATE tasks SET assigned_comment=%s WHERE clickup_task_id=%s",
+                (comment, task_id),
             )
     return len(comment_map)
 
@@ -266,5 +266,5 @@ def bulk_update_comments(comment_map, updated_at):
 def get_daily_sync_tasks():
     """Get all tasks from daily_syncs table."""
     with db() as cur:
-        cur.execute("SELECT * FROM daily_syncs ORDER BY updated_at DESC")
+        cur.execute("SELECT * FROM daily_syncs ORDER BY last_status_change DESC")
         return [dict(r) for r in cur.fetchall()]

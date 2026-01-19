@@ -46,13 +46,14 @@ def sync_daily_updated_tasks():
         "summary",
         "sprint_points",
         "dependencies",
+        "last_status_change",
     ]
 
-    # Get tasks updated today with only the specified columns
+    # Get tasks updated today with only the specified columns, using last_status_change as-is from tasks table
     select_cols = ", ".join(cols)
     with db() as cur:
         cur.execute(
-            f"SELECT {select_cols} FROM tasks WHERE date_updated = %s AND is_deleted = FALSE",
+            f"SELECT {select_cols} FROM tasks WHERE last_status_change::date = %s AND is_deleted = FALSE",
             (today,),
         )
         tasks = [dict(row) for row in cur.fetchall()]
@@ -72,19 +73,12 @@ def sync_daily_updated_tasks():
     placeholders = ", ".join(get_placeholder(c) for c in cols)
     sql = f"INSERT INTO daily_syncs ({', '.join(cols)}) VALUES ({placeholders})"
 
-    # Prepare payloads
+    # Prepare payloads for only tasks updated today (already filtered)
     payloads = []
     for task in tasks:
         payload = {col: task.get(col) for col in cols}
-        # Convert date_created and date_closed to IST full timestamp if present
-        for ts_col in ["date_created", "date_closed"]:
-            if payload.get(ts_col):
-                try:
-                    # Parse as datetime and convert to IST
-                    dt = datetime.fromisoformat(str(payload[ts_col]))
-                    payload[ts_col] = dt.astimezone(IST).isoformat()
-                except Exception:
-                    pass
+        # Use last_status_change as-is from tasks table (already in IST/text format if stored that way)
+        # No conversion needed; just insert the value directly
         payloads.append(payload)
 
     # Clear existing data and insert

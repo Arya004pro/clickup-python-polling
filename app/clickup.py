@@ -74,14 +74,24 @@ def fetch_tasks_from_list(list_id, updated_after_ms=None, include_archived=True)
                 "include_closed": "true",
                 **extra,
             }
-            data = _get(f"{BASE_URL}/list/{list_id}/task", params).get("tasks", [])
+            try:
+                data = _get(f"{BASE_URL}/list/{list_id}/task", params).get("tasks", [])
+            except Exception as e:
+                print(
+                    f"[ERROR] Failed to fetch tasks for list {list_id} page {page}: {e}"
+                )
+                break
             if not data:
+                if page == 0:
+                    # print(f"[INFO] List {list_id} returned 0 tasks on first page.")
+                    pass
                 break
             for t in data:
                 if t["id"] not in seen:
                     seen.add(t["id"])
                     tasks.append(t)
             page += 1
+        # print(f"[DEBUG] List {list_id} fetched {len(tasks)} tasks in total.")
 
     base = {"archived": "false"}
     if updated_after_ms:
@@ -106,11 +116,13 @@ def fetch_all_tasks_from_team():
     for space in fetch_all_spaces():
         print(f"  → Fetching from space: {space['name']}")
         lists = fetch_all_lists_in_space(space["id"])
-        with ThreadPoolExecutor(max_workers=12) as ex:  # Increased for faster full sync
+        print(f"[DEBUG] Space {space['name']} ({space['id']}) has {len(lists)} lists.")
+        with ThreadPoolExecutor(max_workers=64) as ex:  # Maximize parallelism
             for f in as_completed(
                 [ex.submit(fetch_tasks_from_list, lst["id"]) for lst in lists]
             ):
                 all_tasks.extend(f.result())
+    print(f"[SUMMARY] Total tasks fetched across all spaces: {len(all_tasks)}")
     return all_tasks
 
 
@@ -119,10 +131,10 @@ def fetch_all_tasks_updated_since_team(updated_after_ms):
     for space in fetch_all_spaces():
         print(f"  → Fetching from space: {space['name']}")
         lists = fetch_all_lists_in_space(space["id"])
-        with ThreadPoolExecutor(max_workers=3) as ex:
+        with ThreadPoolExecutor(max_workers=32) as ex:  # Maximize parallelism
             for f in as_completed(
                 [
-                    ex.submit(fetch_tasks_from_list, lst["id"], updated_after_ms)
+                    ex.submit(fetch_tasks_from_list, lst["  id"], updated_after_ms)
                     for lst in lists
                 ]
             ):
@@ -141,8 +153,8 @@ def fetch_all_time_entries_batch(task_ids):
     import time
 
     result = {tid: [] for tid in task_ids}
-    BATCH_SIZE = 200  # Further increased for maximum speed
-    MAX_RETRIES = 3
+    BATCH_SIZE = 750  # Maximize batch size
+    MAX_RETRIES = 5
 
     def fetch(tid):
         retries = 0
@@ -164,13 +176,10 @@ def fetch_all_time_entries_batch(task_ids):
 
     for i in range(0, len(task_ids), BATCH_SIZE):
         batch = task_ids[i : i + BATCH_SIZE]
-        with ThreadPoolExecutor(
-            max_workers=20
-        ) as ex:  # Increased to 20 for more parallelism
+        with ThreadPoolExecutor(max_workers=64) as ex:  # Maximize parallelism
             for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
                 tid, entries = f.result()
                 result[tid] = entries
-        # No delay between batches for maximum speed
     return result
 
 
@@ -181,9 +190,8 @@ def fetch_assigned_comments_batch(task_ids):
     import time
 
     result = {}
-    BATCH_SIZE = 100  # Increased for faster processing
-    DELAY_BETWEEN_BATCHES = 0.2  # Reduced delay
-    MAX_RETRIES = 3
+    BATCH_SIZE = 1000  # Maximize batch size
+    MAX_RETRIES = 5
 
     def fetch(tid):
         retries = 0
@@ -210,12 +218,10 @@ def fetch_assigned_comments_batch(task_ids):
 
     for i in range(0, len(task_ids), BATCH_SIZE):
         batch = task_ids[i : i + BATCH_SIZE]
-        with ThreadPoolExecutor(max_workers=12) as ex:  # Increased workers
+        with ThreadPoolExecutor(max_workers=64) as ex:  # Maximize parallelism
             for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
                 tid, comment = f.result()
                 result[tid] = comment
-        if i + BATCH_SIZE < len(task_ids):
-            time.sleep(DELAY_BETWEEN_BATCHES)
     return result
 
 

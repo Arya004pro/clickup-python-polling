@@ -215,9 +215,21 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
 
         dep_strings = sorted(list(set(dependency_strings_map.get(tid, []))))
 
-        # last_status_change = None
-
-        last_status_change = _ms_to_ist_iso(t.get("date_updated"))
+        # Extract last_status_change from status_history if available, else fallback to date_updated
+        last_status_change = None
+        status_history = t.get("status_history") or t.get("history")
+        if status_history and isinstance(status_history, list):
+            # Find the most recent status change event
+            last_event = max(status_history, key=lambda e: e.get("date", 0))
+            last_status_change = _ms_to_ist_iso(last_event.get("date"))
+        if not last_status_change:
+            last_status_change = _ms_to_ist_iso(t.get("date_updated"))
+        # Always ensure date_created is ISO string with timezone
+        date_created = t.get("date_created")
+        if date_created:
+            date_created = _to_iso(_ms_to_dt(date_created).astimezone(IST))
+        else:
+            date_created = None
         recurring_field = t.get("recurring")
         is_recurring = isinstance(recurring_field, list) and len(recurring_field) > 0
 
@@ -250,11 +262,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 or None,
                 **loc,
                 # Store all timestamps in IST with full time
-                "date_created": _to_iso(
-                    _ms_to_dt(t.get("date_created")).astimezone(IST)
-                )
-                if t.get("date_created")
-                else None,
+                "date_created": date_created,
                 "date_updated": _to_iso(
                     _ms_to_dt(t.get("date_updated")).astimezone(IST)
                 )
@@ -277,7 +285,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 "archived": t.get("archived", False),
                 "is_deleted": False,
                 "is_recurring": is_recurring,
-                "updated_at": now,
+                "updated_at": _ms_to_ist_iso(t.get("date_updated")),
                 "last_status_change": last_status_change,
                 "dependencies": json.dumps(dep_strings) if dep_strings else None,
             }
