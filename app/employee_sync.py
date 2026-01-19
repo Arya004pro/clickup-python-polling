@@ -9,19 +9,8 @@ def sync_employees_to_supabase() -> int:
     """
     import time
 
-<<<<<<< HEAD
     max_retries = 3
     retry_delay = 2  # seconds
-=======
-    for m in members:
-        name = m["name"] if m["name"] else "Unknown"
-        payload = {
-            "clickup_user_id": m["clickup_user_id"],
-            "name": name,
-            "email": m.get("email"),
-            "role": m.get("role"),
-        }
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
 
     for attempt in range(max_retries):
         try:

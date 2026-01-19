@@ -125,7 +125,6 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         if deleted:
             mark_tasks_deleted(list(deleted), now)
 
-<<<<<<< HEAD
     # Batch fetch time entries and comments
     if full_sync:
         print(f"🔄 Full sync: fetching time entries for {len(task_ids)} tasks")
@@ -134,7 +133,6 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         print(f"⚡ Incremental sync: skipping time entries for {len(task_ids)} tasks")
         time_map = {tid: [] for tid in task_ids}  # Empty for incremental
 
-=======
     t1 = time.perf_counter()
     logger.info(f"[PROFILE] Pre-fetch setup: {t1 - t0:.2f}s")
 
@@ -145,7 +143,6 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
     logger.info(f"[PROFILE] Time entry fetch: {t3 - t2:.2f}s for {len(task_ids)} tasks")
 
     t4 = time.perf_counter()
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
     comment_map = fetch_assigned_comments_batch(task_ids)
     t5 = time.perf_counter()
     logger.info(f"[PROFILE] Comment fetch: {t5 - t4:.2f}s for {len(task_ids)} tasks")
@@ -286,10 +283,8 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             }
         )
 
-<<<<<<< HEAD
     # Upsert tasks
     bulk_upsert_tasks(payloads)
-=======
     # print(f"💾 Upserting {len(payloads)} tasks...")
     t7 = time.perf_counter()
     logger.info(f"[PROFILE] Payload build: {t7 - t6:.2f}s for {len(payloads)} tasks")
@@ -299,20 +294,11 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
     logger.info(
         f"[PROFILE] Bulk upsert: {upsert_end - upsert_start:.2f}s for {len(payloads)} tasks"
     )
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
 
     # Incremental: refresh comments for other tasks
     if not full_sync:
         remaining = [tid for tid in get_all_task_ids() if tid not in task_ids]
         if remaining:
-<<<<<<< HEAD
-=======
-            comment_refresh_start = time.perf_counter()
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
             bulk_update_comments(fetch_assigned_comments_batch(remaining), now)
-            comment_refresh_end = time.perf_counter()
-            logger.info(
-                f"[PROFILE] Incremental comment refresh: {comment_refresh_end - comment_refresh_start:.2f}s for {len(remaining)} tasks"
-            )
 
     return len(payloads)

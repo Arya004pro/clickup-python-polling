@@ -59,13 +59,7 @@ def scheduled_sync():
         # -------------------------------------------------
         # 2️⃣ Task sync (ALL SPACES)
         # -------------------------------------------------
-<<<<<<< HEAD
         do_full_sync = True  # Always do full sync for simplicity and reliability
-=======
-        do_full_sync = (
-            _last_sync_ms is None or _run_count % 12 == 0 or not _initial_sync_done
-        )
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
 
         # Always clear cache to pick up new spaces/lists/tasks
         clear_space_cache()

@@ -46,7 +46,6 @@ def sync_tasks():
         return {"status": "skipped", "reason": "Sync already in progress"}
     scheduler._sync_in_progress = True
     try:
-<<<<<<< HEAD
         tasks = fetch_all_tasks_from_team()
         synced_count = sync_tasks_to_supabase(tasks, full_sync=True)
         result = {
@@ -59,14 +58,6 @@ def sync_tasks():
             scheduler._last_sync_ms = max(
                 int(task["date_updated"]) for task in tasks if task.get("date_updated")
             )
-=======
-        clear_space_cache()
-        tasks = fetch_all_tasks_from_team()
-        result = {
-            "status": "success",
-            "tasks_synced": sync_tasks_to_supabase(tasks, full_sync=True),
-        }
->>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
     except Exception as e:
         logger.error("❌ Manual sync failed", exc_info=True)
         result = {"status": "error", "reason": str(e)}
