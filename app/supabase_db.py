@@ -13,16 +13,36 @@ from app.config import DATABASE_URL
 # -----------------------------------------------------------------------------
 @contextmanager
 def db():
-    """Database connection context manager with auto-commit."""
-    conn = psycopg2.connect(DATABASE_URL)
-    try:
-        yield conn.cursor(cursor_factory=RealDictCursor)
-        conn.commit()
-    except:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    """Database connection context manager with auto-commit and retry logic."""
+    import time
+
+    max_retries = 3
+    retry_delay = 1  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            try:
+                yield conn.cursor(cursor_factory=RealDictCursor)
+                conn.commit()
+                return  # Success, exit the function
+            except:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        except psycopg2.OperationalError as e:
+            if attempt < max_retries - 1:  # Not the last attempt
+                print(
+                    f"⚠️ Database connection failed (attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                time.sleep(retry_delay * (2**attempt))  # Exponential backoff
+                continue
+            else:
+                print(
+                    f"❌ Database connection failed after {max_retries} attempts: {e}"
+                )
+                raise
 
 
 # -----------------------------------------------------------------------------
@@ -181,7 +201,6 @@ def get_task_names_by_ids(task_ids):
         return {r["clickup_task_id"]: r["title"] for r in cur.fetchall()}
 
 
-
 def get_tasks_with_time():
     """Get tasks that have tracked time."""
     with db() as cur:
@@ -239,3 +258,13 @@ def bulk_update_comments(comment_map, updated_at):
                 (comment, updated_at, task_id),
             )
     return len(comment_map)
+
+
+# -----------------------------------------------------------------------------
+# Daily Sync
+# -----------------------------------------------------------------------------
+def get_daily_sync_tasks():
+    """Get all tasks from daily_syncs table."""
+    with db() as cur:
+        cur.execute("SELECT * FROM daily_syncs ORDER BY updated_at DESC")
+        return [dict(r) for r in cur.fetchall()]

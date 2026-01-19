@@ -142,7 +142,6 @@ def fetch_all_time_entries_batch(task_ids):
 
     result = {tid: [] for tid in task_ids}
     BATCH_SIZE = 200  # Further increased for maximum speed
-    DELAY_BETWEEN_BATCHES = 0.0  # Removed delay for speed
     MAX_RETRIES = 3
 
     def fetch(tid):

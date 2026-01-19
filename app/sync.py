@@ -111,7 +111,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         return 0
 
     emp_map, loc_map = get_employee_id_map(), get_location_map()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(IST).isoformat()
     task_ids = [t["id"] for t in tasks]
 
     # Deleted detection (full sync)
@@ -231,11 +231,22 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
                 )
                 or None,
                 **loc,
-                "date_created": _to_iso(_ms_to_dt(t.get("date_created"))),
-                "date_updated": _to_iso(_ms_to_dt(t.get("date_updated"))),
-                "date_done": _to_iso(_ms_to_dt(t.get("date_done"))),
-                "date_closed": _to_iso(_ms_to_dt(t.get("date_closed")))
-                if status.get("type") == "closed"
+                # Store all timestamps in IST with full time
+                "date_created": _to_iso(
+                    _ms_to_dt(t.get("date_created")).astimezone(IST)
+                )
+                if t.get("date_created")
+                else None,
+                "date_updated": _to_iso(
+                    _ms_to_dt(t.get("date_updated")).astimezone(IST)
+                )
+                if t.get("date_updated")
+                else None,
+                "date_done": _to_iso(_ms_to_dt(t.get("date_done")).astimezone(IST))
+                if t.get("date_done")
+                else None,
+                "date_closed": _to_iso(_ms_to_dt(t.get("date_closed")).astimezone(IST))
+                if status.get("type") == "closed" and t.get("date_closed")
                 else None,
                 "start_date": _ms_to_date(t.get("start_date")),
                 "due_date": _ms_to_date(t.get("due_date")),

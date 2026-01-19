@@ -16,7 +16,9 @@ from app.supabase_db import (
     get_task_by_id,
     get_tasks_with_time,
     get_tasks_with_comments,
+    get_daily_sync_tasks,
 )
+from app.daily_sync import sync_daily_updated_tasks
 
 
 @asynccontextmanager
@@ -70,6 +72,16 @@ def sync_employees():
     return {"employees_synced": sync_employees_to_supabase()}
 
 
+@app.get("/sync/daily", tags=["Sync"])
+def sync_daily():
+    """Sync tasks updated today to daily_syncs table."""
+    try:
+        tasks_synced = sync_daily_updated_tasks()
+        return {"status": "success", "tasks_synced": tasks_synced}
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
+
+
 # -------------------------------------------------
 # Employees
 # -------------------------------------------------
@@ -116,6 +128,16 @@ def get_task(task_id: str):
     """Get a single task by ID."""
     task = get_task_by_id(task_id)
     return task if task else {"error": "Task not found"}
+
+
+# -------------------------------------------------
+# Daily Sync
+# -------------------------------------------------
+@app.get("/daily-sync", tags=["Daily Sync"])
+def list_daily_sync_tasks():
+    """Get all tasks from daily sync table."""
+    tasks = get_daily_sync_tasks()
+    return {"count": len(tasks), "tasks": tasks}
 
 
 @app.get("/dependencies/{task_id}", tags=["Tasks"])

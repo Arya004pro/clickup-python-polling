@@ -134,7 +134,7 @@ def start_scheduler():
     _scheduler.add_job(
         scheduled_sync,
         trigger="interval",
-        minutes=10,  # Increased to 10 minutes for complete syncs with time entries
+        minutes=7,  # Increased to 10 minutes for complete syncs with time entries
         id="clickup_sync_job",
         replace_existing=True,
         max_instances=1,  #  no overlap
