@@ -141,7 +141,12 @@ def fetch_all_time_entries_batch(task_ids):
     import time
 
     result = {tid: [] for tid in task_ids}
+<<<<<<< HEAD
     BATCH_SIZE = 200  # Further increased for maximum speed
+=======
+    BATCH_SIZE = 500
+    DELAY_BETWEEN_BATCHES = 0.5  # seconds (keep low for speed)
+>>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
     MAX_RETRIES = 3
 
     def fetch(tid):
@@ -164,6 +169,7 @@ def fetch_all_time_entries_batch(task_ids):
 
     for i in range(0, len(task_ids), BATCH_SIZE):
         batch = task_ids[i : i + BATCH_SIZE]
+<<<<<<< HEAD
         with ThreadPoolExecutor(
             max_workers=20
         ) as ex:  # Increased to 20 for more parallelism
@@ -171,6 +177,14 @@ def fetch_all_time_entries_batch(task_ids):
                 tid, entries = f.result()
                 result[tid] = entries
         # No delay between batches for maximum speed
+=======
+        with ThreadPoolExecutor(max_workers=50) as ex:
+            for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
+                tid, entries = f.result()
+                result[tid] = entries
+        if i + BATCH_SIZE < len(task_ids):
+            time.sleep(DELAY_BETWEEN_BATCHES)
+>>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
     return result
 
 
@@ -181,8 +195,13 @@ def fetch_assigned_comments_batch(task_ids):
     import time
 
     result = {}
+<<<<<<< HEAD
     BATCH_SIZE = 100  # Increased for faster processing
     DELAY_BETWEEN_BATCHES = 0.2  # Reduced delay
+=======
+    BATCH_SIZE = 500
+    DELAY_BETWEEN_BATCHES = 0.5  # seconds (keep low for speed)
+>>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
     MAX_RETRIES = 3
 
     def fetch(tid):
@@ -210,7 +229,11 @@ def fetch_assigned_comments_batch(task_ids):
 
     for i in range(0, len(task_ids), BATCH_SIZE):
         batch = task_ids[i : i + BATCH_SIZE]
+<<<<<<< HEAD
         with ThreadPoolExecutor(max_workers=12) as ex:  # Increased workers
+=======
+        with ThreadPoolExecutor(max_workers=50) as ex:
+>>>>>>> 994eaba6753de9c5b9aa7c7c06ad18dcd3cf0319
             for f in as_completed([ex.submit(fetch, tid) for tid in batch]):
                 tid, comment = f.result()
                 result[tid] = comment
