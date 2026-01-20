@@ -47,26 +47,19 @@ def sync_daily_updated_tasks():
         "sprint_points",
         "dependencies",
         "last_status_change",
+        "clickup_user_id",
     ]
-
-    # Get tasks updated today with only the specified columns, using last_status_change as-is from tasks table
-    select_cols = ", ".join(cols)
+    select_cols = ", ".join(cols[:-1]) + ", employees.clickup_user_id"
     with db() as cur:
         cur.execute(
-            f"SELECT {select_cols} FROM tasks WHERE last_status_change::date = %s AND is_deleted = FALSE",
+            f"SELECT {select_cols} FROM tasks LEFT JOIN employees ON tasks.employee_id = employees.id WHERE last_status_change::date = %s AND is_deleted = FALSE",
             (today,),
         )
         tasks = [dict(row) for row in cur.fetchall()]
 
-    print(f"📊 Found {len(tasks)} tasks updated today")
-
-    if not tasks:
-        print("ℹ️  No tasks were updated today")
-        return 0
-
     # Build SQL for insert
     def get_placeholder(c):
-        if c in ("start_times", "end_times"):
+        if c in ("start_times", "end_times", "assignee_name"):
             return f"%({c})s::text[]"
         return f"%({c})s"
 
@@ -77,8 +70,20 @@ def sync_daily_updated_tasks():
     payloads = []
     for task in tasks:
         payload = {col: task.get(col) for col in cols}
-        # Use last_status_change as-is from tasks table (already in IST/text format if stored that way)
-        # No conversion needed; just insert the value directly
+        # Always store assignee_name as a list (text[])
+        assignees = payload.get("assignee_name")
+        if assignees is None:
+            payload["assignee_name"] = []
+        elif isinstance(assignees, str):
+            payload["assignee_name"] = [
+                a.strip() for a in assignees.split(",") if a.strip()
+            ]
+        elif isinstance(assignees, list):
+            payload["assignee_name"] = [
+                str(a).strip() for a in assignees if str(a).strip()
+            ]
+        else:
+            payload["assignee_name"] = [str(assignees)]
         payloads.append(payload)
 
     # Clear existing data and insert
