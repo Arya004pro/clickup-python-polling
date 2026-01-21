@@ -56,6 +56,26 @@ def sync_daily_updated_tasks():
             (today,),
         )
         tasks = [dict(row) for row in cur.fetchall()]
+    # Convert assignee_name in tasks to PostgreSQL array for robust filtering
+    for t in tasks:
+        assignees = t.get("assignee_name")
+        # Always output a list (or None) for assignee_name, never a string
+        if not assignees or assignees == "{}":
+            t["assignee_name"] = None
+        elif isinstance(assignees, list):
+            names = [str(a).strip() for a in assignees if str(a).strip()]
+            t["assignee_name"] = names if names else None
+        elif isinstance(assignees, str):
+            s = assignees.strip()
+            if s.startswith("{") and s.endswith("}"):
+                s = s[1:-1]
+            s = s.replace('"', "")
+            names = [n.strip() for n in s.split(",") if n.strip()]
+            t["assignee_name"] = names if names else None
+        else:
+            t["assignee_name"] = (
+                [str(assignees).strip()] if str(assignees).strip() else None
+            )
 
     # Build SQL for insert
     def get_placeholder(c):
@@ -70,20 +90,7 @@ def sync_daily_updated_tasks():
     payloads = []
     for task in tasks:
         payload = {col: task.get(col) for col in cols}
-        # Always store assignee_name as a list (text[])
-        assignees = payload.get("assignee_name")
-        if assignees is None:
-            payload["assignee_name"] = []
-        elif isinstance(assignees, str):
-            payload["assignee_name"] = [
-                a.strip() for a in assignees.split(",") if a.strip()
-            ]
-        elif isinstance(assignees, list):
-            payload["assignee_name"] = [
-                str(a).strip() for a in assignees if str(a).strip()
-            ]
-        else:
-            payload["assignee_name"] = [str(assignees)]
+        # Already converted above, just copy
         payloads.append(payload)
 
     # Clear existing data and insert

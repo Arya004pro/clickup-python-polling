@@ -155,7 +155,7 @@ def fetch_all_time_entries_batch(task_ids):
     result = {tid: [] for tid in task_ids}
     BATCH_SIZE = 750  # Maximize batch size
     MAX_RETRIES = 5
-
+ 
     def fetch(tid):
         retries = 0
         while retries < MAX_RETRIES:
