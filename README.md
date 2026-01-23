@@ -193,6 +193,46 @@ app/
 - Arrays sorted by **latest first**
 - Each index = one work session
 
+---
+
+## MCP Server (Model Context Protocol)
+
+This project also provides an **MCP Server** for programmatic, tool-based access to ClickUp workspace and space management, using the [FastMCP](https://github.com/ariya002/fastmcp) protocol.
+
+### Running the MCP Server
+
+```bash
+python -m app.mcp.mcp_server --reload
+```
+
+The MCP server exposes tools for listing workspaces, spaces, and fetching space details. These tools can be called via HTTP POST requests (JSON-RPC) or from compatible clients.
+
+#### Example: Call a Tool via PowerShell
+
+```powershell
+$headers = @{ "Content-Type" = "application/json"; "Accept" = "application/json, text/event-stream" }
+$body = '{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "get_workspaces",
+    "arguments": {}
+  },
+  "id": 1
+}'
+Invoke-RestMethod -Uri http://localhost:8001/mcp -Method Post -Headers $headers -Body $body
+```
+
+#### Available MCP Tools
+
+- `get_workspaces`: List all accessible ClickUp workspaces (teams)
+- `get_spaces`: List all spaces in a workspace (provide `workspace_id` or leave blank for default)
+- `get_space`: Get details for a specific space by `space_id`
+
+See [app/mcp/workspace_structure.py](app/mcp/workspace_structure.py) for tool definitions and arguments.
+
+---
+
 ## License
 
 MIT
