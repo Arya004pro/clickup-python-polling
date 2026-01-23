@@ -4,8 +4,7 @@ Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supa
 
 ## Features
 
-- **Auto Sync** - Background scheduler syncs every 45 seconds
-- **Full & Incremental** - Full sync every 12th run, incremental otherwise
+- **Full Sync** - Full sync every 7 min
 - **Time Tracking** - Session-wise `start_times[]` and `end_times[]` arrays
 - **Assigned Comments** - Tracks unresolved comments assigned to users
 - **Employee Mapping** - Links ClickUp users to database employees
@@ -19,11 +18,49 @@ Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supa
 - **APScheduler** - Background sync jobs
 - **Supabase** - PostgreSQL database (Transaction Pooler)
 
+# ClickUp → PostgreSQL Sync
+
+Real-time and daily snapshot sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase).
+
+## Features
+
+- **Auto Sync:** Background scheduler syncs all tasks, time, and comments every 45 seconds.
+- **Full Sync:** All tasks are fully synced on each run.
+- **Time Tracking:** Session-wise `start_times[]` and `end_times[]` arrays.
+- **Assigned Comments:** Tracks unresolved comments assigned to users.
+- **Employee Mapping:** Links ClickUp users to database employees.
+- **REST API:** FastAPI endpoints for querying synced data.
+- **Daily Sync:** Snapshots all tasks updated today into `daily_syncs` for reporting/analytics.
+
+## Tech Stack
+
+- **Python 3.11+**
+- **FastAPI** – REST API
+- **psycopg2** – Direct PostgreSQL connection
+- **APScheduler** – Background sync jobs
+- **Supabase** – PostgreSQL database (Transaction Pooler)
+
+## Project Structure
+
+```
+app/
+├── main.py          # FastAPI app & endpoints
+├── clickup.py       # ClickUp API client
+├── sync.py          # Task sync logic (main tasks table)
+├── daily_sync.py    # Daily snapshot sync for reporting (daily_syncs table)
+├── supabase_db.py   # PostgreSQL queries
+├── scheduler.py     # Background job scheduler
+├── time_tracking.py # Time entry aggregation
+├── employee_sync.py # Employee sync
+├── config.py        # Environment config
+└── logging_config.py
+```
+
 ## Quick Start
 
 ```bash
 # Clone & setup
-git clone https://github.com/Arya004pro/clickup-python-polling.git
+
 cd clickup-python-polling
 python -m venv myenv
 myenv\Scripts\activate  # Windows
@@ -34,9 +71,37 @@ CLICKUP_API_TOKEN=pk_xxx
 CLICKUP_TEAM_ID=xxx
 DATABASE_URL=postgresql://postgres.xxx:password@aws-0-region.pooler.supabase.com:6543/postgres
 
-# Run
+# Run API server
 uvicorn app.main:app --reload
 ```
+
+## Daily Sync
+
+The daily sync creates a snapshot of all tasks updated today and stores them in the `daily_syncs` table for reporting and analytics.
+
+- **Manual run:**
+  ```bash
+  python -c "from app.daily_sync import sync_daily_updated_tasks; sync_daily_updated_tasks()"
+  ```
+- **What it does:**
+  - Fetches all tasks updated today.
+  - Joins with employees for user mapping.
+  - Cleans and normalizes assignee and tag fields.
+  - Inserts a fresh snapshot into `daily_syncs` (old data cleared each run).
+
+### `daily_syncs` Table Schema (main columns)
+
+| Column          | Type    | Description                    |
+| --------------- | ------- | ------------------------------ |
+| clickup_task_id | TEXT    | ClickUp task ID                |
+| title           | TEXT    | Task name                      |
+| status          | TEXT    | Task status                    |
+| assignee_name   | TEXT[]  | Array of assignee names        |
+| assigned_by     | TEXT    | Who assigned the task          |
+| tracked_minutes | INTEGER | Total tracked time             |
+| start_times     | TEXT[]  | Work session start times (ISO) |
+| end_times       | TEXT[]  | Work session end times (ISO)   |
+| ...             | ...     | (see code for full schema)     |
 
 ## API Endpoints
 
@@ -52,46 +117,44 @@ uvicorn app.main:app --reload
 | `GET /sync/tasks`                         | Trigger manual full sync     |
 | `GET /sync/employees`                     | Sync employees from ClickUp  |
 
-...
+## How It Works
 
-## Dependency Types
+1. **Scheduler** runs every 45 seconds.
+2. **Employees** sync first (ClickUp → DB).
+3. **Tasks** fetch from all spaces/lists.
+4. **Time entries** & **comments** batch-fetched concurrently.
+5. **Bulk upsert** to PostgreSQL with `ON CONFLICT`.
+6. **Daily sync** can be run anytime for a fresh daily snapshot.
 
-The `dependencies` field for a task is a JSON array of strings. The following dependency types are supported:
+## Time Tracking Format
 
-| Type ID | Relationship      | Example                               |
-| ------- | ----------------- | ------------------------------------- |
-| 1       | Depends On        | `blocking 'Task B'` / `waiting on 'Task A'` |
-| 2       | Related Task      | `related to 'Task C'`                 |
-| 3       | Linked Document   | `linked to 'Document D'`              |
-| 4       | Custom            | `custom 'My custom relationship'`     |
+```json
+{
+  "start_times": ["2026-01-13T09:30:00+05:30", "2026-01-12T12:00:00+05:30"],
+  "end_times": ["2026-01-13T11:00:00+05:30", "2026-01-12T14:00:00+05:30"],
+  "tracked_minutes": 210
+}
+```
 
-## Database Schema
+- Arrays sorted by **latest first**
+- Each index = one work session
 
-### `employees`
+## License
 
-| Column          | Type      |
-| --------------- | --------- |
-| id              | UUID (PK) |
-| clickup_user_id | TEXT      |
-| name            | TEXT      |
-| email           | TEXT      |
-| role            | TEXT      |
-
-### `tasks`
-
-| Column           | Type          |
+MIT
+| Column | Type |
 | ---------------- | ------------- |
-| id               | UUID (PK)     |
-| clickup_task_id  | TEXT (unique) |
-| title            | TEXT          |
-| status           | TEXT          |
-| assignee_name    | TEXT          |
-| employee_ids     | UUID[]        |
-| start_times      | TEXT[]        |
-| end_times        | TEXT[]        |
-| tracked_minutes  | INTEGER       |
-| assigned_comment | TEXT          |
-| ...              | (30+ fields)  |
+| id | UUID (PK) |
+| clickup_task_id | TEXT (unique) |
+| title | TEXT |
+| status | TEXT |
+| assignee_name | TEXT |
+| employee_ids | UUID[] |
+| start_times | TEXT[] |
+| end_times | TEXT[] |
+| tracked_minutes | INTEGER |
+| assigned_comment | TEXT |
+| ... | (30+ fields) |
 
 ## Project Structure
 
