@@ -193,8 +193,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             t.get("status", {}),
             loc_map.get(t.get("list", {}).get("id"), {}),
         )
-        # Debug: print tags returned by ClickUp API for this task
-        print("Task ID:", tid, "Tags from API:", t.get("tags"))
+        
         assignees = t.get("assignees") or []
         agg = aggregate_time_entries(time_map.get(tid, []))
 
