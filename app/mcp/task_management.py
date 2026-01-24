@@ -31,7 +31,7 @@ def register_task_tools(mcp: FastMCP):
 
             if statuses:
                 for s in statuses:
-                    params.append(("statuses[]", s))  # key is "statuses[]"
+                    params.append(("statuses[]", s))
 
             if assignees:
                 for a in assignees:
@@ -40,26 +40,22 @@ def register_task_tools(mcp: FastMCP):
             if page is not None:
                 params.append(("page", str(page)))
 
-            print(f"[DEBUG] Fetching tasks for list {list_id} with params: {params}")
-
             all_tasks = []
             current_page = page if page is not None else 0
 
             while True:
-                # Add current page to params
                 params.append(("page", str(current_page)))
                 response = requests.get(
                     f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
                 )
-                # Remove page for next iteration
                 params.pop()
 
                 if response.status_code != 200:
-                    error_msg = (
-                        f"ClickUp API error {response.status_code}: {response.text}"
-                    )
-                    print(f"[ERROR] {error_msg}")
-                    return [{"error": error_msg}]
+                    return [
+                        {
+                            "error": f"ClickUp API error {response.status_code}: {response.text}"
+                        }
+                    ]
 
                 data = response.json()
                 page_tasks = data.get("tasks", [])
@@ -72,8 +68,6 @@ def register_task_tools(mcp: FastMCP):
 
                 if page is not None:
                     break
-
-            print(f"[DEBUG] Total tasks fetched: {len(all_tasks)}")
 
             # Format exactly as per specs
             formatted = []
@@ -97,5 +91,86 @@ def register_task_tools(mcp: FastMCP):
             return formatted
 
         except Exception as e:
-            print(f"[ERROR] get_tasks failed: {str(e)}")
             return [{"error": str(e)}]
+
+    @mcp.tool
+    def get_task(task_id: str) -> dict:
+        """
+        Get details of a specific task including its lists.
+
+        Parameters:
+        - task_id (string, required): The task ID to retrieve.
+
+        Returns: Complete task details including description, time tracking, custom fields.
+        """
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+
+            response = requests.get(f"{BASE_URL}/task/{task_id}", headers=headers)
+
+            if response.status_code != 200:
+                return {
+                    "error": f"ClickUp API error {response.status_code}: {response.text}"
+                }
+
+            task = response.json()
+
+            if not task or not isinstance(task, dict) or not task.get("id"):
+                return {"error": f"Task {task_id} not found"}
+
+            # Extract assignees as list of usernames
+            assignees = [
+                a.get("username") or f"User_{a.get('id')}"
+                for a in task.get("assignees", [])
+                if isinstance(a, dict)
+            ]
+
+            # Extract custom fields (list of name/value pairs)
+            custom_fields = [
+                {"name": cf.get("name"), "value": cf.get("value")}
+                for cf in task.get("custom_fields", [])
+                if isinstance(cf, dict)
+            ]
+
+            # Safely get nested values with type checking
+            def safe_get_nested(obj, *keys):
+                """Safely navigate nested dictionaries"""
+                for key in keys:
+                    if isinstance(obj, dict):
+                        obj = obj.get(key)
+                    else:
+                        return None
+                return obj
+
+            # Build result with complete details
+            result = {
+                "task_id_short": task.get("id"),
+                "task_id": safe_get_nested(task, "custom_task_ids", 0, "id")
+                or task.get("id"),
+                "name": task.get("name"),
+                "description": task.get("description"),
+                "status": safe_get_nested(task, "status", "status"),
+                "status_type": safe_get_nested(task, "status", "type"),
+                "assignee": assignees,
+                "due_date": task.get("due_date"),
+                "priority": safe_get_nested(task, "priority", "priority"),
+                "time_estimate": task.get("time_estimate"),
+                "tracked_time": task.get(
+                    "time_spent"
+                ),  # ClickUp uses 'time_spent', not 'time_tracking.tracked_time'
+                "custom_fields": custom_fields,
+                "list_id": safe_get_nested(task, "list", "id"),
+                "list_name": safe_get_nested(task, "list", "name"),
+                "folder_id": safe_get_nested(task, "folder", "id"),
+                "folder_name": safe_get_nested(task, "folder", "name"),
+                "space_id": safe_get_nested(task, "space", "id"),
+                "space_name": safe_get_nested(task, "space", "name"),
+            }
+
+            return result
+
+        except Exception as e:
+            return {"error": f"Unexpected error: {str(e)}"}
