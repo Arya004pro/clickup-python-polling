@@ -243,3 +243,76 @@ def register_task_tools(mcp: FastMCP):
         except Exception as e:
             print(f"[ERROR] create_task failed: {str(e)}")
             return {"error": str(e)}
+
+    @mcp.tool
+    def update_task(
+        task_id: str,
+        name: str = None,
+        description: str = None,
+        status: str = None,
+        priority: int = None,
+        due_date: str = None,
+        add_assignees: list[int] = None,
+        remove_assignees: list[int] = None,
+    ) -> dict:
+        """
+        Update an existing task.
+
+        Parameters:
+        - task_id (string, required): Task ID to update
+        - name (string, optional): New task name
+        - description (string, optional): New description
+        - status (string, optional): New status
+        - priority (int or None, optional): New priority (null to remove)
+        - due_date (string or None, optional): New due date (null to remove)
+        - add_assignees (list[int], optional): User IDs to add
+        - remove_assignees (list[int], optional): User IDs to remove
+
+        Returns: Updated task confirmation.
+        """
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+            payload = {}
+            if name is not None:
+                payload["name"] = name
+            if description is not None:
+                payload["description"] = description
+            if status is not None:
+                payload["status"] = status
+            if priority is not None:
+                payload["priority"] = priority
+            if due_date is not None:
+                payload["due_date"] = due_date
+            if add_assignees or remove_assignees:
+                payload["assignees"] = {}
+                if add_assignees:
+                    payload["assignees"]["add"] = add_assignees
+                if remove_assignees:
+                    payload["assignees"]["rem"] = remove_assignees
+
+            if not payload:
+                return {"error": "No fields to update"}
+
+            response = requests.put(
+                f"{BASE_URL}/task/{task_id}",
+                headers=headers,
+                json=payload,
+            )
+
+            if response.status_code not in (200, 201):
+                error_msg = f"ClickUp API error {response.status_code}: {response.text}"
+                print(f"[ERROR] {error_msg}")
+                return {"error": error_msg, "response": response.text}
+
+            data = response.json()
+            return {
+                "task_id": data.get("id", task_id),
+                "status": "success",
+                "message": f"Task '{task_id}' updated successfully",
+            }
+        except Exception as e:
+            print(f"[ERROR] update_task failed: {str(e)}")
+            return {"error": str(e)}
