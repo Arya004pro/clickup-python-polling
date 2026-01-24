@@ -174,3 +174,72 @@ def register_task_tools(mcp: FastMCP):
 
         except Exception as e:
             return {"error": f"Unexpected error: {str(e)}"}
+
+    @mcp.tool
+    def create_task(
+        list_id: str,
+        name: str,
+        description: str = None,
+        status: str = None,
+        priority: int = None,
+        assignees: list[int] = None,
+        due_date: str = None,
+        tags: list[str] = None,
+    ) -> dict:
+        """
+        Create a new task in a list.
+
+        Parameters:
+        - list_id (string, required): List to create task in
+        - name (string, required): Task name
+        - description (string, optional): Task description (markdown supported)
+        - status (string, optional): Initial status
+        - priority (int, optional): 1=urgent, 2=high, 3=normal, 4=low
+        - assignees (list[int], optional): User IDs to assign
+        - due_date (string, optional): Due date (ISO 8601 or timestamp)
+        - tags (list[str], optional): Tag names to apply
+
+        Returns: Created task confirmation with ID and URL.
+        """
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "name": name,
+            }
+            if description is not None:
+                payload["description"] = description
+            if status is not None:
+                payload["status"] = status
+            if priority is not None:
+                payload["priority"] = priority
+            if assignees is not None:
+                payload["assignees"] = assignees
+            if due_date is not None:
+                payload["due_date"] = due_date
+            if tags is not None:
+                payload["tags"] = tags
+
+            response = requests.post(
+                f"{BASE_URL}/list/{list_id}/task",
+                headers=headers,
+                json=payload,
+            )
+
+            if response.status_code not in (200, 201):
+                error_msg = f"ClickUp API error {response.status_code}: {response.text}"
+                print(f"[ERROR] {error_msg}")
+                return {"error": error_msg, "response": response.text}
+
+            data = response.json()
+            return {
+                "task_id": data.get("id"),
+                "url": data.get("url"),
+                "status": "success",
+                "message": f"Task '{name}' created in list {list_id}",
+            }
+        except Exception as e:
+            print(f"[ERROR] create_task failed: {str(e)}")
+            return {"error": str(e)}
