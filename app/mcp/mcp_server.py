@@ -3,6 +3,7 @@ from fastmcp import FastMCP
 
 # Import category modules (we'll create them one by one)
 from .workspace_structure import register_workspace_tools
+from .task_management import register_task_tools
 
 mcp = FastMCP(
     name="ClickUp Sync MCP Server",
@@ -10,8 +11,8 @@ mcp = FastMCP(
 )
 
 # Register tools from different categories
-register_workspace_tools(mcp)  # We'll define this next
-# register_task_tools(mcp)             # later
+register_workspace_tools(mcp)
+register_task_tools(mcp)
 # register_pm_analytics_tools(mcp)     # later
 # etc.
 

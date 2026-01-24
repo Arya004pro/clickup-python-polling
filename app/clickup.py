@@ -22,7 +22,9 @@ session.headers.update(
 def _get(url, params=None):
     r = session.get(url, params=params)
     if r.status_code != 200:
-        raise RuntimeError(f"ClickUp error {r.status_code}: {r.text}")
+        error_msg = f"ClickUp API error {r.status_code}: {r.text}"
+        print(f"[ERROR] {error_msg}")
+        raise RuntimeError(error_msg)
     return r.json()
 
 
@@ -155,7 +157,7 @@ def fetch_all_time_entries_batch(task_ids):
     result = {tid: [] for tid in task_ids}
     BATCH_SIZE = 750  # Maximize batch size
     MAX_RETRIES = 5
- 
+
     def fetch(tid):
         retries = 0
         while retries < MAX_RETRIES:
