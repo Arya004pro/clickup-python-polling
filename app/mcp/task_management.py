@@ -538,3 +538,189 @@ def register_task_tools(mcp: FastMCP):
 
         except Exception as e:
             return {"error": f"Search failed: {str(e)}", "results": []}
+
+    @mcp.tool
+    def get_project_tasks(
+        project: str,
+        include_closed: bool = False,
+        statuses: list[str] = None,
+    ) -> dict:
+        """
+        Get all tasks in a mapped project with optional filters.
+        Dynamically resolves project name to space/folder/list IDs.
+        """
+        try:
+            import re
+
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+
+            def normalize(s):
+                return re.sub(r"[^a-z0-9]+", "", s.lower().strip())
+
+            project_norm = normalize(project)
+
+            # Step 1: Get workspaces
+            ws_resp = requests.get(f"{BASE_URL}/team", headers=headers)
+            if ws_resp.status_code != 200:
+                return {"error": f"Failed to fetch workspaces: {ws_resp.text}"}
+
+            workspaces = ws_resp.json().get("teams", [])
+            if not workspaces:
+                return {"error": "No accessible workspaces"}
+
+            team_id = workspaces[0]["id"]
+
+            # Step 2: Get spaces
+            space_resp = requests.get(
+                f"{BASE_URL}/team/{team_id}/space", headers=headers
+            )
+            if space_resp.status_code != 200:
+                return {"error": f"Failed to fetch spaces: {space_resp.text}"}
+
+            spaces = space_resp.json().get("spaces", [])
+
+            # Find best match: list > folder > space (exact match preferred)
+            list_meta = {}
+            best_list = None
+            best_folder = None
+            best_space = None
+            for s in spaces:
+                space_name = s.get("name", "")
+                space_norm = normalize(space_name)
+                if project_norm == space_norm:
+                    best_space = s["id"]
+                folder_resp = requests.get(
+                    f"{BASE_URL}/space/{s['id']}/folder", headers=headers
+                )
+                if folder_resp.status_code == 200:
+                    folders = folder_resp.json().get("folders", [])
+                    for f in folders:
+                        folder_name = f.get("name", "")
+                        folder_norm = normalize(folder_name)
+                        if project_norm == folder_norm:
+                            best_folder = f["id"]
+                        for lst in f.get("lists", []):
+                            list_name = lst.get("name", "")
+                            list_norm = normalize(list_name)
+                            list_meta[lst["id"]] = (s["id"], space_name, folder_name)
+                            if project_norm == list_norm:
+                                best_list = lst["id"]
+
+            # If no exact match, try partial (substring) match
+            if not (best_list or best_folder or best_space):
+                for s in spaces:
+                    space_name = s.get("name", "")
+                    space_norm = normalize(space_name)
+                    if project_norm in space_norm:
+                        best_space = s["id"]
+                    folder_resp = requests.get(
+                        f"{BASE_URL}/space/{s['id']}/folder", headers=headers
+                    )
+                    if folder_resp.status_code == 200:
+                        folders = folder_resp.json().get("folders", [])
+                        for f in folders:
+                            folder_name = f.get("name", "")
+                            folder_norm = normalize(folder_name)
+                            if project_norm in folder_norm:
+                                best_folder = f["id"]
+                            for lst in f.get("lists", []):
+                                list_name = lst.get("name", "")
+                                list_norm = normalize(list_name)
+                                list_meta[lst["id"]] = (s["id"], space_name, folder_name)
+                                if project_norm in list_norm:
+                                    best_list = lst["id"]
+
+            # Only use the best match (prefer list > folder > space)
+            target_list_ids = []
+            if best_list:
+                target_list_ids = [best_list]
+            elif best_folder:
+                # Fetch all lists in the matched folder
+                for s in spaces:
+                    folder_resp = requests.get(
+                        f"{BASE_URL}/space/{s['id']}/folder", headers=headers
+                    )
+                    if folder_resp.status_code == 200:
+                        folders = folder_resp.json().get("folders", [])
+                        for f in folders:
+                            if f["id"] == best_folder:
+                                for lst in f.get("lists", []):
+                                    target_list_ids.append(lst["id"])
+            elif best_space:
+                target_space_ids = [best_space]
+            else:
+                target_space_ids = []
+
+            if not target_list_ids and not (
+                "target_space_ids" in locals() and target_space_ids
+            ):
+                return {
+                    "error": f"No matching space, folder, or list found for '{project}'",
+                    "hint": "Check spelling/case. Available names: see ClickUp UI.",
+                }
+
+            all_tasks = []
+
+            def fetch_from_url(url, base_params):
+                page = 0
+                while True:
+                    current_params = base_params + [("page", str(page))]
+                    resp = requests.get(url, headers=headers, params=current_params)
+                    if resp.status_code != 200:
+                        print(
+                            f"[WARN] Failed {url} with params {current_params}: {resp.status_code} {resp.text}"
+                        )
+                        break
+                    data = resp.json()
+                    tasks = data.get("tasks", [])
+                    if not tasks:
+                        break
+                    all_tasks.extend(tasks)
+                    page += 1
+
+            base_params = [("include_closed", str(include_closed).lower())]
+            if statuses:
+                for s in statuses:
+                    base_params.append(("statuses[]", s))
+
+            for lid in target_list_ids:
+                fetch_from_url(f"{BASE_URL}/list/{lid}/task", base_params)
+            if "target_space_ids" in locals() and target_space_ids:
+                for sid in target_space_ids:
+                    fetch_from_url(f"{BASE_URL}/space/{sid}/task", base_params)
+
+            print(f"[DEBUG] Total tasks fetched: {len(all_tasks)}")
+
+            # You can add your custom status mapping and summary logic here
+
+            formatted_tasks = []
+            for t in all_tasks:
+                assignees = [
+                    a.get("username") or f"User_{a.get('id')}"
+                    for a in t.get("assignees", [])
+                ]
+                formatted_tasks.append(
+                    {
+                        "task_id": t.get("id"),
+                        "name": t.get("name"),
+                        "status": t.get("status", {}).get("status", "Unknown"),
+                        "assignee": assignees,
+                        "due_date": t.get("due_date"),
+                        "list_name": t.get("list", {}).get("name"),
+                        "folder_name": t.get("folder", {}).get("name"),
+                        "space_name": get_space_name(t.get("space", {}).get("id")),
+                    }
+                )
+
+            return {
+                "project": project,
+                "total_tasks": len(all_tasks),
+                "tasks": formatted_tasks,
+            }
+
+        except Exception as e:
+            print(f"[ERROR] get_project_tasks failed: {str(e)}")
+            return {"error": str(e)}
