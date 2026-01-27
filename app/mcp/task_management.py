@@ -40,10 +40,11 @@ def register_task_tools(mcp: FastMCP):
         statuses: list[str] = None,
         assignees: list[int] = None,
         page: int = None,
-    ) -> list[dict]:
+    ) -> dict:
         """
         List tasks in a list with optional filters.
         Handles single and multiple statuses/assignees correctly.
+        Returns: An object with total_tasks and a list of task dicts.
         """
         try:
             headers = {
@@ -96,7 +97,9 @@ def register_task_tools(mcp: FastMCP):
                 if page is not None:
                     break
 
-            # Format exactly as per specs
+            # Format with both due_date (timestamp) and due_date_iso (ISO 8601 string)
+            from datetime import datetime, timezone
+
             formatted = []
             for t in all_tasks:
                 assignee_usernames = [
@@ -105,17 +108,27 @@ def register_task_tools(mcp: FastMCP):
                     if a.get("username")
                 ]
 
+                due_date_raw = t.get("due_date")
+                due_date = None
+                if due_date_raw and str(due_date_raw).isdigit():
+                    try:
+                        due_date = datetime.fromtimestamp(
+                            int(due_date_raw) / 1000, tz=timezone.utc
+                        ).isoformat()
+                    except Exception:
+                        due_date = None
+
                 formatted.append(
                     {
                         "task_id": t.get("id"),
                         "name": t.get("name"),
                         "status": t.get("status", {}).get("status"),
                         "assignee": assignee_usernames,
-                        "due_date": t.get("due_date"),
+                        "due_date": due_date,
                     }
                 )
 
-            return formatted
+            return {"total_tasks": len(formatted), "tasks": formatted}
 
         except Exception as e:
             return [{"error": str(e)}]
@@ -826,6 +839,123 @@ def register_task_tools(mcp: FastMCP):
                 "status_breakdown": status_count,
                 "stage_breakdown": stage_count,
                 "velocity_7d": velocity,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @mcp.tool
+    def get_workload(list_id: str) -> dict:
+        """
+        Get workload table showing task distribution per team member for a given list.
+        Returns: Dictionary with member names/IDs as keys and number of assigned tasks as values.
+        """
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+            all_tasks = []
+            page = 0
+            while True:
+                params = [
+                    ("page", str(page)),
+                    ("include_closed", "true"),
+                ]
+                resp = requests.get(
+                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
+                )
+                if resp.status_code != 200:
+                    return {
+                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
+                    }
+                data = resp.json()
+                tasks = data.get("tasks", [])
+                if not tasks:
+                    break
+                all_tasks.extend(tasks)
+                page += 1
+
+            # Build workload table
+            workload = {}
+            for t in all_tasks:
+                assignees = t.get("assignees", [])
+                if not assignees:
+                    # Optionally count unassigned tasks under a special key
+                    workload["Unassigned"] = workload.get("Unassigned", 0) + 1
+                else:
+                    for a in assignees:
+                        name = (
+                            a.get("username") or a.get("email") or f"User_{a.get('id')}"
+                        )
+                        workload[name] = workload.get(name, 0) + 1
+
+            return {
+                "list_id": list_id,
+                "workload": workload,
+                "total_tasks": len(all_tasks),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @mcp.tool
+    def get_overdue_tasks(list_id: str) -> dict:
+        """
+        Get all overdue tasks in a list, returning task name, days overdue, and assignee info.
+        Returns: List of overdue tasks with days overdue and assignees.
+        """
+        import time
+
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+            all_tasks = []
+            page = 0
+            now = int(time.time() * 1000)
+            while True:
+                params = [
+                    ("page", str(page)),
+                    ("include_closed", "false"),
+                ]
+                resp = requests.get(
+                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
+                )
+                if resp.status_code != 200:
+                    return {
+                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
+                    }
+                data = resp.json()
+                tasks = data.get("tasks", [])
+                if not tasks:
+                    break
+                all_tasks.extend(tasks)
+                page += 1
+
+            overdue_tasks = []
+            for t in all_tasks:
+                due_date = t.get("due_date")
+                if due_date and due_date.isdigit():
+                    due_ts = int(due_date)
+                    if due_ts < now:
+                        days_overdue = int((now - due_ts) / (1000 * 60 * 60 * 24))
+                        assignees = [
+                            a.get("username") or a.get("email") or f"User_{a.get('id')}"
+                            for a in t.get("assignees", [])
+                        ]
+                        overdue_tasks.append(
+                            {
+                                "task_id": t.get("id"),
+                                "name": t.get("name"),
+                                "days_overdue": days_overdue,
+                                "assignees": assignees,
+                            }
+                        )
+
+            return {
+                "list_id": list_id,
+                "overdue_tasks": overdue_tasks,
+                "total_overdue": len(overdue_tasks),
             }
         except Exception as e:
             return {"error": str(e)}
