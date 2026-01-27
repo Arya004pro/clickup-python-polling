@@ -1,35 +1,97 @@
-# app/mcp/task_management.py
+# app/mcp/task_management.py - Complete Optimized Version (All 9 Functions)
 
 from fastmcp import FastMCP
 import requests
 import re
+import time
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
-# Optionally import CLICKUP_TEAM_ID if defined, otherwise set to None
 try:
     from app.config import CLICKUP_TEAM_ID
 except ImportError:
     CLICKUP_TEAM_ID = None
 
-# Cache for space names to avoid redundant API calls
 SPACE_NAME_CACHE = {}
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+def _headers():
+    return {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+
+
+def _api_call(method, endpoint, params=None, payload=None):
+    """Unified API call handler."""
+    url = f"{BASE_URL}{endpoint}"
+    kwargs = {"headers": _headers()}
+    if params:
+        kwargs["params"] = params
+    if payload:
+        kwargs["json"] = payload
+
+    response = getattr(requests, method)(url, **kwargs)
+    success_codes = (200, 201) if method in ("post", "put") else (200,)
+
+    if response.status_code not in success_codes:
+        return None, f"API error {response.status_code}: {response.text}"
+    return response.json(), None
+
+
+def _get_team_id():
+    if CLICKUP_TEAM_ID:
+        return CLICKUP_TEAM_ID, None
+    data, err = _api_call("get", "/team")
+    if err:
+        return None, err
+    teams = data.get("teams", [])
+    return teams[0]["id"] if teams else None, "No teams found" if not teams else None
+
+
+def _safe_get(obj, *keys):
+    for key in keys:
+        obj = obj.get(key) if isinstance(obj, dict) else None
+        if obj is None:
+            return None
+    return obj
+
+
+def _format_assignees(assignees):
+    return [a.get("username") for a in (assignees or []) if a.get("username")]
+
+
+def _paginate_tasks(list_id, include_closed=True):
+    """Fetch all tasks from a list with pagination."""
+    all_tasks, page = [], 0
+    while True:
+        data, err = _api_call(
+            "get",
+            f"/list/{list_id}/task",
+            [("page", str(page)), ("include_closed", str(include_closed).lower())],
+        )
+        if err or not data:
+            return all_tasks, err
+        tasks = data.get("tasks", [])
+        if not tasks:
+            break
+        all_tasks.extend(tasks)
+        page += 1
+    return all_tasks, None
 
 
 def get_space_name(space_id):
     if space_id in SPACE_NAME_CACHE:
         return SPACE_NAME_CACHE[space_id]
+    data, _ = _api_call("get", f"/space/{space_id}")
+    name = _safe_get(data, "space", "name") or "Unknown"
+    SPACE_NAME_CACHE[space_id] = name
+    return name
 
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/space/{space_id}", headers={"Authorization": CLICKUP_API_TOKEN}
-        )
-        if resp.status_code == 200:
-            name = resp.json().get("space", {}).get("name")
-            SPACE_NAME_CACHE[space_id] = name
-            return name
-    except Exception:
-        pass
-    return "Unknown"
+
+# ============================================================================
+# TOOL REGISTRATION
+# ============================================================================
 
 
 def register_task_tools(mcp: FastMCP):
@@ -41,179 +103,81 @@ def register_task_tools(mcp: FastMCP):
         assignees: list[int] = None,
         page: int = None,
     ) -> dict:
-        """
-        List tasks in a list with optional filters.
-        Handles single and multiple statuses/assignees correctly.
-        Returns: An object with total_tasks and a list of task dicts.
-        """
+        """List tasks in a list with optional filters."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
-
-            # Use list of tuples to force repeated keys (statuses[]=, assignees[]=)
-            params = [
-                ("include_closed", str(include_closed).lower()),
-            ]
-
+            params = [("include_closed", str(include_closed).lower())]
             if statuses:
-                for s in statuses:
-                    params.append(("statuses[]", s))
-
+                params.extend([("statuses[]", s) for s in statuses])
             if assignees:
-                for a in assignees:
-                    params.append(("assignees[]", str(a)))
+                params.extend([("assignees[]", str(a)) for a in assignees])
 
-            if page is not None:
-                params.append(("page", str(page)))
-
-            all_tasks = []
-            current_page = page if page is not None else 0
+            all_tasks, current_page = [], page if page is not None else 0
 
             while True:
-                params.append(("page", str(current_page)))
                 response = requests.get(
-                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
+                    f"{BASE_URL}/list/{list_id}/task",
+                    headers=_headers(),
+                    params=params + [("page", str(current_page))],
                 )
-                params.pop()
-
                 if response.status_code != 200:
-                    return [
-                        {
-                            "error": f"ClickUp API error {response.status_code}: {response.text}"
-                        }
-                    ]
+                    return {"error": f"API error {response.status_code}", "tasks": []}
 
-                data = response.json()
-                page_tasks = data.get("tasks", [])
-
-                if not page_tasks:
+                tasks = response.json().get("tasks", [])
+                if not tasks:
                     break
-
-                all_tasks.extend(page_tasks)
+                all_tasks.extend(tasks)
                 current_page += 1
-
                 if page is not None:
                     break
 
-            # Format with both due_date (timestamp) and due_date_iso (ISO 8601 string)
-            from datetime import datetime, timezone
-
-            formatted = []
-            for t in all_tasks:
-                assignee_usernames = [
-                    a.get("username")
-                    for a in t.get("assignees", [])
-                    if a.get("username")
-                ]
-
-                due_date_raw = t.get("due_date")
-                due_date = None
-                if due_date_raw and str(due_date_raw).isdigit():
-                    try:
-                        due_date = datetime.fromtimestamp(
-                            int(due_date_raw) / 1000, tz=timezone.utc
-                        ).isoformat()
-                    except Exception:
-                        due_date = None
-
-                formatted.append(
-                    {
-                        "task_id": t.get("id"),
-                        "name": t.get("name"),
-                        "status": t.get("status", {}).get("status"),
-                        "assignee": assignee_usernames,
-                        "due_date": due_date,
-                    }
-                )
+            formatted = [
+                {
+                    "task_id": t.get("id"),
+                    "name": t.get("name"),
+                    "status": _safe_get(t, "status", "status"),
+                    "assignee": _format_assignees(t.get("assignees")),
+                    "due_date": t.get("due_date"),
+                }
+                for t in all_tasks
+            ]
 
             return {"total_tasks": len(formatted), "tasks": formatted}
-
         except Exception as e:
-            return [{"error": str(e)}]
+            return {"error": str(e), "tasks": []}
 
     @mcp.tool
     def get_task(task_id: str) -> dict:
-        """
-        Get details of a specific task including its lists.
-
-        Parameters:
-        - task_id (string, required): The task ID to retrieve.
-
-        Returns: Complete task details including description, time tracking, custom fields.
-        """
+        """Get detailed task information."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
+            data, err = _api_call("get", f"/task/{task_id}")
+            if err or not data or not data.get("id"):
+                return {"error": err or f"Task {task_id} not found"}
+
+            return {
+                "task_id": _safe_get(data, "custom_id") or data.get("id"),
+                "name": data.get("name"),
+                "description": data.get("description"),
+                "status": _safe_get(data, "status", "status"),
+                "status_type": _safe_get(data, "status", "type"),
+                "assignee": _format_assignees(data.get("assignees")),
+                "due_date": data.get("due_date"),
+                "priority": _safe_get(data, "priority", "priority"),
+                "time_estimate": data.get("time_estimate"),
+                "tracked_time": data.get("time_spent"),
+                "custom_fields": [
+                    {"name": cf.get("name"), "value": cf.get("value")}
+                    for cf in data.get("custom_fields", [])
+                    if isinstance(cf, dict)
+                ],
+                "list_id": _safe_get(data, "list", "id"),
+                "list_name": _safe_get(data, "list", "name"),
+                "folder_id": _safe_get(data, "folder", "id"),
+                "folder_name": _safe_get(data, "folder", "name"),
+                "space_id": _safe_get(data, "space", "id"),
+                "space_name": _safe_get(data, "space", "name"),
             }
-
-            response = requests.get(f"{BASE_URL}/task/{task_id}", headers=headers)
-
-            if response.status_code != 200:
-                return {
-                    "error": f"ClickUp API error {response.status_code}: {response.text}"
-                }
-
-            task = response.json()
-
-            if not task or not isinstance(task, dict) or not task.get("id"):
-                return {"error": f"Task {task_id} not found"}
-
-            # Extract assignees as list of usernames
-            assignees = [
-                a.get("username") or f"User_{a.get('id')}"
-                for a in task.get("assignees", [])
-                if isinstance(a, dict)
-            ]
-
-            # Extract custom fields (list of name/value pairs)
-            custom_fields = [
-                {"name": cf.get("name"), "value": cf.get("value")}
-                for cf in task.get("custom_fields", [])
-                if isinstance(cf, dict)
-            ]
-
-            # Safely get nested values with type checking
-            def safe_get_nested(obj, *keys):
-                """Safely navigate nested dictionaries"""
-                for key in keys:
-                    if isinstance(obj, dict):
-                        obj = obj.get(key)
-                    else:
-                        return None
-                return obj
-
-            # Build result with complete details
-            result = {
-                "task_id_short": task.get("id"),
-                "task_id": safe_get_nested(task, "custom_task_ids", 0, "id")
-                or task.get("id"),
-                "name": task.get("name"),
-                "description": task.get("description"),
-                "status": safe_get_nested(task, "status", "status"),
-                "status_type": safe_get_nested(task, "status", "type"),
-                "assignee": assignees,
-                "due_date": task.get("due_date"),
-                "priority": safe_get_nested(task, "priority", "priority"),
-                "time_estimate": task.get("time_estimate"),
-                "tracked_time": task.get(
-                    "time_spent"
-                ),  # ClickUp uses 'time_spent', not 'time_tracking.tracked_time'
-                "custom_fields": custom_fields,
-                "list_id": safe_get_nested(task, "list", "id"),
-                "list_name": safe_get_nested(task, "list", "name"),
-                "folder_id": safe_get_nested(task, "folder", "id"),
-                "folder_name": safe_get_nested(task, "folder", "name"),
-                "space_id": safe_get_nested(task, "space", "id"),
-                "space_name": safe_get_nested(task, "space", "name"),
-            }
-
-            return result
-
         except Exception as e:
-            return {"error": f"Unexpected error: {str(e)}"}
+            return {"error": str(e)}
 
     @mcp.tool
     def create_task(
@@ -226,62 +190,33 @@ def register_task_tools(mcp: FastMCP):
         due_date: str = None,
         tags: list[str] = None,
     ) -> dict:
-        """
-        Create a new task in a list.
-
-        Parameters:
-        - list_id (string, required): List to create task in
-        - name (string, required): Task name
-        - description (string, optional): Task description (markdown supported)
-        - status (string, optional): Initial status
-        - priority (int, optional): 1=urgent, 2=high, 3=normal, 4=low
-        - assignees (list[int], optional): User IDs to assign
-        - due_date (string, optional): Due date (ISO 8601 or timestamp)
-        - tags (list[str], optional): Tag names to apply
-
-        Returns: Created task confirmation with ID and URL.
-        """
+        """Create a new task."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
             payload = {
-                "name": name,
+                k: v
+                for k, v in {
+                    "name": name,
+                    "description": description,
+                    "status": status,
+                    "priority": priority,
+                    "assignees": assignees,
+                    "due_date": due_date,
+                    "tags": tags,
+                }.items()
+                if v is not None
             }
-            if description is not None:
-                payload["description"] = description
-            if status is not None:
-                payload["status"] = status
-            if priority is not None:
-                payload["priority"] = priority
-            if assignees is not None:
-                payload["assignees"] = assignees
-            if due_date is not None:
-                payload["due_date"] = due_date
-            if tags is not None:
-                payload["tags"] = tags
 
-            response = requests.post(
-                f"{BASE_URL}/list/{list_id}/task",
-                headers=headers,
-                json=payload,
-            )
+            data, err = _api_call("post", f"/list/{list_id}/task", payload=payload)
+            if err:
+                return {"error": err}
 
-            if response.status_code not in (200, 201):
-                error_msg = f"ClickUp API error {response.status_code}: {response.text}"
-                print(f"[ERROR] {error_msg}")
-                return {"error": error_msg, "response": response.text}
-
-            data = response.json()
             return {
                 "task_id": data.get("id"),
                 "url": data.get("url"),
                 "status": "success",
-                "message": f"Task '{name}' created in list {list_id}",
+                "message": f"Task '{name}' created",
             }
         except Exception as e:
-            print(f"[ERROR] create_task failed: {str(e)}")
             return {"error": str(e)}
 
     @mcp.tool
@@ -295,37 +230,20 @@ def register_task_tools(mcp: FastMCP):
         add_assignees: list[int] = None,
         remove_assignees: list[int] = None,
     ) -> dict:
-        """
-        Update an existing task.
-
-        Parameters:
-        - task_id (string, required): Task ID to update
-        - name (string, optional): New task name
-        - description (string, optional): New description
-        - status (string, optional): New status
-        - priority (int or None, optional): New priority (null to remove)
-        - due_date (string or None, optional): New due date (null to remove)
-        - add_assignees (list[int], optional): User IDs to add
-        - remove_assignees (list[int], optional): User IDs to remove
-
-        Returns: Updated task confirmation.
-        """
+        """Update an existing task."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
+            payload = {
+                k: v
+                for k, v in {
+                    "name": name,
+                    "description": description,
+                    "status": status,
+                    "priority": priority,
+                    "due_date": due_date,
+                }.items()
+                if v is not None
             }
-            payload = {}
-            if name is not None:
-                payload["name"] = name
-            if description is not None:
-                payload["description"] = description
-            if status is not None:
-                payload["status"] = status
-            if priority is not None:
-                payload["priority"] = priority
-            if due_date is not None:
-                payload["due_date"] = due_date
+
             if add_assignees or remove_assignees:
                 payload["assignees"] = {}
                 if add_assignees:
@@ -336,25 +254,16 @@ def register_task_tools(mcp: FastMCP):
             if not payload:
                 return {"error": "No fields to update"}
 
-            response = requests.put(
-                f"{BASE_URL}/task/{task_id}",
-                headers=headers,
-                json=payload,
-            )
+            data, err = _api_call("put", f"/task/{task_id}", payload=payload)
+            if err:
+                return {"error": err}
 
-            if response.status_code not in (200, 201):
-                error_msg = f"ClickUp API error {response.status_code}: {response.text}"
-                print(f"[ERROR] {error_msg}")
-                return {"error": error_msg, "response": response.text}
-
-            data = response.json()
             return {
                 "task_id": data.get("id", task_id),
                 "status": "success",
-                "message": f"Task '{task_id}' updated successfully",
+                "message": "Task updated successfully",
             }
         except Exception as e:
-            print(f"[ERROR] update_task failed: {str(e)}")
             return {"error": str(e)}
 
     @mcp.tool
@@ -362,193 +271,101 @@ def register_task_tools(mcp: FastMCP):
         project: str,
         query: str,
         include_closed: bool = False,
-        whole_word: bool = True,
+        whole_word: bool = False,
     ) -> dict:
-        """
-        Search tasks within a folder or space.
-
-        Parameters:
-        - project: Folder name ("AyuRAG Agent") or Space name ("AIX")
-        - query: Search term (searches in task name and description)
-        - include_closed: Include completed/closed tasks
-        - whole_word: If true, match whole words only (e.g., "bot" won't match "robot")
-
-        Returns: Matching tasks with their details
-        """
+        """Search tasks within a folder or space."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
+            team_id, err = _get_team_id()
+            if err:
+                return {"error": err, "results": []}
 
-            # Get team ID
-            team_id = CLICKUP_TEAM_ID
-            if not team_id:
-                teams_response = requests.get(f"{BASE_URL}/team", headers=headers)
-                if teams_response.status_code == 200:
-                    teams = teams_response.json().get("teams", [])
-                    team_id = teams[0]["id"] if teams else None
-                if not team_id:
-                    return {"error": "No teams found", "results": []}
+            spaces_data, err = _api_call("get", f"/team/{team_id}/space")
+            if err:
+                return {"error": err, "results": []}
 
-            # Get all spaces
-            spaces_response = requests.get(
-                f"{BASE_URL}/team/{team_id}/space", headers=headers
-            )
-            if spaces_response.status_code != 200:
-                return {"error": "Failed to fetch spaces", "results": []}
-
-            spaces = spaces_response.json().get("spaces", [])
-
-            # Find target project and collect lists
-            all_lists = []
-            project_info = None
+            spaces, all_lists, project_info = spaces_data.get("spaces", []), [], None
 
             for space in spaces:
-                space_id = space["id"]
-                space_name = space["name"]
+                space_id, space_name = space["id"], space["name"]
 
-                # Check if searching for this space
                 if project.lower() == space_name.lower():
                     project_info = {"type": "space", "name": space_name}
-
-                    # Get folderless lists
-                    lists_response = requests.get(
-                        f"{BASE_URL}/space/{space_id}/list", headers=headers
-                    )
-                    if lists_response.status_code == 200:
-                        for lst in lists_response.json().get("lists", []):
-                            lst["space_id"] = space_id
-                            lst["space_name"] = space_name
-                            all_lists.append(lst)
-
-                    # Get lists from folders
-                    folders_response = requests.get(
-                        f"{BASE_URL}/space/{space_id}/folder", headers=headers
-                    )
-                    if folders_response.status_code == 200:
-                        for folder in folders_response.json().get("folders", []):
-                            for lst in folder.get("lists", []):
-                                lst["space_id"] = space_id
-                                lst["space_name"] = space_name
-                                lst["folder_name"] = folder.get("name")
-                                all_lists.append(lst)
+                    lists_data, _ = _api_call("get", f"/space/{space_id}/list")
+                    if lists_data:
+                        all_lists.extend(lists_data.get("lists", []))
+                    folders_data, _ = _api_call("get", f"/space/{space_id}/folder")
+                    if folders_data:
+                        for folder in folders_data.get("folders", []):
+                            all_lists.extend(folder.get("lists", []))
                     break
 
-                # Check folders
-                folders_response = requests.get(
-                    f"{BASE_URL}/space/{space_id}/folder", headers=headers
-                )
-                if folders_response.status_code == 200:
-                    for folder in folders_response.json().get("folders", []):
+                folders_data, _ = _api_call("get", f"/space/{space_id}/folder")
+                if folders_data:
+                    for folder in folders_data.get("folders", []):
                         if project.lower() == folder["name"].lower():
                             project_info = {
                                 "type": "folder",
                                 "name": folder["name"],
                                 "space": space_name,
                             }
-                            for lst in folder.get("lists", []):
-                                lst["space_id"] = space_id
-                                lst["space_name"] = space_name
-                                lst["folder_name"] = folder.get("name")
-                                all_lists.append(lst)
+                            all_lists.extend(folder.get("lists", []))
                             break
-
                 if project_info:
                     break
 
             if not project_info:
-                return {
-                    "error": f"Project '{project}' not found",
-                    "hint": "Check spelling (case-insensitive). Examples: 'AyuRAG Agent', 'AIX'",
-                    "results": [],
-                }
+                return {"error": f"Project '{project}' not found", "results": []}
 
-            # Search tasks
-            matching_tasks = []
-            query_lower = query.lower()
-            pattern = r"\b" + re.escape(query_lower) + r"\b"
+            matching_tasks, query_lower = [], query.lower()
+            pattern = r"\b" + re.escape(query_lower) + r"\b" if whole_word else None
 
             for lst in all_lists:
-                list_id = lst["id"]
-                list_name = lst["name"]
-                space_id = lst.get("space_id")
-                space_name = lst.get("space_name")
-                folder_name = lst.get("folder_name")
-                page = 0
-
-                while True:
-                    params = [
-                        ("page", str(page)),
-                        ("include_closed", str(include_closed).lower()),
-                    ]
-
-                    tasks_response = requests.get(
-                        f"{BASE_URL}/list/{list_id}/task",
-                        headers=headers,
-                        params=params,
+                tasks, _ = _paginate_tasks(lst["id"], include_closed)
+                for task in tasks:
+                    task_name, task_desc = (
+                        (task.get("name") or "").lower(),
+                        (task.get("text_content") or "").lower(),
                     )
 
-                    if tasks_response.status_code != 200:
-                        break
+                    if whole_word:
+                        matched = bool(
+                            re.search(pattern, task_name)
+                            or re.search(pattern, task_desc)
+                        )
+                        match_loc = (
+                            "name" if re.search(pattern, task_name) else "description"
+                        )
+                    else:
+                        matched = query_lower in task_name or query_lower in task_desc
+                        match_loc = (
+                            "name" if query_lower in task_name else "description"
+                        )
 
-                    tasks = tasks_response.json().get("tasks", [])
-                    if not tasks:
-                        break
-
-                    for task in tasks:
-                        task_name = (task.get("name") or "").lower()
-                        task_desc = (task.get("text_content") or "").lower()
-
-                        # Whole word match only
-                        matched = False
-                        match_location = None
-                        if re.search(pattern, task_name):
-                            matched = True
-                            match_location = "name"
-                        elif re.search(pattern, task_desc):
-                            matched = True
-                            match_location = "description"
-
-                        if matched:
-                            assignees = [
-                                a.get("username")
-                                for a in task.get("assignees", [])
-                                if a.get("username")
-                            ]
-
-                            # Get full description (up to 500 chars for debugging)
-                            full_desc = task.get("text_content") or ""
-
-                            matching_tasks.append(
-                                {
-                                    "task_id": task.get("id"),
-                                    "name": task.get("name"),
-                                    "description": full_desc[:300]
-                                    + ("..." if len(full_desc) > 300 else ""),
-                                    "status": task.get("status", {}).get("status"),
-                                    "assignee": assignees,
-                                    "due_date": task.get("due_date"),
-                                    "list_name": list_name,
-                                    "folder_name": folder_name,
-                                    "space_id": space_id,
-                                    "space_name": space_name,
-                                    "url": task.get("url"),
-                                    "matched_in": match_location,  # Show where query was found
-                                }
-                            )
-
-                    page += 1
+                    if matched:
+                        full_desc = task.get("text_content") or ""
+                        matching_tasks.append(
+                            {
+                                "task_id": task.get("id"),
+                                "name": task.get("name"),
+                                "description": full_desc[:300]
+                                + ("..." if len(full_desc) > 300 else ""),
+                                "status": _safe_get(task, "status", "status"),
+                                "assignee": _format_assignees(task.get("assignees")),
+                                "due_date": task.get("due_date"),
+                                "list_name": lst["name"],
+                                "url": task.get("url"),
+                                "matched_in": match_loc,
+                            }
+                        )
 
             return {
                 "project": project,
                 "project_type": project_info["type"],
                 "query": query,
-                "whole_word_match": True,
+                "whole_word_match": whole_word,
                 "total_results": len(matching_tasks),
                 "results": matching_tasks,
             }
-
         except Exception as e:
             return {"error": f"Search failed: {str(e)}", "results": []}
 
@@ -558,231 +375,60 @@ def register_task_tools(mcp: FastMCP):
         include_closed: bool = False,
         statuses: list[str] = None,
     ) -> dict:
-        """
-        Get all tasks in a mapped project with optional filters.
-        Dynamically resolves project name to space/folder/list IDs.
-        """
+        """Get all tasks in a project (folder/space) with optional filters."""
         try:
-            import re
+            team_id, err = _get_team_id()
+            if err:
+                return {"error": err, "tasks": []}
 
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
+            spaces_data, err = _api_call("get", f"/team/{team_id}/space")
+            if err:
+                return {"error": err, "tasks": []}
 
-            def normalize(s):
-                return re.sub(r"[^a-z0-9]+", "", s.lower().strip())
+            all_tasks, spaces = [], spaces_data.get("spaces", [])
 
-            project_norm = normalize(project)
+            for space in spaces:
+                space_id, space_name = space["id"], space["name"]
 
-            # Step 1: Get workspaces
-            ws_resp = requests.get(f"{BASE_URL}/team", headers=headers)
-            if ws_resp.status_code != 200:
-                return {"error": f"Failed to fetch workspaces: {ws_resp.text}"}
+                if project.lower() == space_name.lower():
+                    lists_data, _ = _api_call("get", f"/space/{space_id}/list")
+                    lists = lists_data.get("lists", []) if lists_data else []
+                    folders_data, _ = _api_call("get", f"/space/{space_id}/folder")
+                    if folders_data:
+                        for folder in folders_data.get("folders", []):
+                            lists.extend(folder.get("lists", []))
+                    for lst in lists:
+                        result = get_tasks(lst["id"], include_closed, statuses)
+                        all_tasks.extend(result.get("tasks", []))
+                    break
 
-            workspaces = ws_resp.json().get("teams", [])
-            if not workspaces:
-                return {"error": "No accessible workspaces"}
-
-            team_id = workspaces[0]["id"]
-
-            # Step 2: Get spaces
-            space_resp = requests.get(
-                f"{BASE_URL}/team/{team_id}/space", headers=headers
-            )
-            if space_resp.status_code != 200:
-                return {"error": f"Failed to fetch spaces: {space_resp.text}"}
-
-            spaces = space_resp.json().get("spaces", [])
-
-            # Find best match: list > folder > space (exact match preferred)
-            list_meta = {}
-            best_list = None
-            best_folder = None
-            best_space = None
-            for s in spaces:
-                space_name = s.get("name", "")
-                space_norm = normalize(space_name)
-                if project_norm == space_norm:
-                    best_space = s["id"]
-                folder_resp = requests.get(
-                    f"{BASE_URL}/space/{s['id']}/folder", headers=headers
-                )
-                if folder_resp.status_code == 200:
-                    folders = folder_resp.json().get("folders", [])
-                    for f in folders:
-                        folder_name = f.get("name", "")
-                        folder_norm = normalize(folder_name)
-                        if project_norm == folder_norm:
-                            best_folder = f["id"]
-                        for lst in f.get("lists", []):
-                            list_name = lst.get("name", "")
-                            list_norm = normalize(list_name)
-                            list_meta[lst["id"]] = (s["id"], space_name, folder_name)
-                            if project_norm == list_norm:
-                                best_list = lst["id"]
-
-            # If no exact match, try partial (substring) match
-            if not (best_list or best_folder or best_space):
-                for s in spaces:
-                    space_name = s.get("name", "")
-                    space_norm = normalize(space_name)
-                    if project_norm in space_norm:
-                        best_space = s["id"]
-                    folder_resp = requests.get(
-                        f"{BASE_URL}/space/{s['id']}/folder", headers=headers
-                    )
-                    if folder_resp.status_code == 200:
-                        folders = folder_resp.json().get("folders", [])
-                        for f in folders:
-                            folder_name = f.get("name", "")
-                            folder_norm = normalize(folder_name)
-                            if project_norm in folder_norm:
-                                best_folder = f["id"]
-                            for lst in f.get("lists", []):
-                                list_name = lst.get("name", "")
-                                list_norm = normalize(list_name)
-                                list_meta[lst["id"]] = (
-                                    s["id"],
-                                    space_name,
-                                    folder_name,
-                                )
-                                if project_norm in list_norm:
-                                    best_list = lst["id"]
-
-            # Only use the best match (prefer list > folder > space)
-            target_list_ids = []
-            if best_list:
-                target_list_ids = [best_list]
-            elif best_folder:
-                # Fetch all lists in the matched folder
-                for s in spaces:
-                    folder_resp = requests.get(
-                        f"{BASE_URL}/space/{s['id']}/folder", headers=headers
-                    )
-                    if folder_resp.status_code == 200:
-                        folders = folder_resp.json().get("folders", [])
-                        for f in folders:
-                            if f["id"] == best_folder:
-                                for lst in f.get("lists", []):
-                                    target_list_ids.append(lst["id"])
-            elif best_space:
-                target_space_ids = [best_space]
-            else:
-                target_space_ids = []
-
-            if not target_list_ids and not (
-                "target_space_ids" in locals() and target_space_ids
-            ):
-                return {
-                    "error": f"No matching space, folder, or list found for '{project}'",
-                    "hint": "Check spelling/case. Available names: see ClickUp UI.",
-                }
-
-            all_tasks = []
-
-            def fetch_from_url(url, base_params):
-                page = 0
-                while True:
-                    current_params = base_params + [("page", str(page))]
-                    resp = requests.get(url, headers=headers, params=current_params)
-                    if resp.status_code != 200:
-                        print(
-                            f"[WARN] Failed {url} with params {current_params}: {resp.status_code} {resp.text}"
-                        )
-                        break
-                    data = resp.json()
-                    tasks = data.get("tasks", [])
-                    if not tasks:
-                        break
-                    all_tasks.extend(tasks)
-                    page += 1
-
-            base_params = [("include_closed", str(include_closed).lower())]
-            if statuses:
-                for s in statuses:
-                    base_params.append(("statuses[]", s))
-
-            for lid in target_list_ids:
-                fetch_from_url(f"{BASE_URL}/list/{lid}/task", base_params)
-            if "target_space_ids" in locals() and target_space_ids:
-                for sid in target_space_ids:
-                    fetch_from_url(f"{BASE_URL}/space/{sid}/task", base_params)
-
-            print(f"[DEBUG] Total tasks fetched: {len(all_tasks)}")
-
-            # You can add your custom status mapping and summary logic here
-
-            formatted_tasks = []
-            for t in all_tasks:
-                assignees = [
-                    a.get("username") or f"User_{a.get('id')}"
-                    for a in t.get("assignees", [])
-                ]
-                formatted_tasks.append(
-                    {
-                        "task_id": t.get("id"),
-                        "name": t.get("name"),
-                        "status": t.get("status", {}).get("status", "Unknown"),
-                        "assignee": assignees,
-                        "due_date": t.get("due_date"),
-                        "list_name": t.get("list", {}).get("name"),
-                        "folder_name": t.get("folder", {}).get("name"),
-                        "space_name": get_space_name(t.get("space", {}).get("id")),
-                    }
-                )
+                folders_data, _ = _api_call("get", f"/space/{space_id}/folder")
+                if folders_data:
+                    for folder in folders_data.get("folders", []):
+                        if project.lower() == folder["name"].lower():
+                            for lst in folder.get("lists", []):
+                                result = get_tasks(lst["id"], include_closed, statuses)
+                                all_tasks.extend(result.get("tasks", []))
+                            break
 
             return {
                 "project": project,
                 "total_tasks": len(all_tasks),
-                "tasks": formatted_tasks,
+                "tasks": all_tasks,
             }
-
         except Exception as e:
-            print(f"[ERROR] get_project_tasks failed: {str(e)}")
-            return {"error": str(e)}
+            return {"error": str(e), "tasks": []}
 
     @mcp.tool
     def get_list_progress(list_id: str) -> dict:
-        """
-        Get progress summary for a list (useful for sprints).
-        Returns: Progress metrics including completion rate, status breakdown, velocity.
-        """
-        import time
-
+        """Get progress summary for a list (useful for sprints)."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
+            tasks, err = _paginate_tasks(list_id, include_closed=True)
+            if err:
+                return {"error": err}
+            if not tasks:
+                return {"error": "No tasks found in this list"}
 
-            # Fetch all tasks in the list (paginated)
-            all_tasks = []
-            page = 0
-            while True:
-                params = [
-                    ("page", str(page)),
-                    ("include_closed", "true"),
-                ]
-                resp = requests.get(
-                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
-                )
-                if resp.status_code != 200:
-                    return {
-                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
-                    }
-                data = resp.json()
-                tasks = data.get("tasks", [])
-                if not tasks:
-                    break
-                all_tasks.extend(tasks)
-                page += 1
-
-            total = len(all_tasks)
-            if total == 0:
-                return {"error": "No tasks found in this list."}
-
-            # Status mapping for progress
             status_stage_map = {
                 "backlog": "not_started",
                 "queued": "not_started",
@@ -795,92 +441,51 @@ def register_task_tools(mcp: FastMCP):
                 "shipped": "done",
                 "cancelled": "closed",
             }
+
             stage_count = {"not_started": 0, "active": 0, "done": 0, "closed": 0}
-            status_count = {}
-            done_statuses = {"shipped"}
-            # closed_statuses = {"cancelled"}
-            completed = 0
-            for t in all_tasks:
-                status_name = t.get("status", {}).get("status", "Unknown")
+            status_count, completed, now = {}, 0, int(time.time() * 1000)
+            week_ago, completed_last_week = now - 7 * 24 * 60 * 60 * 1000, 0
+
+            for t in tasks:
+                status_name = _safe_get(t, "status", "status") or "Unknown"
                 status_key = status_name.strip().lower()
                 stage = status_stage_map.get(status_key, "active")
                 stage_count[stage] += 1
                 status_count[status_name] = status_count.get(status_name, 0) + 1
-                if status_key in done_statuses:
-                    completed += 1
-            completion_rate = completed / total if total else 0
 
-            # Velocity: tasks completed in the last 7 days (using date_done, date_closed, or date_updated)
-            now = int(time.time() * 1000)
-            week_ago = now - 7 * 24 * 60 * 60 * 1000
-            completed_last_week = 0
-            for t in all_tasks:
-                status_name = t.get("status", {}).get("status", "Unknown")
-                status_key = status_name.strip().lower()
-                if status_key in done_statuses:
-                    # Prefer date_done, then date_closed, then date_updated
-                    done_ts = None
+                if status_key == "shipped":
+                    completed += 1
                     for field in ["date_done", "date_closed", "date_updated"]:
                         ts = t.get(field)
-                        if ts and isinstance(ts, str) and ts.isdigit():
+                        if ts and str(ts).isdigit():
                             ts = int(ts)
-                        if ts and isinstance(ts, int):
-                            done_ts = ts
+                            if ts >= week_ago:
+                                completed_last_week += 1
                             break
-                    if done_ts and done_ts >= week_ago:
-                        completed_last_week += 1
-
-            velocity = completed_last_week
 
             return {
                 "list_id": list_id,
-                "total_tasks": total,
-                "completion_rate": round(completion_rate, 3),
+                "total_tasks": len(tasks),
+                "completion_rate": round(completed / len(tasks), 3) if tasks else 0,
                 "status_breakdown": status_count,
                 "stage_breakdown": stage_count,
-                "velocity_7d": velocity,
+                "velocity_7d": completed_last_week,
             }
         except Exception as e:
             return {"error": str(e)}
 
     @mcp.tool
     def get_workload(list_id: str) -> dict:
-        """
-        Get workload table showing task distribution per team member for a given list.
-        Returns: Dictionary with member names/IDs as keys and number of assigned tasks as values.
-        """
+        """Get workload distribution per team member."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
-            all_tasks = []
-            page = 0
-            while True:
-                params = [
-                    ("page", str(page)),
-                    ("include_closed", "true"),
-                ]
-                resp = requests.get(
-                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
-                )
-                if resp.status_code != 200:
-                    return {
-                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
-                    }
-                data = resp.json()
-                tasks = data.get("tasks", [])
-                if not tasks:
-                    break
-                all_tasks.extend(tasks)
-                page += 1
+            tasks, err = _paginate_tasks(list_id, include_closed=True)
+            if err:
+                return {"error": err}
 
-            # Build workload table
             workload = {}
-            for t in all_tasks:
+            for t in tasks:
                 assignees = t.get("assignees", [])
                 if not assignees:
-                    # Optionally count unassigned tasks under a special key
                     workload["Unassigned"] = workload.get("Unassigned", 0) + 1
                 else:
                     for a in assignees:
@@ -889,66 +494,31 @@ def register_task_tools(mcp: FastMCP):
                         )
                         workload[name] = workload.get(name, 0) + 1
 
-            return {
-                "list_id": list_id,
-                "workload": workload,
-                "total_tasks": len(all_tasks),
-            }
+            return {"list_id": list_id, "workload": workload, "total_tasks": len(tasks)}
         except Exception as e:
             return {"error": str(e)}
 
     @mcp.tool
     def get_overdue_tasks(list_id: str) -> dict:
-        """
-        Get all overdue tasks in a list, returning task name, days overdue, and assignee info.
-        Returns: List of overdue tasks with days overdue and assignees.
-        """
-        import time
-
+        """Get all overdue tasks in a list."""
         try:
-            headers = {
-                "Authorization": CLICKUP_API_TOKEN,
-                "Content-Type": "application/json",
-            }
-            all_tasks = []
-            page = 0
-            now = int(time.time() * 1000)
-            while True:
-                params = [
-                    ("page", str(page)),
-                    ("include_closed", "false"),
-                ]
-                resp = requests.get(
-                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
-                )
-                if resp.status_code != 200:
-                    return {
-                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
-                    }
-                data = resp.json()
-                tasks = data.get("tasks", [])
-                if not tasks:
-                    break
-                all_tasks.extend(tasks)
-                page += 1
+            tasks, err = _paginate_tasks(list_id, include_closed=False)
+            if err:
+                return {"error": err}
 
-            overdue_tasks = []
-            for t in all_tasks:
+            now, overdue_tasks = int(time.time() * 1000), []
+            for t in tasks:
                 due_date = t.get("due_date")
-                if due_date and due_date.isdigit():
+                if due_date and str(due_date).isdigit():
                     due_ts = int(due_date)
                     if due_ts < now:
                         days_overdue = int((now - due_ts) / (1000 * 60 * 60 * 24))
-                        assignees = [
-                            a.get("username") or a.get("email") or f"User_{a.get('id')}"
-                            for a in t.get("assignees", [])
-                        ]
                         overdue_tasks.append(
                             {
                                 "task_id": t.get("id"),
                                 "name": t.get("name"),
                                 "days_overdue": days_overdue,
-                                "assignees": assignees,
+                                "assignees": _format_assignees(t.get("assignees")),
                             }
                         )
 
