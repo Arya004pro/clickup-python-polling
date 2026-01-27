@@ -2,7 +2,34 @@
 
 from fastmcp import FastMCP
 import requests
+import re
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+
+# Optionally import CLICKUP_TEAM_ID if defined, otherwise set to None
+try:
+    from app.config import CLICKUP_TEAM_ID
+except ImportError:
+    CLICKUP_TEAM_ID = None
+
+# Cache for space names to avoid redundant API calls
+SPACE_NAME_CACHE = {}
+
+
+def get_space_name(space_id):
+    if space_id in SPACE_NAME_CACHE:
+        return SPACE_NAME_CACHE[space_id]
+
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/space/{space_id}", headers={"Authorization": CLICKUP_API_TOKEN}
+        )
+        if resp.status_code == 200:
+            name = resp.json().get("space", {}).get("name")
+            SPACE_NAME_CACHE[space_id] = name
+            return name
+    except Exception:
+        pass
+    return "Unknown"
 
 
 def register_task_tools(mcp: FastMCP):
@@ -316,3 +343,198 @@ def register_task_tools(mcp: FastMCP):
         except Exception as e:
             print(f"[ERROR] update_task failed: {str(e)}")
             return {"error": str(e)}
+
+    @mcp.tool
+    def search_tasks(
+        project: str,
+        query: str,
+        include_closed: bool = False,
+        whole_word: bool = True,
+    ) -> dict:
+        """
+        Search tasks within a folder or space.
+
+        Parameters:
+        - project: Folder name ("AyuRAG Agent") or Space name ("AIX")
+        - query: Search term (searches in task name and description)
+        - include_closed: Include completed/closed tasks
+        - whole_word: If true, match whole words only (e.g., "bot" won't match "robot")
+
+        Returns: Matching tasks with their details
+        """
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+
+            # Get team ID
+            team_id = CLICKUP_TEAM_ID
+            if not team_id:
+                teams_response = requests.get(f"{BASE_URL}/team", headers=headers)
+                if teams_response.status_code == 200:
+                    teams = teams_response.json().get("teams", [])
+                    team_id = teams[0]["id"] if teams else None
+                if not team_id:
+                    return {"error": "No teams found", "results": []}
+
+            # Get all spaces
+            spaces_response = requests.get(
+                f"{BASE_URL}/team/{team_id}/space", headers=headers
+            )
+            if spaces_response.status_code != 200:
+                return {"error": "Failed to fetch spaces", "results": []}
+
+            spaces = spaces_response.json().get("spaces", [])
+
+            # Find target project and collect lists
+            all_lists = []
+            project_info = None
+
+            for space in spaces:
+                space_id = space["id"]
+                space_name = space["name"]
+
+                # Check if searching for this space
+                if project.lower() == space_name.lower():
+                    project_info = {"type": "space", "name": space_name}
+
+                    # Get folderless lists
+                    lists_response = requests.get(
+                        f"{BASE_URL}/space/{space_id}/list", headers=headers
+                    )
+                    if lists_response.status_code == 200:
+                        for lst in lists_response.json().get("lists", []):
+                            lst["space_id"] = space_id
+                            lst["space_name"] = space_name
+                            all_lists.append(lst)
+
+                    # Get lists from folders
+                    folders_response = requests.get(
+                        f"{BASE_URL}/space/{space_id}/folder", headers=headers
+                    )
+                    if folders_response.status_code == 200:
+                        for folder in folders_response.json().get("folders", []):
+                            for lst in folder.get("lists", []):
+                                lst["space_id"] = space_id
+                                lst["space_name"] = space_name
+                                lst["folder_name"] = folder.get("name")
+                                all_lists.append(lst)
+                    break
+
+                # Check folders
+                folders_response = requests.get(
+                    f"{BASE_URL}/space/{space_id}/folder", headers=headers
+                )
+                if folders_response.status_code == 200:
+                    for folder in folders_response.json().get("folders", []):
+                        if project.lower() == folder["name"].lower():
+                            project_info = {
+                                "type": "folder",
+                                "name": folder["name"],
+                                "space": space_name,
+                            }
+                            for lst in folder.get("lists", []):
+                                lst["space_id"] = space_id
+                                lst["space_name"] = space_name
+                                lst["folder_name"] = folder.get("name")
+                                all_lists.append(lst)
+                            break
+
+                if project_info:
+                    break
+
+            if not project_info:
+                return {
+                    "error": f"Project '{project}' not found",
+                    "hint": "Check spelling (case-insensitive). Examples: 'AyuRAG Agent', 'AIX'",
+                    "results": [],
+                }
+
+            # Search tasks
+            matching_tasks = []
+            query_lower = query.lower()
+            pattern = r"\b" + re.escape(query_lower) + r"\b"
+
+            for lst in all_lists:
+                list_id = lst["id"]
+                list_name = lst["name"]
+                space_id = lst.get("space_id")
+                space_name = lst.get("space_name")
+                folder_name = lst.get("folder_name")
+                page = 0
+
+                while True:
+                    params = [
+                        ("page", str(page)),
+                        ("include_closed", str(include_closed).lower()),
+                    ]
+
+                    tasks_response = requests.get(
+                        f"{BASE_URL}/list/{list_id}/task",
+                        headers=headers,
+                        params=params,
+                    )
+
+                    if tasks_response.status_code != 200:
+                        break
+
+                    tasks = tasks_response.json().get("tasks", [])
+                    if not tasks:
+                        break
+
+                    for task in tasks:
+                        task_name = (task.get("name") or "").lower()
+                        task_desc = (task.get("text_content") or "").lower()
+
+                        # Whole word match only
+                        matched = False
+                        match_location = None
+                        if re.search(pattern, task_name):
+                            matched = True
+                            match_location = "name"
+                        elif re.search(pattern, task_desc):
+                            matched = True
+                            match_location = "description"
+
+                        if matched:
+                            assignees = [
+                                a.get("username")
+                                for a in task.get("assignees", [])
+                                if a.get("username")
+                            ]
+
+                            # Get full description (up to 500 chars for debugging)
+                            full_desc = task.get("text_content") or ""
+
+                            matching_tasks.append(
+                                {
+                                    "task_id": task.get("id"),
+                                    "name": task.get("name"),
+                                    "description": full_desc[:300]
+                                    + ("..." if len(full_desc) > 300 else ""),
+                                    "status": task.get("status", {}).get("status"),
+                                    "assignee": assignees,
+                                    "due_date": task.get("due_date"),
+                                    "list_name": list_name,
+                                    "folder_name": folder_name,
+                                    "space_id": space_id,
+                                    "space_name": space_name,
+                                    "url": task.get("url"),
+                                    "matched_in": match_location,  # Show where query was found
+                                }
+                            )
+
+                    page += 1
+
+            return {
+                "project": project,
+                "project_type": project_info["type"],
+                "query": query,
+                "whole_word_match": True,
+                "total_results": len(matching_tasks),
+                "results": matching_tasks,
+            }
+
+        except Exception as e:
+            return {"error": f"Search failed: {str(e)}", "results": []}

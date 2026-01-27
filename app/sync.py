@@ -1,5 +1,5 @@
 """
-Task Sync - ClickUp to PostgreSQL
+Task Sync - ClickUp to PostgreSQL (FIXED - No Duplicate Fetch)
 """
 
 import json
@@ -125,23 +125,22 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
         if deleted:
             mark_tasks_deleted(list(deleted), now)
 
-    # Batch fetch time entries and comments
+    t1 = time.perf_counter()
+    logger.info(f"[PROFILE] Pre-fetch setup: {t1 - t0:.2f}s")
+
+    # ✅ Fetch time entries ONLY ONCE (and only for full sync)
+    t2 = time.perf_counter()
     if full_sync:
         print(f"🔄 Full sync: fetching time entries for {len(task_ids)} tasks")
         time_map = fetch_all_time_entries_batch(task_ids)
     else:
         print(f"⚡ Incremental sync: skipping time entries for {len(task_ids)} tasks")
-        time_map = {tid: [] for tid in task_ids}  # Empty for incremental
-
-    t1 = time.perf_counter()
-    logger.info(f"[PROFILE] Pre-fetch setup: {t1 - t0:.2f}s")
-
-    # Batch fetch
-    t2 = time.perf_counter()
-    time_map = fetch_all_time_entries_batch(task_ids)
+        time_map = {tid: [] for tid in task_ids}
+    
     t3 = time.perf_counter()
     logger.info(f"[PROFILE] Time entry fetch: {t3 - t2:.2f}s for {len(task_ids)} tasks")
 
+    # Fetch comments
     t4 = time.perf_counter()
     comment_map = fetch_assigned_comments_batch(task_ids)
     t5 = time.perf_counter()
@@ -193,7 +192,7 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             t.get("status", {}),
             loc_map.get(t.get("list", {}).get("id"), {}),
         )
-        
+
         assignees = t.get("assignees") or []
         agg = aggregate_time_entries(time_map.get(tid, []))
 
@@ -292,11 +291,10 @@ def sync_tasks_to_supabase(tasks, *, full_sync):
             }
         )
 
-    # Upsert tasks
-    bulk_upsert_tasks(payloads)
-    # print(f"💾 Upserting {len(payloads)} tasks...")
     t7 = time.perf_counter()
     logger.info(f"[PROFILE] Payload build: {t7 - t6:.2f}s for {len(payloads)} tasks")
+    
+    # Upsert tasks (single call, not duplicate)
     upsert_start = time.perf_counter()
     bulk_upsert_tasks(payloads)
     upsert_end = time.perf_counter()
