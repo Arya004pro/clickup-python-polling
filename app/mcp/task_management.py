@@ -629,7 +629,11 @@ def register_task_tools(mcp: FastMCP):
                             for lst in f.get("lists", []):
                                 list_name = lst.get("name", "")
                                 list_norm = normalize(list_name)
-                                list_meta[lst["id"]] = (s["id"], space_name, folder_name)
+                                list_meta[lst["id"]] = (
+                                    s["id"],
+                                    space_name,
+                                    folder_name,
+                                )
                                 if project_norm in list_norm:
                                     best_list = lst["id"]
 
@@ -723,4 +727,105 @@ def register_task_tools(mcp: FastMCP):
 
         except Exception as e:
             print(f"[ERROR] get_project_tasks failed: {str(e)}")
+            return {"error": str(e)}
+
+    @mcp.tool
+    def get_list_progress(list_id: str) -> dict:
+        """
+        Get progress summary for a list (useful for sprints).
+        Returns: Progress metrics including completion rate, status breakdown, velocity.
+        """
+        import time
+
+        try:
+            headers = {
+                "Authorization": CLICKUP_API_TOKEN,
+                "Content-Type": "application/json",
+            }
+
+            # Fetch all tasks in the list (paginated)
+            all_tasks = []
+            page = 0
+            while True:
+                params = [
+                    ("page", str(page)),
+                    ("include_closed", "true"),
+                ]
+                resp = requests.get(
+                    f"{BASE_URL}/list/{list_id}/task", headers=headers, params=params
+                )
+                if resp.status_code != 200:
+                    return {
+                        "error": f"Failed to fetch tasks: {resp.status_code} {resp.text}"
+                    }
+                data = resp.json()
+                tasks = data.get("tasks", [])
+                if not tasks:
+                    break
+                all_tasks.extend(tasks)
+                page += 1
+
+            total = len(all_tasks)
+            if total == 0:
+                return {"error": "No tasks found in this list."}
+
+            # Status mapping for progress
+            status_stage_map = {
+                "backlog": "not_started",
+                "queued": "not_started",
+                "scoping": "active",
+                "in design": "active",
+                "in development": "active",
+                "in review": "active",
+                "testing": "active",
+                "ready for development": "active",
+                "shipped": "done",
+                "cancelled": "closed",
+            }
+            stage_count = {"not_started": 0, "active": 0, "done": 0, "closed": 0}
+            status_count = {}
+            done_statuses = {"shipped"}
+            # closed_statuses = {"cancelled"}
+            completed = 0
+            for t in all_tasks:
+                status_name = t.get("status", {}).get("status", "Unknown")
+                status_key = status_name.strip().lower()
+                stage = status_stage_map.get(status_key, "active")
+                stage_count[stage] += 1
+                status_count[status_name] = status_count.get(status_name, 0) + 1
+                if status_key in done_statuses:
+                    completed += 1
+            completion_rate = completed / total if total else 0
+
+            # Velocity: tasks completed in the last 7 days (using date_done, date_closed, or date_updated)
+            now = int(time.time() * 1000)
+            week_ago = now - 7 * 24 * 60 * 60 * 1000
+            completed_last_week = 0
+            for t in all_tasks:
+                status_name = t.get("status", {}).get("status", "Unknown")
+                status_key = status_name.strip().lower()
+                if status_key in done_statuses:
+                    # Prefer date_done, then date_closed, then date_updated
+                    done_ts = None
+                    for field in ["date_done", "date_closed", "date_updated"]:
+                        ts = t.get(field)
+                        if ts and isinstance(ts, str) and ts.isdigit():
+                            ts = int(ts)
+                        if ts and isinstance(ts, int):
+                            done_ts = ts
+                            break
+                    if done_ts and done_ts >= week_ago:
+                        completed_last_week += 1
+
+            velocity = completed_last_week
+
+            return {
+                "list_id": list_id,
+                "total_tasks": total,
+                "completion_rate": round(completion_rate, 3),
+                "status_breakdown": status_count,
+                "stage_breakdown": stage_count,
+                "velocity_7d": velocity,
+            }
+        except Exception as e:
             return {"error": str(e)}
