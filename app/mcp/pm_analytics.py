@@ -1,15 +1,6 @@
 """
-PM Analytics Module for ClickUp MCP Server.
-
-Implements all analytics tools as per ClickUp MCP documentation:
-- get_progress_since
-- get_time_tracking_report
-- get_inactive_assignees
-- get_untracked_tasks
-- get_stale_tasks
-- get_estimation_accuracy
-- get_at_risk_tasks
-- get_status_summary
+PM Analytics Module for ClickUp MCP Server - Optimized Version
+Implements all 8 analytics tools with full spec compliance.
 """
 
 import requests
@@ -23,10 +14,45 @@ try:
 except ImportError:
     CLICKUP_TEAM_ID = None
 
+# Status configuration - add new statuses here as discovered
+STATUS_CATEGORIES = {
+    "not_started": ["BACKLOG", "QUEUED", "TO DO", "IN PLANNING"],
+    "active": [
+        "SCOPING",
+        "IN DESIGN",
+        "IN DEVELOPMENT",
+        "IN PROGRESS",
+        "IN REVIEW",
+        "TESTING",
+        "BUG",
+        "READY FOR DEVELOPMENT",
+        "READY FOR PRODUCTION",
+        "STAGING DEPLOY",
+    ],
+    "done": ["SHIPPED", "RELEASE", "QC CHECK", "COMPLETE"],
+    "closed": ["CANCELLED"],
+}
 
-# -----------------------------------------------------------------------------
-# API Helpers
-# -----------------------------------------------------------------------------
+STATUS_TO_CATEGORY = {
+    s.upper(): cat for cat, statuses in STATUS_CATEGORIES.items() for s in statuses
+}
+
+
+def get_status_category(status_name: str, status_type: str = None) -> str:
+    """Smart status categorization with 3-tier fallback."""
+    if not status_name:
+        return "other"
+    # Priority 1: Custom mapping
+    if cat := STATUS_TO_CATEGORY.get(status_name.upper()):
+        return cat
+    # Priority 2: ClickUp native type
+    if status_type:
+        type_map = {"closed": "closed", "open": "not_started", "custom": "active"}
+        if cat := type_map.get(status_type.lower()):
+            return cat
+    return "other"
+
+
 def _headers() -> Dict[str, str]:
     return {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
 
@@ -39,13 +65,16 @@ def _api_call(
 ):
     url = f"{BASE_URL}{endpoint}"
     try:
-        if method.upper() == "GET":
-            response = requests.get(url, headers=_headers(), params=params)
-        else:
-            response = requests.post(url, headers=_headers(), json=payload)
-        if response.status_code == 200:
-            return response.json(), None
-        return None, f"API Error {response.status_code}: {response.text}"
+        response = (
+            requests.get(url, headers=_headers(), params=params)
+            if method.upper() == "GET"
+            else requests.post(url, headers=_headers(), json=payload)
+        )
+        return (
+            (response.json(), None)
+            if response.status_code == 200
+            else (None, f"API Error {response.status_code}: {response.text}")
+        )
     except Exception as e:
         return None, str(e)
 
@@ -54,9 +83,7 @@ def _get_team_id() -> str:
     if CLICKUP_TEAM_ID:
         return CLICKUP_TEAM_ID
     data, _ = _api_call("GET", "/team")
-    if data and "teams" in data and len(data["teams"]) > 0:
-        return data["teams"][0]["id"]
-    return "0"
+    return data["teams"][0]["id"] if data and data.get("teams") else "0"
 
 
 def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List[str]:
@@ -68,34 +95,34 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
     spaces_data, error = _api_call("GET", f"/team/{team_id}/space")
     if error or not spaces_data:
         return []
+
     target_lists = []
     proj_name = project.lower().strip()
+
     for space in spaces_data.get("spaces", []):
-        space_id = space.get("id")
-        if space.get("name", "").lower() == proj_name:
+        space_id, space_name = space["id"], space.get("name", "")
+
+        # Check if space matches project name
+        if space_name.lower() == proj_name:
             lists_data, _ = _api_call("GET", f"/space/{space_id}/list")
             if lists_data:
                 target_lists.extend(
-                    [
-                        lst.get("id")
-                        for lst in lists_data.get("lists", [])
-                        if lst.get("id")
-                    ]
+                    [lst["id"] for lst in lists_data.get("lists", []) if lst.get("id")]
                 )
             folders_data, _ = _api_call("GET", f"/space/{space_id}/folder")
             if folders_data:
                 for f in folders_data.get("folders", []):
                     target_lists.extend(
-                        [lst.get("id") for lst in f.get("lists", []) if lst.get("id")]
+                        [lst["id"] for lst in f.get("lists", []) if lst.get("id")]
                     )
             return target_lists
+
+        # Check folders in space
         folders_data, _ = _api_call("GET", f"/space/{space_id}/folder")
         if folders_data:
             for f in folders_data.get("folders", []):
                 if f.get("name", "").lower() == proj_name:
-                    return [
-                        lst.get("id") for lst in f.get("lists", []) if lst.get("id")
-                    ]
+                    return [lst["id"] for lst in f.get("lists", []) if lst.get("id")]
     return []
 
 
@@ -104,14 +131,12 @@ def _fetch_all_tasks(list_ids: List[str], params: Dict) -> List[Dict]:
     for l_id in list_ids:
         page = 0
         while True:
-            p = params.copy()
-            p["page"] = page
+            p = {**params, "page": page}
             data, error = _api_call("GET", f"/list/{l_id}/task", params=p)
             if error or not data:
                 break
-            tasks = data.get("tasks", [])
-            valid_tasks = [t for t in tasks if isinstance(t, dict)]
-            all_tasks.extend(valid_tasks)
+            tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
+            all_tasks.extend(tasks)
             if len(tasks) < 100:
                 break
             page += 1
@@ -119,18 +144,18 @@ def _fetch_all_tasks(list_ids: List[str], params: Dict) -> List[Dict]:
 
 
 def _ms_to_readable(ms: Any) -> str:
-    if not ms:
-        return "N/A"
     try:
-        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime(
-            "%Y-%m-%d"
+        return (
+            datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            if ms
+            else "N/A"
         )
     except Exception:
         return "N/A"
 
 
 def _format_duration(ms: int) -> str:
-    if ms is None or ms == 0:
+    if not ms:
         return "0 min"
     seconds = ms // 1000
     if seconds < 60:
@@ -145,9 +170,18 @@ def _format_duration(ms: int) -> str:
     return f"{days} d {hours % 24} hr"
 
 
-# -----------------------------------------------------------------------------
-# Tool Registration
-# -----------------------------------------------------------------------------
+def _safe_int_from_dates(task: Dict, fields: List[str]) -> int:
+    """Safely extract max timestamp from date fields."""
+    dates = []
+    for f in fields:
+        if (val := task.get(f)) is not None:
+            try:
+                dates.append(int(val))
+            except Exception:
+                pass
+    return max(dates) if dates else 0
+
+
 def register_pm_analytics_tools(mcp: FastMCP):
     @mcp.tool()
     def get_progress_since(
@@ -156,51 +190,90 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         include_status_changes: bool = True,
     ) -> dict:
-        """
-        Get tasks completed or status changed since a given date.
-        """
+        """Get tasks completed or status changed since a given date."""
         try:
             if "T" not in since_date:
                 since_date += "T00:00:00Z"
-            dt = datetime.fromisoformat(since_date.replace("Z", "+00:00"))
-            since_ms = int(dt.timestamp() * 1000)
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            since_ms = int(
+                datetime.fromisoformat(since_date.replace("Z", "+00:00")).timestamp()
+                * 1000
+            )
+
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
+
             tasks = _fetch_all_tasks(
                 list_ids, {"date_updated_gt": since_ms, "include_closed": "true"}
             )
-            completed = []
-            status_changes = []
+            completed, status_changes = [], []
+
             for t in tasks:
-                status_info = t.get("status", {})
-                if not isinstance(status_info, dict):
+                if not isinstance(status_info := t.get("status", {}), dict):
                     continue
-                status_type = status_info.get("type", "").lower()
-                if status_type in ["closed", "done"]:
-                    completed.append(
-                        {
-                            "task_id": t.get("id"),
-                            "name": t.get("name"),
-                            "completed_at": _ms_to_readable(t.get("date_updated")),
-                        }
-                    )
-                if include_status_changes:
-                    for field in ["date_updated", "date_closed"]:
-                        ts = t.get(field)
-                        if ts and str(ts).isdigit() and int(ts) >= since_ms:
-                            status_changes.append(
+
+                status_name, status_type = (
+                    status_info.get("status", ""),
+                    status_info.get("type", ""),
+                )
+                status_category = get_status_category(status_name, status_type)
+
+                # Check completed tasks
+                if status_category in ["done", "closed"] and (
+                    date_closed := t.get("date_closed")
+                ):
+                    try:
+                        if int(date_closed) >= since_ms:
+                            completed.append(
                                 {
                                     "task_id": t.get("id"),
                                     "name": t.get("name"),
-                                    "status": status_info.get("status"),
-                                    "changed_at": _ms_to_readable(ts),
+                                    "status": status_name,
+                                    "completed_at": _ms_to_readable(date_closed),
                                 }
                             )
-                            break
+                    except Exception:
+                        pass
+
+                # Track status changes
+                if include_status_changes:
+                    if (history := t.get("status_history")) and isinstance(
+                        history, list
+                    ):
+                        for item in history:
+                            if (
+                                (change_date := item.get("date"))
+                                and str(change_date).isdigit()
+                                and int(change_date) >= since_ms
+                            ):
+                                status_changes.append(
+                                    {
+                                        "task_id": t.get("id"),
+                                        "name": t.get("name"),
+                                        "status": item.get("status"),
+                                        "changed_at": _ms_to_readable(change_date),
+                                    }
+                                )
+                    elif (
+                        (date_updated := t.get("date_updated"))
+                        and str(date_updated).isdigit()
+                        and int(date_updated) >= since_ms
+                    ):
+                        status_changes.append(
+                            {
+                                "task_id": t.get("id"),
+                                "name": t.get("name"),
+                                "status": status_name,
+                                "changed_at": _ms_to_readable(date_updated),
+                            }
+                        )
+
             return {
                 "completed_tasks": completed,
+                "total_completed": len(completed),
                 "status_changes": status_changes if include_status_changes else None,
+                "total_status_changes": len(status_changes)
+                if include_status_changes
+                else None,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -211,50 +284,62 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         group_by: str = "assignee",
     ) -> dict:
-        """
-        Analyze time tracked vs estimated for tasks and team members.
-        group_by must be one of: 'task', 'assignee', 'status'.
-        """
+        """Analyze time tracked vs estimated. Supports grouping by task, assignee, or status."""
         try:
-            allowed = {"task", "assignee", "status"}
-            if group_by not in allowed:
+            if group_by not in {"task", "assignee", "status"}:
                 return {
-                    "error": f"Invalid group_by: '{group_by}'. Must be one of {sorted(allowed)}."
+                    "error": f"Invalid group_by: '{group_by}'. Must be 'task', 'assignee', or 'status'."
                 }
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
+
             report = {}
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "true"})
-                for t in tasks:
-                    assignees = tuple(
+                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
+                    assignees = [
                         a.get("username", "Unassigned") for a in t.get("assignees", [])
-                    ) or ("Unassigned",)
+                    ] or ["Unassigned"]
+
                     if group_by == "task":
-                        key = t.get("name")
+                        keys = [t.get("name") or "Untitled Task"]
                     elif group_by == "status":
-                        key = t.get("status", {}).get("status")
-                    else:  # group_by == "assignee"
-                        key = assignees
-                    if key not in report:
-                        report[key] = {
-                            "tasks": 0,
-                            "time_tracked": 0,
-                            "time_estimate": 0,
-                        }
-                    report[key]["tasks"] += 1
-                    report[key]["time_tracked"] += t.get("time_spent") or 0
-                    report[key]["time_estimate"] += t.get("time_estimate") or 0
-            # Format time fields for readability
-            formatted_report = {}
+                        keys = [t.get("status", {}).get("status") or "Unknown"]
+                    else:  # assignee
+                        keys = assignees
+
+                    for key in keys:
+                        if key not in report:
+                            report[key] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                            }
+                        report[key]["tasks"] += 1
+                        divisor = len(assignees) if group_by == "assignee" else 1
+                        report[key]["time_tracked"] += (
+                            t.get("time_spent") or 0
+                        ) // divisor
+                        report[key]["time_estimate"] += (
+                            t.get("time_estimate") or 0
+                        ) // divisor
+
+            # Add human-readable times and efficiency
+            formatted = {}
             for key, val in report.items():
-                formatted_report[key] = {
+                efficiency = (
+                    round(val["time_tracked"] / val["time_estimate"], 2)
+                    if val["time_estimate"] > 0
+                    else None
+                )
+                formatted[key] = {
                     **val,
                     "time_tracked_human": _format_duration(val["time_tracked"]),
                     "time_estimate_human": _format_duration(val["time_estimate"]),
+                    "efficiency_ratio": efficiency,
                 }
-            return {"group_by": group_by, "report": formatted_report}
+
+            return {"group_by": group_by, "report": formatted}
         except Exception as e:
             return {"error": str(e)}
 
@@ -264,54 +349,54 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         inactive_days: int = 3,
     ) -> dict:
-        """
-        Find team members with assigned tasks but no recent activity.
-        """
+        """Find team members with assigned tasks but no recent activity."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
+
             now = int(datetime.now(timezone.utc).timestamp() * 1000)
             cutoff = now - inactive_days * 24 * 60 * 60 * 1000
             assignee_activity = {}
+
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "true"})
-                for t in tasks:
+                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
                     for a in t.get("assignees", []):
                         name = (
                             a.get("username") or a.get("email") or f"User_{a.get('id')}"
                         )
-                        # Safely get date fields as integers
-                        last_dates = []
-                        for f in ["date_updated", "date_closed"]:
-                            val = t.get(f)
-                            if val is not None:
-                                try:
-                                    intval = int(val)
-                                    last_dates.append(intval)
-                                except Exception:
-                                    continue
-                        last = max(last_dates) if last_dates else 0
-                        if (
-                            name not in assignee_activity
-                            or last > assignee_activity[name]["last_activity"]
-                        ):
+                        last = _safe_int_from_dates(t, ["date_updated", "date_closed"])
+
+                        if name not in assignee_activity:
                             assignee_activity[name] = {
                                 "task_count": 0,
-                                "last_activity": last,
+                                "last_activity": 0,
                             }
+
+                        if last > assignee_activity[name]["last_activity"]:
+                            assignee_activity[name]["last_activity"] = last
                         assignee_activity[name]["task_count"] += 1
+
             inactive = [
                 {
                     "assignee": k,
                     "task_count": v["task_count"],
                     "last_activity": v["last_activity"],
                     "last_activity_human": _ms_to_readable(v["last_activity"]),
+                    "days_inactive": int(
+                        (now - v["last_activity"]) / (1000 * 60 * 60 * 24)
+                    )
+                    if v["last_activity"] > 0
+                    else None,
                 }
                 for k, v in assignee_activity.items()
                 if v["last_activity"] < cutoff
             ]
-            return {"inactive_assignees": inactive}
+
+            return {
+                "inactive_assignees": inactive,
+                "total_inactive": len(inactive),
+                "inactive_threshold_days": inactive_days,
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -321,30 +406,81 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         status_filter: str = "in_progress",
     ) -> dict:
-        """
-        Find tasks with no time logged (time tracking compliance).
-        """
+        """Find tasks with no time logged. Filters: 'all', 'in_progress', 'closed'."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if status_filter not in {"all", "in_progress", "closed"}:
+                return {
+                    "error": f"Invalid status_filter: '{status_filter}'. Must be 'all', 'in_progress', or 'closed'."
+                }
+
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
-            untracked = []
+
+            untracked, total_checked, status_breakdown = [], 0, {}
+            include_closed = "true" if status_filter == "closed" else "false"
+
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "false"})
-                for t in tasks:
-                    status = t.get("status", {}).get("status", "")
-                    # Only consider as tracked if time_spent > 0, else untracked
-                    if (status_filter == "all" or status == status_filter):
-                        time_spent = t.get("time_spent")
-                        if not (time_spent > 0):
+                for t in _fetch_all_tasks([lid], {"include_closed": include_closed}):
+                    status_info = t.get("status", {})
+                    status_name, status_type = (
+                        status_info.get("status", ""),
+                        status_info.get("type", ""),
+                    )
+                    status_category = get_status_category(status_name, status_type)
+
+                    # Apply filter
+                    should_check = (
+                        status_filter == "all"
+                        or (
+                            status_filter == "in_progress"
+                            and status_category == "active"
+                        )
+                        or (
+                            status_filter == "closed"
+                            and status_category in ["done", "closed"]
+                        )
+                    )
+
+                    if should_check:
+                        total_checked += 1
+                        if status_name not in status_breakdown:
+                            status_breakdown[status_name] = {
+                                "category": status_category,
+                                "total": 0,
+                                "untracked": 0,
+                            }
+                        status_breakdown[status_name]["total"] += 1
+
+                        if not (t.get("time_spent") and t.get("time_spent") > 0):
+                            status_breakdown[status_name]["untracked"] += 1
                             untracked.append(
                                 {
                                     "task_id": t.get("id"),
                                     "name": t.get("name"),
-                                    "status": status,
+                                    "status": status_name,
+                                    "status_category": status_category,
+                                    "assignees": [
+                                        a.get("username")
+                                        for a in t.get("assignees", [])
+                                    ],
                                 }
                             )
-            return {"untracked_tasks": untracked, "total_untracked": len(untracked)}
+
+            compliance_rate = (
+                round((total_checked - len(untracked)) / total_checked * 100, 1)
+                if total_checked > 0
+                else 0
+            )
+
+            return {
+                "untracked_tasks": untracked,
+                "total_untracked": len(untracked),
+                "total_checked": total_checked,
+                "compliance_rate": f"{compliance_rate}%",
+                "status_filter": status_filter,
+                "status_breakdown": status_breakdown,
+                "note": "Statuses auto-categorize. Unknown statuses appear as 'other'.",
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -354,36 +490,46 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         stale_days: int = 7,
     ) -> dict:
-        """
-        Find tasks not updated in X days (forgotten or stuck work).
-        """
+        """Find tasks not updated in X days (forgotten or stuck work)."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
+
             now = int(datetime.now(timezone.utc).timestamp() * 1000)
             cutoff = now - stale_days * 24 * 60 * 60 * 1000
             stale = []
+
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "false"})
-                for t in tasks:
-                    last = max(
-                        [
-                            t.get(f)
-                            for f in ["date_updated", "date_closed"]
-                            if t.get(f) and str(t.get(f)).isdigit()
-                        ]
-                        or [0]
-                    )
+                for t in _fetch_all_tasks([lid], {"include_closed": "false"}):
+                    last = _safe_int_from_dates(t, ["date_updated", "date_closed"])
+
                     if last < cutoff:
+                        status_info = t.get("status", {})
+                        status_name, status_type = (
+                            status_info.get("status", ""),
+                            status_info.get("type", ""),
+                        )
                         stale.append(
                             {
                                 "task_id": t.get("id"),
                                 "name": t.get("name"),
+                                "status": status_name,
+                                "status_category": get_status_category(
+                                    status_name, status_type
+                                ),
                                 "last_update": last,
+                                "last_update_human": _ms_to_readable(last),
+                                "days_stale": int((now - last) / (1000 * 60 * 60 * 24))
+                                if last > 0
+                                else None,
                             }
                         )
-            return {"stale_tasks": stale, "total_stale": len(stale)}
+
+            return {
+                "stale_tasks": stale,
+                "total_stale": len(stale),
+                "stale_threshold_days": stale_days,
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -391,28 +537,94 @@ def register_pm_analytics_tools(mcp: FastMCP):
     def get_estimation_accuracy(
         project: Optional[str] = None, list_id: Optional[str] = None
     ) -> dict:
-        """
-        Analyze how accurate time estimates are vs actual time spent.
-        """
+        """Analyze estimation accuracy with recommendations and metrics."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
             total_est, total_spent, count = 0, 0, 0
+            overestimated, underestimated, accurate = 0, 0, 0
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "true"})
-                for t in tasks:
+                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
                     est, spent = t.get("time_estimate") or 0, t.get("time_spent") or 0
                     if est > 0:
                         total_est += est
                         total_spent += spent
                         count += 1
-            accuracy = (total_spent / total_est) if total_est else None
-            return {
+                        ratio = spent / est
+                        if ratio < 0.8:
+                            overestimated += 1
+                        elif ratio > 1.2:
+                            underestimated += 1
+                        else:
+                            accurate += 1
+            metrics = {
                 "tasks_with_estimates": count,
                 "total_estimate": total_est,
+                "total_estimate_human": _format_duration(total_est),
                 "total_spent": total_spent,
-                "accuracy_ratio": accuracy,
+                "total_spent_human": _format_duration(total_spent),
+                "task_breakdown": {
+                    "accurate": accurate,
+                    "under_estimated": underestimated,
+                    "over_estimated": overestimated,
+                },
+            }
+            if count == 0:
+                return {
+                    **metrics,
+                    "message": "No tasks with time estimates found",
+                    "accuracy_ratio": None,
+                    "variance_percentage": None,
+                    "accuracy_rating": None,
+                    "recommendations": [
+                        "Start adding time estimates to track accuracy"
+                    ],
+                }
+            accuracy_ratio = round(total_spent / total_est, 2)
+            variance_pct = round(((total_spent - total_est) / total_est) * 100, 1)
+            # Generate rating and recommendations
+            if accuracy_ratio < 0.8:
+                rating = "Over-estimated"
+                recs = [
+                    f"Tasks taking {abs(variance_pct)}% less time than estimated",
+                    "Consider reducing estimates",
+                    "Teams may be overestimating or very efficient",
+                ]
+            elif accuracy_ratio > 1.5:
+                rating = "Severely under-estimated"
+                recs = [
+                    f"Tasks taking {variance_pct}% MORE time than estimated",
+                    "CRITICAL: Review estimation process",
+                    "Break tasks into smaller units",
+                    "May indicate scope creep or unforeseen complexity",
+                ]
+            elif accuracy_ratio > 1.2:
+                rating = "Under-estimated"
+                recs = [
+                    f"Tasks taking {variance_pct}% more time than estimated",
+                    "Increase estimates by 20-30%",
+                    "Account for interruptions and context switching",
+                ]
+            elif 0.9 <= accuracy_ratio <= 1.1:
+                rating = "Excellent"
+                recs = [
+                    f"Within {abs(variance_pct)}% - very accurate!",
+                    "Continue current practices",
+                ]
+            else:
+                rating = "Good"
+                recs = [f"Within {abs(variance_pct)}%", "Minor adjustments may help"]
+            if count >= 10:
+                recs.append(
+                    f"Task breakdown: {round(accurate / count * 100, 1)}% accurate, "
+                    f"{round(underestimated / count * 100, 1)}% under, {round(overestimated / count * 100, 1)}% over"
+                )
+            return {
+                **metrics,
+                "accuracy_ratio": accuracy_ratio,
+                "variance_percentage": variance_pct,
+                "accuracy_rating": rating,
+                "recommendations": recs,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -421,37 +633,42 @@ def register_pm_analytics_tools(mcp: FastMCP):
     def get_at_risk_tasks(
         project: Optional[str] = None, list_id: Optional[str] = None, risk_days: int = 3
     ) -> dict:
-        """
-        Find tasks that are overdue or at risk of missing deadline.
-        """
+        """Find overdue/at-risk tasks categorized by urgency (spec requirement)."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
             now = int(datetime.now(timezone.utc).timestamp() * 1000)
-            at_risk = []
+            overdue, at_risk = [], []
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "false"})
-                for t in tasks:
-                    due = t.get("due_date")
-                    if due and str(due).isdigit():
-                        due_ts = int(due)
-                        days_left = int((due_ts - now) / (1000 * 60 * 60 * 24))
-                        if days_left < 0:
-                            urgency = "overdue"
-                        elif days_left <= risk_days:
-                            urgency = "at_risk"
-                        else:
-                            continue
-                        at_risk.append(
-                            {
-                                "task_id": t.get("id"),
-                                "name": t.get("name"),
-                                "due_in_days": days_left,
-                                "urgency": urgency,
-                            }
+                for t in _fetch_all_tasks([lid], {"include_closed": "false"}):
+                    if (due := t.get("due_date")) and str(due).isdigit():
+                        days_left = int((int(due) - now) / (1000 * 60 * 60 * 24))
+                        status_info = t.get("status", {})
+                        status_name, status_type = (
+                            status_info.get("status", ""),
+                            status_info.get("type", ""),
                         )
-            return {"at_risk_tasks": at_risk, "total_at_risk": len(at_risk)}
+                        task_data = {
+                            "task_id": t.get("id"),
+                            "name": t.get("name"),
+                            "status": status_name,
+                            "status_category": get_status_category(
+                                status_name, status_type
+                            ),
+                            "due_in_days": days_left,
+                            "urgency": "overdue" if days_left < 0 else "at_risk",
+                        }
+                        if days_left < 0:
+                            overdue.append(task_data)
+                        elif days_left <= risk_days:
+                            at_risk.append(task_data)
+            return {
+                "overdue": {"tasks": overdue, "count": len(overdue)},
+                "at_risk": {"tasks": at_risk, "count": len(at_risk)},
+                "total_at_risk": len(overdue) + len(at_risk),
+                "risk_threshold_days": risk_days,
+                "urgency_breakdown": f"{len(overdue)} overdue, {len(at_risk)} at-risk",
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -459,20 +676,68 @@ def register_pm_analytics_tools(mcp: FastMCP):
     def get_status_summary(
         project: Optional[str] = None, list_id: Optional[str] = None
     ) -> dict:
-        """
-        Quick status rollup for stakeholder updates.
-        """
+        """Status summary with metrics and health indicators (spec requirement)."""
         try:
-            list_ids = _resolve_to_list_ids(project, list_id)
-            if not list_ids:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
-            status_count, total = {}, 0
+
+            status_count, category_count = (
+                {},
+                {"not_started": 0, "active": 0, "done": 0, "closed": 0, "other": 0},
+            )
+            total = 0
+
             for lid in list_ids:
-                tasks = _fetch_all_tasks([lid], {"include_closed": "true"})
-                for t in tasks:
-                    status = t.get("status", {}).get("status", "Unknown")
-                    status_count[status] = status_count.get(status, 0) + 1
+                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
+                    status_info = t.get("status", {})
+                    status_name, status_type = (
+                        status_info.get("status", "Unknown"),
+                        status_info.get("type", ""),
+                    )
+                    status_count[status_name] = status_count.get(status_name, 0) + 1
+                    category = get_status_category(status_name, status_type)
+                    category_count[category] += 1
                     total += 1
-            return {"total_tasks": total, "status_breakdown": status_count}
+
+            # Health indicators
+            active_pct = (
+                round(category_count["active"] / total * 100, 1) if total > 0 else 0
+            )
+            done_pct = (
+                round(category_count["done"] / total * 100, 1) if total > 0 else 0
+            )
+            not_started_pct = (
+                round(category_count["not_started"] / total * 100, 1)
+                if total > 0
+                else 0
+            )
+
+            # Determine health
+            if active_pct > 60:
+                health = "At Risk - Too many active tasks"
+            elif active_pct < 20 and not_started_pct > 50:
+                health = "Needs Attention - Many tasks not started"
+            elif done_pct > 50:
+                health = "Good - High completion rate"
+            else:
+                health = "Normal - Balanced distribution"
+
+            return {
+                "total_tasks": total,
+                "status_breakdown": status_count,
+                "category_breakdown": category_count,
+                "health_indicators": {
+                    "overall_health": health,
+                    "active_percentage": f"{active_pct}%",
+                    "done_percentage": f"{done_pct}%",
+                    "not_started_percentage": f"{not_started_pct}%",
+                },
+                "metrics": {
+                    "completion_rate": f"{done_pct}%",
+                    "work_in_progress": category_count["active"],
+                    "backlog_size": category_count["not_started"],
+                },
+                "note": "Categories auto-adapt. Unknown statuses appear as 'other'.",
+            }
         except Exception as e:
             return {"error": str(e)}
