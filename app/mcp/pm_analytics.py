@@ -1,12 +1,15 @@
 """
-PM Analytics Module for ClickUp MCP Server - Optimized Version
-Implements all 8 analytics tools with full spec compliance.
+PM Analytics Module for ClickUp MCP Server - FINAL REFACTOR
+Features:
+1. Deep Nesting Fix: Uses 'subtasks=true' to fetch all levels flattened.
+2. Centralized Math: '_calculate_task_metrics' helper powers ALL reports.
+3. Estimation Accuracy: Properly implemented using bottom-up sums to avoid double counting.
 """
 
+from fastmcp import FastMCP
 import requests
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
-from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
 try:
@@ -14,7 +17,7 @@ try:
 except ImportError:
     CLICKUP_TEAM_ID = None
 
-# Status configuration - add new statuses here as discovered
+# Status configuration
 STATUS_CATEGORIES = {
     "not_started": ["BACKLOG", "QUEUED", "TO DO", "IN PLANNING"],
     "active": [
@@ -39,13 +42,10 @@ STATUS_TO_CATEGORY = {
 
 
 def get_status_category(status_name: str, status_type: str = None) -> str:
-    """Smart status categorization with 3-tier fallback."""
     if not status_name:
         return "other"
-    # Priority 1: Custom mapping
     if cat := STATUS_TO_CATEGORY.get(status_name.upper()):
         return cat
-    # Priority 2: ClickUp native type
     if status_type:
         type_map = {"closed": "closed", "open": "not_started", "custom": "active"}
         if cat := type_map.get(status_type.lower()):
@@ -73,7 +73,7 @@ def _api_call(
         return (
             (response.json(), None)
             if response.status_code == 200
-            else (None, f"API Error {response.status_code}: {response.text}")
+            else (None, f"API Error {response.status_code}")
         )
     except Exception as e:
         return None, str(e)
@@ -91,18 +91,16 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
         return [list_id]
     if not project:
         return []
+
     team_id = _get_team_id()
     spaces_data, error = _api_call("GET", f"/team/{team_id}/space")
     if error or not spaces_data:
         return []
 
-    target_lists = []
-    proj_name = project.lower().strip()
+    target_lists, proj_name = [], project.lower().strip()
 
     for space in spaces_data.get("spaces", []):
         space_id, space_name = space["id"], space.get("name", "")
-
-        # Check if space matches project name
         if space_name.lower() == proj_name:
             lists_data, _ = _api_call("GET", f"/space/{space_id}/list")
             if lists_data:
@@ -117,7 +115,6 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
                     )
             return target_lists
 
-        # Check folders in space
         folders_data, _ = _api_call("GET", f"/space/{space_id}/folder")
         if folders_data:
             for f in folders_data.get("folders", []):
@@ -126,20 +123,47 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
     return []
 
 
-def _fetch_all_tasks(list_ids: List[str], params: Dict) -> List[Dict]:
+def _fetch_all_tasks(list_ids: List[str], base_params: Dict) -> List[Dict]:
+    """
+    Fetch ALL tasks including deeply nested subtasks using the flattened API approach.
+    Fetches both Open and Archived tasks to ensure complete time history.
+    """
     all_tasks = []
-    for l_id in list_ids:
-        page = 0
-        while True:
-            p = {**params, "page": page}
-            data, error = _api_call("GET", f"/list/{l_id}/task", params=p)
-            if error or not data:
-                break
-            tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
-            all_tasks.extend(tasks)
-            if len(tasks) < 100:
-                break
-            page += 1
+    seen_ids = set()
+
+    # We must fetch twice: once for active tasks, once for archived (closed) tasks
+    flags = [False, True]
+
+    for list_id in list_ids:
+        for is_archived in flags:
+            page = 0
+            while True:
+                # Params: subtasks=true forces ClickUp to return nested tasks in the main list
+                params = {
+                    **base_params,
+                    "page": page,
+                    "subtasks": "true",
+                    "archived": str(is_archived).lower(),
+                }
+
+                data, error = _api_call("GET", f"/list/{list_id}/task", params=params)
+
+                if error or not data:
+                    break
+
+                tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
+                if not tasks:
+                    break
+
+                for t in tasks:
+                    if t.get("id") not in seen_ids:
+                        seen_ids.add(t.get("id"))
+                        all_tasks.append(t)
+
+                if len(tasks) < 100:
+                    break
+                page += 1
+
     return all_tasks
 
 
@@ -157,7 +181,7 @@ def _ms_to_readable(ms: Any) -> str:
 def _format_duration(ms: int) -> str:
     if not ms:
         return "0 min"
-    seconds = ms // 1000
+    seconds = int(ms) // 1000
     if seconds < 60:
         return f"{seconds} sec"
     minutes = seconds // 60
@@ -171,7 +195,6 @@ def _format_duration(ms: int) -> str:
 
 
 def _safe_int_from_dates(task: Dict, fields: List[str]) -> int:
-    """Safely extract max timestamp from date fields."""
     dates = []
     for f in fields:
         if (val := task.get(f)) is not None:
@@ -182,7 +205,424 @@ def _safe_int_from_dates(task: Dict, fields: List[str]) -> int:
     return max(dates) if dates else 0
 
 
+def _calculate_task_metrics(all_tasks: List[Dict]) -> Dict[str, Dict[str, int]]:
+    """
+    CORE HELPER: Robust Bottom-Up Calculation.
+    Builds a map of accurate time metrics for ALL tasks.
+    Returns: { task_id: { 'tracked_total': int, 'tracked_direct': int, 'est_total': int, 'est_direct': int } }
+    """
+    task_map = {t["id"]: t for t in all_tasks}
+
+    # Build adjacency list (Parent -> Children)
+    children_map = {}
+    for t in all_tasks:
+        pid = t.get("parent")
+        if pid:
+            if pid not in children_map:
+                children_map[pid] = []
+            children_map[pid].append(t["id"])
+
+    cache = {}
+
+    def get_values(tid):
+        if tid in cache:
+            return cache[tid]
+
+        task_obj = task_map.get(tid, {})
+        # Safe fallback if task exists in parent ref but not in fetched list
+        if not task_obj:
+            return (0, 0, 0, 0)
+
+        # Raw API values
+        api_tracked = int(task_obj.get("time_spent") or 0)
+        api_est = int(task_obj.get("time_estimate") or 0)
+
+        # Recursively sum children
+        sum_child_total_tracked = 0
+        sum_child_total_est = 0
+
+        for cid in children_map.get(tid, []):
+            c_track, _, c_est, _ = get_values(cid)
+            sum_child_total_tracked += c_track
+            sum_child_total_est += c_est
+
+        # --- Calculate Direct Tracked ---
+        # If API Time > Children Sum, the difference is Direct Time.
+        # If API Time <= Children Sum, we assume API is returning a rollup and Direct is 0.
+        if api_tracked < sum_child_total_tracked:
+            direct_tracked = api_tracked
+        else:
+            direct_tracked = api_tracked - sum_child_total_tracked
+        direct_tracked = max(0, direct_tracked)
+
+        # --- Calculate Direct Estimate ---
+        # Same logic ensures we don't double count estimates in rollups
+        if api_est < sum_child_total_est:
+            direct_est = api_est
+        else:
+            direct_est = api_est - sum_child_total_est
+        direct_est = max(0, direct_est)
+
+        # True Rollup (Calculated fresh to ensure accuracy)
+        true_total_tracked = direct_tracked + sum_child_total_tracked
+        true_total_est = direct_est + sum_child_total_est
+
+        result = (true_total_tracked, direct_tracked, true_total_est, direct_est)
+        cache[tid] = result
+        return result
+
+    # Compute for all tasks
+    for tid in task_map:
+        get_values(tid)
+
+    # Convert tuple to dict
+    final_map = {}
+    for tid, res in cache.items():
+        final_map[tid] = {
+            "tracked_total": res[0],
+            "tracked_direct": res[1],
+            "est_total": res[2],
+            "est_direct": res[3],
+        }
+    return final_map
+
+
 def register_pm_analytics_tools(mcp: FastMCP):
+    @mcp.tool()
+    def get_time_tracking_report(
+        project: Optional[str] = None,
+        list_id: Optional[str] = None,
+        group_by: str = "assignee",
+    ) -> dict:
+        """
+        Analyze time tracked vs estimated.
+        Uses bottom-up logic to calculate DIRECT time per task, ensuring project totals are accurate.
+        """
+        try:
+            if group_by not in {"task", "assignee", "status"}:
+                return {
+                    "error": f"Invalid group_by: '{group_by}'. Must be 'task', 'assignee', or 'status'."
+                }
+
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
+                return {"error": f"No context found for '{project or list_id}'"}
+
+            # 1. Fetch EVERYTHING (Active + Closed, Nested)
+            all_tasks = _fetch_all_tasks(list_ids, {})
+
+            # 2. Run calculation engine
+            metrics_map = _calculate_task_metrics(all_tasks)
+
+            report = {}
+            total_tasks_with_time = 0
+
+            for t in all_tasks:
+                metrics = metrics_map.get(t["id"], {})
+
+                # We use DIRECT time for reports to avoid double counting
+                direct_time = metrics.get("tracked_direct", 0)
+                direct_est = metrics.get("est_direct", 0)
+
+                # Skip if no activity (and no estimate to burn down)
+                if direct_time == 0 and direct_est == 0:
+                    continue
+
+                total_tasks_with_time += 1 if direct_time > 0 else 0
+
+                assignees = [
+                    a.get("username", "Unassigned") for a in t.get("assignees", [])
+                ] or ["Unassigned"]
+
+                if group_by == "task":
+                    keys = [t.get("name") or "Untitled Task"]
+                elif group_by == "status":
+                    keys = [t.get("status", {}).get("status") or "Unknown"]
+                else:  # assignee
+                    keys = assignees
+
+                for key in keys:
+                    if key not in report:
+                        report[key] = {
+                            "tasks": 0,
+                            "time_tracked": 0,
+                            "time_estimate": 0,
+                        }
+
+                    report[key]["tasks"] += 1
+
+                    # Distribute proportionally if multiple assignees
+                    divisor = len(assignees) if group_by == "assignee" else 1
+                    report[key]["time_tracked"] += direct_time // divisor
+                    report[key]["time_estimate"] += direct_est // divisor
+
+            # Format output
+            formatted = {}
+            for key, val in report.items():
+                efficiency = (
+                    round(val["time_tracked"] / val["time_estimate"] * 100)
+                    if val["time_estimate"] > 0
+                    else None
+                )
+                formatted[key] = {
+                    **val,
+                    "time_tracked_human": _format_duration(val["time_tracked"]),
+                    "time_estimate_human": _format_duration(val["time_estimate"]),
+                    "efficiency": f"{efficiency}%" if efficiency is not None else "N/A",
+                }
+
+            return {
+                "group_by": group_by,
+                "report": formatted,
+                "meta": {
+                    "total_tasks_scanned": len(all_tasks),
+                    "tasks_with_activity": total_tasks_with_time,
+                    "note": "Report uses Direct Time (Total - Subtasks) to prevent double-counting.",
+                },
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_task_time_breakdown(task_id: str) -> dict:
+        """
+        Get a detailed time breakdown (TRACKED vs ESTIMATED) for a specific task hierarchy.
+        Shows the 'True Rollup' calculated bottom-up using the shared metrics helper.
+        """
+        try:
+            # 1. Fetch task context
+            root_task, err = _api_call("GET", f"/task/{task_id}")
+            if err:
+                return {"error": f"Could not fetch task {task_id}: {err}"}
+
+            # 2. Fetch all tasks in list
+            list_id = root_task["list"]["id"]
+            all_list_tasks = _fetch_all_tasks([list_id], {})
+
+            # 3. Calculate metrics using shared helper
+            metrics_map = _calculate_task_metrics(all_list_tasks)
+
+            # 4. Build Tree View
+            task_map = {t["id"]: t for t in all_list_tasks}
+            children_map = {}
+            for t in all_list_tasks:
+                pid = t.get("parent")
+                if pid:
+                    if pid not in children_map:
+                        children_map[pid] = []
+                    children_map[pid].append(t["id"])
+
+            tree_view = []
+
+            def build_tree_view(tid, depth=0):
+                t = task_map.get(tid)
+                if not t:
+                    return
+
+                m = metrics_map.get(tid, {})
+                r_track = m.get("tracked_total", 0)
+                d_track = m.get("tracked_direct", 0)
+                r_est = m.get("est_total", 0)
+
+                indent = "  " * depth
+                icon = "📂" if tid in children_map else "📄"
+
+                # Only show interesting rows
+                if r_track > 0 or r_est > 0 or tid in children_map:
+                    efficiency = (
+                        f"{round(r_track / r_est * 100)}%" if r_est > 0 else "-"
+                    )
+                    tree_view.append(
+                        {
+                            "task": f"{indent}{icon} {t.get('name')}",
+                            "status": t.get("status", {}).get("status"),
+                            "tracked_direct": _format_duration(d_track),
+                            "tracked_total": _format_duration(r_track),
+                            "estimated_total": _format_duration(r_est),
+                            "efficiency": efficiency,
+                            "assignees": [
+                                u["username"] for u in t.get("assignees", [])
+                            ],
+                        }
+                    )
+
+                for cid in children_map.get(tid, []):
+                    build_tree_view(cid, depth + 1)
+
+            build_tree_view(task_id)
+
+            root_m = metrics_map.get(task_id, {})
+            root_total_tracked = root_m.get("tracked_total", 0)
+            root_total_est = root_m.get("est_total", 0)
+            root_eff = (
+                f"{round(root_total_tracked / root_total_est * 100)}%"
+                if root_total_est > 0
+                else "N/A"
+            )
+
+            return {
+                "root_task": root_task.get("name"),
+                "totals": {
+                    "time_tracked": _format_duration(root_total_tracked),
+                    "time_estimated": _format_duration(root_total_est),
+                    "efficiency": root_eff,
+                },
+                "breakdown_tree": tree_view,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_estimation_accuracy(
+        project: Optional[str] = None, list_id: Optional[str] = None
+    ) -> dict:
+        """
+        Analyze estimation accuracy.
+        Includes 'Unestimated Work' to ensure Total Spent matches the full project time.
+        """
+        try:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
+                return {"error": f"No context found for '{project or list_id}'"}
+
+            all_tasks = _fetch_all_tasks(list_ids, {})
+            metrics_map = _calculate_task_metrics(all_tasks)
+
+            # Buckets
+            est_buckets = {"total_est": 0, "spent_on_est": 0}
+            unest_buckets = {"spent_on_unest": 0, "tasks": 0}
+
+            # Accuracy Counters
+            over, under, accurate = 0, 0, 0
+            tasks_analyzed = 0
+
+            for t in all_tasks:
+                m = metrics_map.get(t["id"], {})
+                direct_time = m.get("tracked_direct", 0)
+                direct_est = m.get("est_direct", 0)
+
+                # Scenario A: Task has an Estimate (We can measure accuracy)
+                if direct_est > 0:
+                    est_buckets["total_est"] += direct_est
+                    est_buckets["spent_on_est"] += direct_time
+                    tasks_analyzed += 1
+
+                    if direct_time > 0:
+                        ratio = direct_time / direct_est
+                        if ratio < 0.8:
+                            over += 1
+                        elif ratio > 1.2:
+                            under += 1
+                        else:
+                            accurate += 1
+                    else:
+                        # Estimate exists but 0 time spent (Over-estimated / Not Started)
+                        over += 1
+
+                # Scenario B: Task has Time but NO Estimate (Unplanned Work)
+                elif direct_time > 0:
+                    unest_buckets["spent_on_unest"] += direct_time
+                    unest_buckets["tasks"] += 1
+
+            # Totals
+            total_project_spent = (
+                est_buckets["spent_on_est"] + unest_buckets["spent_on_unest"]
+            )
+
+            if est_buckets["total_est"] == 0:
+                return {"message": "No tasks with time estimates found"}
+
+            # Calculate Accuracy Metrics only on the estimated portion
+            accuracy_ratio = round(
+                est_buckets["spent_on_est"] / est_buckets["total_est"], 2
+            )
+            variance_pct = round(
+                (
+                    (est_buckets["spent_on_est"] - est_buckets["total_est"])
+                    / est_buckets["total_est"]
+                )
+                * 100,
+                1,
+            )
+
+            if accuracy_ratio < 0.8:
+                rating = "Over-estimated (Under-utilized)"
+            elif accuracy_ratio > 1.5:
+                rating = "Severely under-estimated"
+            elif accuracy_ratio > 1.2:
+                rating = "Under-estimated"
+            else:
+                rating = "Good"
+
+            return {
+                "tasks_analyzed": tasks_analyzed,
+                "project_totals": {
+                    "total_estimate": _format_duration(est_buckets["total_est"]),
+                    "total_spent_all": _format_duration(total_project_spent),
+                    "spent_on_estimated_tasks": _format_duration(
+                        est_buckets["spent_on_est"]
+                    ),
+                    "spent_on_unestimated_tasks": _format_duration(
+                        unest_buckets["spent_on_unest"]
+                    ),
+                },
+                "accuracy_metrics": {
+                    "ratio": accuracy_ratio,
+                    "variance": f"{variance_pct}%",
+                    "rating": rating,
+                },
+                "breakdown": {"accurate": accurate, "under": under, "over": over},
+                "unestimated_items": unest_buckets["tasks"],
+                "note": "Total Spent All includes work done on tasks that had no estimate set.",
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_untracked_tasks(
+        project: Optional[str] = None,
+        list_id: Optional[str] = None,
+        status_filter: str = "in_progress",
+    ) -> dict:
+        """Find tasks with no time logged (Direct Time = 0)."""
+        try:
+            if not (list_ids := _resolve_to_list_ids(project, list_id)):
+                return {"error": f"No context found for '{project or list_id}'"}
+
+            all_tasks = _fetch_all_tasks(list_ids, {})
+            metrics_map = _calculate_task_metrics(all_tasks)
+
+            untracked = []
+
+            for t in all_tasks:
+                status_info = t.get("status", {})
+                status_cat = get_status_category(
+                    status_info.get("status", ""), status_info.get("type", "")
+                )
+
+                should_check = (
+                    (status_filter == "all")
+                    or (status_filter == "in_progress" and status_cat == "active")
+                    or (status_filter == "closed" and status_cat in ["done", "closed"])
+                )
+
+                if should_check:
+                    m = metrics_map.get(t["id"], {})
+                    # We check if DIRECT time is 0.
+                    # If a parent has 0 direct time but children have time, it is NOT untracked (it's just a container).
+                    if m.get("tracked_direct", 0) == 0:
+                        untracked.append(
+                            {
+                                "name": t.get("name"),
+                                "status": status_info.get("status"),
+                                "assignees": [
+                                    a.get("username") for a in t.get("assignees", [])
+                                ],
+                            }
+                        )
+
+            return {"untracked_tasks": untracked, "total_untracked": len(untracked)}
+        except Exception as e:
+            return {"error": str(e)}
+
     @mcp.tool()
     def get_progress_since(
         since_date: str,
@@ -202,30 +642,25 @@ def register_pm_analytics_tools(mcp: FastMCP):
             if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
 
-            tasks = _fetch_all_tasks(
-                list_ids, {"date_updated_gt": since_ms, "include_closed": "true"}
-            )
+            tasks = _fetch_all_tasks(list_ids, {"date_updated_gt": since_ms})
             completed, status_changes = [], []
 
             for t in tasks:
                 if not isinstance(status_info := t.get("status", {}), dict):
                     continue
 
-                status_name, status_type = (
-                    status_info.get("status", ""),
-                    status_info.get("type", ""),
+                status_name = status_info.get("status", "")
+                status_cat = get_status_category(
+                    status_name, status_info.get("type", "")
                 )
-                status_category = get_status_category(status_name, status_type)
 
-                # Check completed tasks
-                if status_category in ["done", "closed"] and (
+                if status_cat in ["done", "closed"] and (
                     date_closed := t.get("date_closed")
                 ):
                     try:
                         if int(date_closed) >= since_ms:
                             completed.append(
                                 {
-                                    "task_id": t.get("id"),
                                     "name": t.get("name"),
                                     "status": status_name,
                                     "completed_at": _ms_to_readable(date_closed),
@@ -234,33 +669,12 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     except Exception:
                         pass
 
-                # Track status changes
                 if include_status_changes:
-                    if (history := t.get("status_history")) and isinstance(
-                        history, list
-                    ):
-                        for item in history:
-                            if (
-                                (change_date := item.get("date"))
-                                and str(change_date).isdigit()
-                                and int(change_date) >= since_ms
-                            ):
-                                status_changes.append(
-                                    {
-                                        "task_id": t.get("id"),
-                                        "name": t.get("name"),
-                                        "status": item.get("status"),
-                                        "changed_at": _ms_to_readable(change_date),
-                                    }
-                                )
-                    elif (
-                        (date_updated := t.get("date_updated"))
-                        and str(date_updated).isdigit()
-                        and int(date_updated) >= since_ms
-                    ):
+                    if (date_updated := t.get("date_updated")) and int(
+                        date_updated
+                    ) >= since_ms:
                         status_changes.append(
                             {
-                                "task_id": t.get("id"),
                                 "name": t.get("name"),
                                 "status": status_name,
                                 "changed_at": _ms_to_readable(date_updated),
@@ -271,75 +685,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 "completed_tasks": completed,
                 "total_completed": len(completed),
                 "status_changes": status_changes if include_status_changes else None,
-                "total_status_changes": len(status_changes)
-                if include_status_changes
-                else None,
             }
-        except Exception as e:
-            return {"error": str(e)}
-
-    @mcp.tool()
-    def get_time_tracking_report(
-        project: Optional[str] = None,
-        list_id: Optional[str] = None,
-        group_by: str = "assignee",
-    ) -> dict:
-        """Analyze time tracked vs estimated. Supports grouping by task, assignee, or status."""
-        try:
-            if group_by not in {"task", "assignee", "status"}:
-                return {
-                    "error": f"Invalid group_by: '{group_by}'. Must be 'task', 'assignee', or 'status'."
-                }
-
-            if not (list_ids := _resolve_to_list_ids(project, list_id)):
-                return {"error": f"No context found for '{project or list_id}'"}
-
-            report = {}
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
-                    assignees = [
-                        a.get("username", "Unassigned") for a in t.get("assignees", [])
-                    ] or ["Unassigned"]
-
-                    if group_by == "task":
-                        keys = [t.get("name") or "Untitled Task"]
-                    elif group_by == "status":
-                        keys = [t.get("status", {}).get("status") or "Unknown"]
-                    else:  # assignee
-                        keys = assignees
-
-                    for key in keys:
-                        if key not in report:
-                            report[key] = {
-                                "tasks": 0,
-                                "time_tracked": 0,
-                                "time_estimate": 0,
-                            }
-                        report[key]["tasks"] += 1
-                        divisor = len(assignees) if group_by == "assignee" else 1
-                        report[key]["time_tracked"] += (
-                            t.get("time_spent") or 0
-                        ) // divisor
-                        report[key]["time_estimate"] += (
-                            t.get("time_estimate") or 0
-                        ) // divisor
-
-            # Add human-readable times and efficiency
-            formatted = {}
-            for key, val in report.items():
-                efficiency = (
-                    round(val["time_tracked"] / val["time_estimate"], 2)
-                    if val["time_estimate"] > 0
-                    else None
-                )
-                formatted[key] = {
-                    **val,
-                    "time_tracked_human": _format_duration(val["time_tracked"]),
-                    "time_estimate_human": _format_duration(val["time_estimate"]),
-                    "efficiency_ratio": efficiency,
-                }
-
-            return {"group_by": group_by, "report": formatted}
         except Exception as e:
             return {"error": str(e)}
 
@@ -358,30 +704,29 @@ def register_pm_analytics_tools(mcp: FastMCP):
             cutoff = now - inactive_days * 24 * 60 * 60 * 1000
             assignee_activity = {}
 
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
-                    for a in t.get("assignees", []):
-                        name = (
-                            a.get("username") or a.get("email") or f"User_{a.get('id')}"
-                        )
-                        last = _safe_int_from_dates(t, ["date_updated", "date_closed"])
+            tasks = _fetch_all_tasks(list_ids, {})
 
-                        if name not in assignee_activity:
-                            assignee_activity[name] = {
-                                "task_count": 0,
-                                "last_activity": 0,
-                            }
+            for t in tasks:
+                for a in t.get("assignees", []):
+                    name = a.get("username") or a.get("email") or f"User_{a.get('id')}"
+                    last = _safe_int_from_dates(t, ["date_updated", "date_closed"])
 
-                        if last > assignee_activity[name]["last_activity"]:
-                            assignee_activity[name]["last_activity"] = last
+                    if name not in assignee_activity:
+                        assignee_activity[name] = {"task_count": 0, "last_activity": 0}
+
+                    if last > assignee_activity[name]["last_activity"]:
+                        assignee_activity[name]["last_activity"] = last
+
+                    status_cat = get_status_category(
+                        t.get("status", {}).get("status", "")
+                    )
+                    if status_cat == "active":
                         assignee_activity[name]["task_count"] += 1
 
             inactive = [
                 {
                     "assignee": k,
                     "task_count": v["task_count"],
-                    "last_activity": v["last_activity"],
-                    "last_activity_human": _ms_to_readable(v["last_activity"]),
                     "days_inactive": int(
                         (now - v["last_activity"]) / (1000 * 60 * 60 * 24)
                     )
@@ -389,98 +734,10 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     else None,
                 }
                 for k, v in assignee_activity.items()
-                if v["last_activity"] < cutoff
+                if v["last_activity"] < cutoff and v["task_count"] > 0
             ]
 
-            return {
-                "inactive_assignees": inactive,
-                "total_inactive": len(inactive),
-                "inactive_threshold_days": inactive_days,
-            }
-        except Exception as e:
-            return {"error": str(e)}
-
-    @mcp.tool()
-    def get_untracked_tasks(
-        project: Optional[str] = None,
-        list_id: Optional[str] = None,
-        status_filter: str = "in_progress",
-    ) -> dict:
-        """Find tasks with no time logged. Filters: 'all', 'in_progress', 'closed'."""
-        try:
-            if status_filter not in {"all", "in_progress", "closed"}:
-                return {
-                    "error": f"Invalid status_filter: '{status_filter}'. Must be 'all', 'in_progress', or 'closed'."
-                }
-
-            if not (list_ids := _resolve_to_list_ids(project, list_id)):
-                return {"error": f"No context found for '{project or list_id}'"}
-
-            untracked, total_checked, status_breakdown = [], 0, {}
-            include_closed = "true" if status_filter == "closed" else "false"
-
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": include_closed}):
-                    status_info = t.get("status", {})
-                    status_name, status_type = (
-                        status_info.get("status", ""),
-                        status_info.get("type", ""),
-                    )
-                    status_category = get_status_category(status_name, status_type)
-
-                    # Apply filter
-                    should_check = (
-                        status_filter == "all"
-                        or (
-                            status_filter == "in_progress"
-                            and status_category == "active"
-                        )
-                        or (
-                            status_filter == "closed"
-                            and status_category in ["done", "closed"]
-                        )
-                    )
-
-                    if should_check:
-                        total_checked += 1
-                        if status_name not in status_breakdown:
-                            status_breakdown[status_name] = {
-                                "category": status_category,
-                                "total": 0,
-                                "untracked": 0,
-                            }
-                        status_breakdown[status_name]["total"] += 1
-
-                        if not (t.get("time_spent") and t.get("time_spent") > 0):
-                            status_breakdown[status_name]["untracked"] += 1
-                            untracked.append(
-                                {
-                                    "task_id": t.get("id"),
-                                    "name": t.get("name"),
-                                    "status": status_name,
-                                    "status_category": status_category,
-                                    "assignees": [
-                                        a.get("username")
-                                        for a in t.get("assignees", [])
-                                    ],
-                                }
-                            )
-
-            compliance_rate = (
-                round((total_checked - len(untracked)) / total_checked * 100, 1)
-                if total_checked > 0
-                else 0
-            )
-
-            return {
-                "untracked_tasks": untracked,
-                "total_untracked": len(untracked),
-                "total_checked": total_checked,
-                "compliance_rate": f"{compliance_rate}%",
-                "status_filter": status_filter,
-                "status_breakdown": status_breakdown,
-                "note": "Statuses auto-categorize. Unknown statuses appear as 'other'.",
-            }
+            return {"inactive_assignees": inactive, "total_inactive": len(inactive)}
         except Exception as e:
             return {"error": str(e)}
 
@@ -490,7 +747,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         stale_days: int = 7,
     ) -> dict:
-        """Find tasks not updated in X days (forgotten or stuck work)."""
+        """Find tasks not updated in X days."""
         try:
             if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
@@ -499,176 +756,22 @@ def register_pm_analytics_tools(mcp: FastMCP):
             cutoff = now - stale_days * 24 * 60 * 60 * 1000
             stale = []
 
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "false"}):
-                    last = _safe_int_from_dates(t, ["date_updated", "date_closed"])
+            all_tasks = _fetch_all_tasks(list_ids, {})
 
-                    if last < cutoff:
-                        status_info = t.get("status", {})
-                        status_name, status_type = (
-                            status_info.get("status", ""),
-                            status_info.get("type", ""),
-                        )
+            for t in all_tasks:
+                status_cat = get_status_category(t.get("status", {}).get("status", ""))
+                if status_cat not in ["closed", "done"]:
+                    last = _safe_int_from_dates(t, ["date_updated", "date_created"])
+                    if last < cutoff and last > 0:
                         stale.append(
                             {
-                                "task_id": t.get("id"),
                                 "name": t.get("name"),
-                                "status": status_name,
-                                "status_category": get_status_category(
-                                    status_name, status_type
-                                ),
-                                "last_update": last,
-                                "last_update_human": _ms_to_readable(last),
-                                "days_stale": int((now - last) / (1000 * 60 * 60 * 24))
-                                if last > 0
-                                else None,
+                                "status": t.get("status", {}).get("status"),
+                                "days_stale": int((now - last) / (1000 * 60 * 60 * 24)),
                             }
                         )
 
-            return {
-                "stale_tasks": stale,
-                "total_stale": len(stale),
-                "stale_threshold_days": stale_days,
-            }
-        except Exception as e:
-            return {"error": str(e)}
-
-    @mcp.tool()
-    def get_estimation_accuracy(
-        project: Optional[str] = None, list_id: Optional[str] = None
-    ) -> dict:
-        """Analyze estimation accuracy with recommendations and metrics."""
-        try:
-            if not (list_ids := _resolve_to_list_ids(project, list_id)):
-                return {"error": f"No context found for '{project or list_id}'"}
-            total_est, total_spent, count = 0, 0, 0
-            overestimated, underestimated, accurate = 0, 0, 0
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
-                    est, spent = t.get("time_estimate") or 0, t.get("time_spent") or 0
-                    if est > 0:
-                        total_est += est
-                        total_spent += spent
-                        count += 1
-                        ratio = spent / est
-                        if ratio < 0.8:
-                            overestimated += 1
-                        elif ratio > 1.2:
-                            underestimated += 1
-                        else:
-                            accurate += 1
-            metrics = {
-                "tasks_with_estimates": count,
-                "total_estimate": total_est,
-                "total_estimate_human": _format_duration(total_est),
-                "total_spent": total_spent,
-                "total_spent_human": _format_duration(total_spent),
-                "task_breakdown": {
-                    "accurate": accurate,
-                    "under_estimated": underestimated,
-                    "over_estimated": overestimated,
-                },
-            }
-            if count == 0:
-                return {
-                    **metrics,
-                    "message": "No tasks with time estimates found",
-                    "accuracy_ratio": None,
-                    "variance_percentage": None,
-                    "accuracy_rating": None,
-                    "recommendations": [
-                        "Start adding time estimates to track accuracy"
-                    ],
-                }
-            accuracy_ratio = round(total_spent / total_est, 2)
-            variance_pct = round(((total_spent - total_est) / total_est) * 100, 1)
-            # Generate rating and recommendations
-            if accuracy_ratio < 0.8:
-                rating = "Over-estimated"
-                recs = [
-                    f"Tasks taking {abs(variance_pct)}% less time than estimated",
-                    "Consider reducing estimates",
-                    "Teams may be overestimating or very efficient",
-                ]
-            elif accuracy_ratio > 1.5:
-                rating = "Severely under-estimated"
-                recs = [
-                    f"Tasks taking {variance_pct}% MORE time than estimated",
-                    "CRITICAL: Review estimation process",
-                    "Break tasks into smaller units",
-                    "May indicate scope creep or unforeseen complexity",
-                ]
-            elif accuracy_ratio > 1.2:
-                rating = "Under-estimated"
-                recs = [
-                    f"Tasks taking {variance_pct}% more time than estimated",
-                    "Increase estimates by 20-30%",
-                    "Account for interruptions and context switching",
-                ]
-            elif 0.9 <= accuracy_ratio <= 1.1:
-                rating = "Excellent"
-                recs = [
-                    f"Within {abs(variance_pct)}% - very accurate!",
-                    "Continue current practices",
-                ]
-            else:
-                rating = "Good"
-                recs = [f"Within {abs(variance_pct)}%", "Minor adjustments may help"]
-            if count >= 10:
-                recs.append(
-                    f"Task breakdown: {round(accurate / count * 100, 1)}% accurate, "
-                    f"{round(underestimated / count * 100, 1)}% under, {round(overestimated / count * 100, 1)}% over"
-                )
-            return {
-                **metrics,
-                "accuracy_ratio": accuracy_ratio,
-                "variance_percentage": variance_pct,
-                "accuracy_rating": rating,
-                "recommendations": recs,
-            }
-        except Exception as e:
-            return {"error": str(e)}
-
-    @mcp.tool()
-    def get_at_risk_tasks(
-        project: Optional[str] = None, list_id: Optional[str] = None, risk_days: int = 3
-    ) -> dict:
-        """Find overdue/at-risk tasks categorized by urgency (spec requirement)."""
-        try:
-            if not (list_ids := _resolve_to_list_ids(project, list_id)):
-                return {"error": f"No context found for '{project or list_id}'"}
-            now = int(datetime.now(timezone.utc).timestamp() * 1000)
-            overdue, at_risk = [], []
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "false"}):
-                    if (due := t.get("due_date")) and str(due).isdigit():
-                        days_left = int((int(due) - now) / (1000 * 60 * 60 * 24))
-                        status_info = t.get("status", {})
-                        status_name, status_type = (
-                            status_info.get("status", ""),
-                            status_info.get("type", ""),
-                        )
-                        task_data = {
-                            "task_id": t.get("id"),
-                            "name": t.get("name"),
-                            "status": status_name,
-                            "status_category": get_status_category(
-                                status_name, status_type
-                            ),
-                            "due_in_days": days_left,
-                            "urgency": "overdue" if days_left < 0 else "at_risk",
-                        }
-                        if days_left < 0:
-                            overdue.append(task_data)
-                        elif days_left <= risk_days:
-                            at_risk.append(task_data)
-            return {
-                "overdue": {"tasks": overdue, "count": len(overdue)},
-                "at_risk": {"tasks": at_risk, "count": len(at_risk)},
-                "total_at_risk": len(overdue) + len(at_risk),
-                "risk_threshold_days": risk_days,
-                "urgency_breakdown": f"{len(overdue)} overdue, {len(at_risk)} at-risk",
-            }
+            return {"stale_tasks": stale, "total_stale": len(stale)}
         except Exception as e:
             return {"error": str(e)}
 
@@ -676,7 +779,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
     def get_status_summary(
         project: Optional[str] = None, list_id: Optional[str] = None
     ) -> dict:
-        """Status summary with metrics and health indicators (spec requirement)."""
+        """Status summary with metrics."""
         try:
             if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": f"No context found for '{project or list_id}'"}
@@ -687,57 +790,24 @@ def register_pm_analytics_tools(mcp: FastMCP):
             )
             total = 0
 
-            for lid in list_ids:
-                for t in _fetch_all_tasks([lid], {"include_closed": "true"}):
-                    status_info = t.get("status", {})
-                    status_name, status_type = (
-                        status_info.get("status", "Unknown"),
-                        status_info.get("type", ""),
-                    )
-                    status_count[status_name] = status_count.get(status_name, 0) + 1
-                    category = get_status_category(status_name, status_type)
-                    category_count[category] += 1
-                    total += 1
+            all_tasks = _fetch_all_tasks(list_ids, {})
 
-            # Health indicators
-            active_pct = (
-                round(category_count["active"] / total * 100, 1) if total > 0 else 0
-            )
-            done_pct = (
-                round(category_count["done"] / total * 100, 1) if total > 0 else 0
-            )
-            not_started_pct = (
-                round(category_count["not_started"] / total * 100, 1)
-                if total > 0
-                else 0
-            )
+            for t in all_tasks:
+                status_info = t.get("status", {})
+                status_name = status_info.get("status", "Unknown")
+                status_count[status_name] = status_count.get(status_name, 0) + 1
 
-            # Determine health
-            if active_pct > 60:
-                health = "At Risk - Too many active tasks"
-            elif active_pct < 20 and not_started_pct > 50:
-                health = "Needs Attention - Many tasks not started"
-            elif done_pct > 50:
-                health = "Good - High completion rate"
-            else:
-                health = "Normal - Balanced distribution"
+                cat = get_status_category(status_name, status_info.get("type", ""))
+                if cat in category_count:
+                    category_count[cat] += 1
+                else:
+                    category_count["other"] += 1
+                total += 1
 
             return {
                 "total_tasks": total,
                 "status_breakdown": status_count,
                 "category_breakdown": category_count,
-                "health_indicators": {
-                    "overall_health": health,
-                    "active_percentage": f"{active_pct}%",
-                    "done_percentage": f"{done_pct}%",
-                    "not_started_percentage": f"{not_started_pct}%",
-                },
-                "metrics": {
-                    "completion_rate": f"{done_pct}%",
-                    "work_in_progress": category_count["active"],
-                    "backlog_size": category_count["not_started"],
-                },
-                "note": "Categories auto-adapt. Unknown statuses appear as 'other'.",
             }
         except Exception as e:
             return {"error": str(e)}
