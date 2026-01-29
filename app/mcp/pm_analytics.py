@@ -181,17 +181,21 @@ def _ms_to_readable(ms: Any) -> str:
 def _format_duration(ms: int) -> str:
     if not ms:
         return "0 min"
-    seconds = int(ms) // 1000
-    if seconds < 60:
-        return f"{seconds} sec"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} min"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours} hr {minutes % 60} min"
-    days = hours // 24
-    return f"{days} d {hours % 24} hr"
+    total_seconds = int(ms) // 1000
+    minutes = (total_seconds // 60) % 60
+    hours = (total_seconds // 3600) % 24
+    days = total_seconds // (24 * 3600)
+
+    if days > 0:
+        return f"{days} d {hours} hr {minutes} min"
+    if hours > 0:
+        return f"{hours} hr {minutes} min"
+    return f"{minutes} min"
+
+
+def _hours_decimal(ms: int) -> float:
+    """Return duration in decimal hours (rounded to 2 decimals)."""
+    return round((int(ms or 0) / 3600000), 2)
 
 
 def _safe_int_from_dates(task: Dict, fields: List[str]) -> int:
@@ -319,15 +323,21 @@ def register_pm_analytics_tools(mcp: FastMCP):
             for t in all_tasks:
                 metrics = metrics_map.get(t["id"], {})
 
-                # We use DIRECT time for reports to avoid double counting
-                direct_time = metrics.get("tracked_direct", 0)
-                direct_est = metrics.get("est_direct", 0)
+                # Choose which metric to use based on grouping:
+                # - For 'assignee' grouping we show direct (own) time so individual's logged time is clear
+                # - For 'task' or 'status' grouping we show rolled-up totals (own + subtasks)
+                if group_by == "assignee":
+                    time_val = metrics.get("tracked_direct", 0)
+                    est_val = metrics.get("est_direct", 0)
+                else:
+                    time_val = metrics.get("tracked_total", 0)
+                    est_val = metrics.get("est_total", 0)
 
-                # Skip if no activity (and no estimate to burn down)
-                if direct_time == 0 and direct_est == 0:
+                # Skip if no activity and no estimate
+                if time_val == 0 and est_val == 0:
                     continue
 
-                total_tasks_with_time += 1 if direct_time > 0 else 0
+                total_tasks_with_time += 1 if time_val > 0 else 0
 
                 assignees = [
                     a.get("username", "Unassigned") for a in t.get("assignees", [])
@@ -352,22 +362,33 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
                     # Distribute proportionally if multiple assignees
                     divisor = len(assignees) if group_by == "assignee" else 1
-                    report[key]["time_tracked"] += direct_time // divisor
-                    report[key]["time_estimate"] += direct_est // divisor
+                    report[key]["time_tracked"] += time_val // divisor
+                    report[key]["time_estimate"] += est_val // divisor
 
             # Format output
             formatted = {}
             for key, val in report.items():
-                efficiency = (
-                    round(val["time_tracked"] / val["time_estimate"] * 100)
-                    if val["time_estimate"] > 0
-                    else None
-                )
+                if val["time_estimate"] > 0:
+                    eff_ratio = val["time_tracked"] / val["time_estimate"]
+                    eff_pct = round(eff_ratio * 100, 1)
+                    eff_ratio_disp = round(eff_ratio, 2)
+                else:
+                    eff_ratio = None
+                    eff_pct = None
+                    eff_ratio_disp = None
+
                 formatted[key] = {
                     **val,
                     "time_tracked_human": _format_duration(val["time_tracked"]),
+                    "time_tracked_hours": _hours_decimal(val["time_tracked"]),
                     "time_estimate_human": _format_duration(val["time_estimate"]),
-                    "efficiency": f"{efficiency}%" if efficiency is not None else "N/A",
+                    "time_estimate_hours": _hours_decimal(val["time_estimate"]),
+                    "estimate_utilization": f"{eff_ratio_disp}x"
+                    if eff_ratio_disp is not None
+                    else "N/A",
+                    "estimate_utilization_pct": f"{eff_pct}%"
+                    if eff_pct is not None
+                    else "N/A",
                 }
 
             return {
@@ -376,7 +397,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 "meta": {
                     "total_tasks_scanned": len(all_tasks),
                     "tasks_with_activity": total_tasks_with_time,
-                    "note": "Report uses Direct Time (Total - Subtasks) to prevent double-counting.",
+                    "note": "When grouping by 'assignee', total tracked time of each assignee for that task is displayed.",
                 },
             }
         except Exception as e:
@@ -427,17 +448,31 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
                 # Only show interesting rows
                 if r_track > 0 or r_est > 0 or tid in children_map:
-                    efficiency = (
-                        f"{round(r_track / r_est * 100)}%" if r_est > 0 else "-"
-                    )
+                    if r_est > 0:
+                        row_ratio = r_track / r_est
+                        row_pct = round(row_ratio * 100, 1)
+                        row_ratio_disp = round(row_ratio, 2)
+                    else:
+                        row_ratio = None
+                        row_pct = None
+                        row_ratio_disp = None
+
                     tree_view.append(
                         {
                             "task": f"{indent}{t.get('name')}",
                             "status": t.get("status", {}).get("status"),
                             "tracked_direct": _format_duration(d_track),
+                            "tracked_direct_hours": _hours_decimal(d_track),
                             "tracked_total": _format_duration(r_track),
+                            "tracked_total_hours": _hours_decimal(r_track),
                             "estimated_total": _format_duration(r_est),
-                            "efficiency": efficiency,
+                            "estimated_total_hours": _hours_decimal(r_est),
+                            "estimate_utilization": f"{row_ratio_disp}x"
+                            if row_ratio_disp is not None
+                            else "-",
+                            "estimate_utilization_pct": f"{row_pct}%"
+                            if row_pct is not None
+                            else "-",
                             "assignees": [
                                 u["username"] for u in t.get("assignees", [])
                             ],
@@ -452,18 +487,32 @@ def register_pm_analytics_tools(mcp: FastMCP):
             root_m = metrics_map.get(task_id, {})
             root_total_tracked = root_m.get("tracked_total", 0)
             root_total_est = root_m.get("est_total", 0)
-            root_eff = (
-                f"{round(root_total_tracked / root_total_est * 100)}%"
-                if root_total_est > 0
-                else "N/A"
-            )
+            if root_total_est > 0:
+                root_ratio = root_total_tracked / root_total_est
+                root_pct = round(root_ratio * 100, 1)
+                root_ratio_disp = round(root_ratio, 2)
+            else:
+                root_ratio = None
+                root_pct = None
+                root_ratio_disp = None
+
+            root_eff = {
+                "estimate_utilization": f"{root_ratio_disp}x"
+                if root_ratio_disp is not None
+                else "N/A",
+                "estimate_utilization_pct": f"{root_pct}%"
+                if root_pct is not None
+                else "N/A",
+            }
 
             return {
                 "root_task": root_task.get("name"),
                 "totals": {
                     "time_tracked": _format_duration(root_total_tracked),
+                    "time_tracked_hours": _hours_decimal(root_total_tracked),
                     "time_estimated": _format_duration(root_total_est),
-                    "efficiency": root_eff,
+                    "time_estimated_hours": _hours_decimal(root_total_est),
+                    **root_eff,
                 },
                 "breakdown_tree": tree_view,
             }
@@ -570,7 +619,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 },
                 "breakdown": {"accurate": accurate, "under": under, "over": over},
                 "unestimated_items": unest_buckets["tasks"],
-                "note": "Total Spent All includes work done on tasks that had no estimate set.",
+                "note": "Total includes work on unestimated tasks.",
             }
         except Exception as e:
             return {"error": str(e)}
