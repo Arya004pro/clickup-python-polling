@@ -424,7 +424,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 r_est = m.get("est_total", 0)
 
                 indent = "  " * depth
-                icon = "📂" if tid in children_map else "📄"
 
                 # Only show interesting rows
                 if r_track > 0 or r_est > 0 or tid in children_map:
@@ -433,7 +432,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     )
                     tree_view.append(
                         {
-                            "task": f"{indent}{icon} {t.get('name')}",
+                            "task": f"{indent}{t.get('name')}",
                             "status": t.get("status", {}).get("status"),
                             "tracked_direct": _format_duration(d_track),
                             "tracked_total": _format_duration(r_track),

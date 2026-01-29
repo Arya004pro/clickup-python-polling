@@ -1,9 +1,14 @@
-# app/mcp/task_management.py - Complete Optimized Version (All 9 Functions)
+# app/mcp/task_management.py - Final Optimized Version
+# Features:
+# 1. Uses robust 'subtasks=true' fetching from PM Analytics (no manual recursion).
+# 2. Implements 'Missing Parent' fetch to handle cross-list time rollups.
+# 3. Uses '_calculate_task_metrics' for precise Bottom-Up time summation.
 
 from fastmcp import FastMCP
 import requests
 import re
 import time
+from typing import List, Dict
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
 try:
@@ -14,7 +19,7 @@ except ImportError:
 SPACE_NAME_CACHE = {}
 
 # ============================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS (API & Formatting)
 # ============================================================================
 
 
@@ -61,8 +66,189 @@ def _format_assignees(assignees):
     return [a.get("username") for a in (assignees or []) if a.get("username")]
 
 
+def _format_duration(ms: int) -> str:
+    """Format milliseconds to human-readable duration."""
+    if not ms:
+        return "0 min"
+    seconds = int(ms) // 1000
+    if seconds < 60:
+        return f"{seconds} sec"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hr {minutes % 60} min"
+    days = hours // 24
+    return f"{days} d {hours % 24} hr"
+
+
+# ============================================================================
+# CORE LOGIC (Ported from pm_analytics.py for consistency)
+# ============================================================================
+
+
+def _fetch_all_tasks(list_ids: List[str], base_params: Dict) -> List[Dict]:
+    """
+    Fetch ALL tasks including deeply nested subtasks using the flattened API approach.
+    Fetches both Open and Archived tasks to ensure complete time history.
+    """
+    all_tasks = []
+    seen_ids = set()
+
+    # We must fetch twice: once for active tasks, once for archived (closed) tasks
+    flags = [False, True]
+
+    for list_id in list_ids:
+        for is_archived in flags:
+            page = 0
+            while True:
+                # Params: subtasks=true forces ClickUp to return nested tasks in the main list
+                params = {
+                    **base_params,
+                    "page": page,
+                    "subtasks": "true",
+                    "archived": str(is_archived).lower(),
+                }
+
+                data, error = _api_call("get", f"/list/{list_id}/task", params=params)
+
+                if error or not data:
+                    break
+
+                tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
+                if not tasks:
+                    break
+
+                for t in tasks:
+                    if t.get("id") not in seen_ids:
+                        seen_ids.add(t.get("id"))
+                        all_tasks.append(t)
+
+                if len(tasks) < 100:
+                    break
+                page += 1
+
+    return all_tasks
+
+
+def _fetch_missing_parents(all_tasks: List[Dict]) -> List[Dict]:
+    """
+    Identifies if any tasks have parents that are NOT in the current list,
+    and fetches them. This ensures cross-list parents (Main Tasks) are included.
+    """
+    existing_ids = {t["id"] for t in all_tasks}
+    missing_parents = set()
+
+    for t in all_tasks:
+        parent_id = t.get("parent")
+        if parent_id and parent_id not in existing_ids:
+            missing_parents.add(parent_id)
+
+    if not missing_parents:
+        return all_tasks
+
+    extended_tasks = all_tasks.copy()
+
+    for pid in missing_parents:
+        data, err = _api_call("get", f"/task/{pid}")
+        if data and not err:
+            if data["id"] not in existing_ids:
+                existing_ids.add(data["id"])
+                extended_tasks.append(data)
+
+                # Fetch grandparent if needed (1 level up)
+                grandparent = data.get("parent")
+                if grandparent and grandparent not in existing_ids:
+                    gp_data, gp_err = _api_call("get", f"/task/{grandparent}")
+                    if gp_data and not gp_err and gp_data["id"] not in existing_ids:
+                        existing_ids.add(gp_data["id"])
+                        extended_tasks.append(gp_data)
+
+    return extended_tasks
+
+
+def _calculate_task_metrics(all_tasks: List[Dict]) -> Dict[str, Dict[str, int]]:
+    """
+    CORE CALCULATION ENGINE: Robust Bottom-Up Calculation.
+    Builds a map of accurate time metrics for ALL tasks.
+    Returns: { task_id: { 'tracked_total': int, 'tracked_direct': int, 'est_total': int, 'est_direct': int } }
+    """
+    task_map = {t["id"]: t for t in all_tasks}
+
+    # Build adjacency list (Parent -> Children)
+    children_map = {}
+    for t in all_tasks:
+        pid = t.get("parent")
+        if pid:
+            if pid not in children_map:
+                children_map[pid] = []
+            children_map[pid].append(t["id"])
+
+    cache = {}
+
+    def get_values(tid):
+        if tid in cache:
+            return cache[tid]
+
+        task_obj = task_map.get(tid, {})
+        if not task_obj:
+            return (0, 0, 0, 0)
+
+        # Raw API values
+        api_tracked = int(task_obj.get("time_spent") or 0)
+        api_est = int(task_obj.get("time_estimate") or 0)
+
+        # Recursively sum children
+        sum_child_total_tracked = 0
+        sum_child_total_est = 0
+
+        for cid in children_map.get(tid, []):
+            c_track, _, c_est, _ = get_values(cid)
+            sum_child_total_tracked += c_track
+            sum_child_total_est += c_est
+
+        # --- Calculate Direct Tracked ---
+        # Logic: If API Time > Children Sum, the remainder is Direct Time.
+        if api_tracked < sum_child_total_tracked:
+            direct_tracked = api_tracked  # Fallback (API returning direct time)
+        else:
+            direct_tracked = api_tracked - sum_child_total_tracked
+        direct_tracked = max(0, direct_tracked)
+
+        # --- Calculate Direct Estimate ---
+        if api_est < sum_child_total_est:
+            direct_est = api_est
+        else:
+            direct_est = api_est - sum_child_total_est
+        direct_est = max(0, direct_est)
+
+        # True Rollup (Calculated fresh to ensure accuracy)
+        true_total_tracked = direct_tracked + sum_child_total_tracked
+        true_total_est = direct_est + sum_child_total_est
+
+        result = (true_total_tracked, direct_tracked, true_total_est, direct_est)
+        cache[tid] = result
+        return result
+
+    # Compute for all tasks
+    for tid in task_map:
+        get_values(tid)
+
+    # Convert tuple to dict
+    final_map = {}
+    for tid, res in cache.items():
+        final_map[tid] = {
+            "tracked_total": res[0],
+            "tracked_direct": res[1],
+            "est_total": res[2],
+            "est_direct": res[3],
+        }
+    return final_map
+
+
 def _paginate_tasks(list_id, include_closed=True):
-    """Fetch all tasks from a list with pagination."""
+    """Fetch all tasks from a list with pagination (Legacy Helper)."""
     all_tasks, page = [], 0
     while True:
         data, err = _api_call(
@@ -78,15 +264,6 @@ def _paginate_tasks(list_id, include_closed=True):
         all_tasks.extend(tasks)
         page += 1
     return all_tasks, None
-
-
-def get_space_name(space_id):
-    if space_id in SPACE_NAME_CACHE:
-        return SPACE_NAME_CACHE[space_id]
-    data, _ = _api_call("get", f"/space/{space_id}")
-    name = _safe_get(data, "space", "name") or "Unknown"
-    SPACE_NAME_CACHE[space_id] = name
-    return name
 
 
 # ============================================================================
@@ -147,34 +324,71 @@ def register_task_tools(mcp: FastMCP):
 
     @mcp.tool
     def get_task(task_id: str) -> dict:
-        """Get detailed task information."""
+        """
+        Get detailed task information.
+
+        INCLUDES: 'calculated_time_spent' and 'calculated_time_estimate'.
+        These fields represent the TRUE rolled-up values calculated bottom-up,
+        ensuring deep subtasks (even closed ones) and missing parents are counted.
+        """
         try:
-            data, err = _api_call("get", f"/task/{task_id}")
-            if err or not data or not data.get("id"):
-                return {"error": err or f"Task {task_id} not found"}
+            # 1. Fetch the requested task
+            task_data, err = _api_call("get", f"/task/{task_id}")
+            if err or not task_data:
+                return {"error": f"Task {task_id} not found"}
+
+            # 2. Fetch Context (All tasks in the same list to build tree)
+            # This is critical for the calculation logic to work
+            list_id = _safe_get(task_data, "list", "id")
+
+            calc_metrics = {}
+            if list_id:
+                # Fetch List + Closed Tasks + Missing Parents (Robust Logic)
+                tasks_in_list = _fetch_all_tasks([list_id], {})
+                all_tree_tasks = _fetch_missing_parents(tasks_in_list)
+
+                # Calculate
+                metrics_map = _calculate_task_metrics(all_tree_tasks)
+                calc_metrics = metrics_map.get(task_data["id"], {})
+
+            # 3. Extract calculated values
+            tracked_total = calc_metrics.get(
+                "tracked_total", task_data.get("time_spent") or 0
+            )
+            tracked_direct = calc_metrics.get("tracked_direct", 0)
+            est_total = calc_metrics.get(
+                "est_total", task_data.get("time_estimate") or 0
+            )
 
             return {
-                "task_id": _safe_get(data, "custom_id") or data.get("id"),
-                "name": data.get("name"),
-                "description": data.get("description"),
-                "status": _safe_get(data, "status", "status"),
-                "status_type": _safe_get(data, "status", "type"),
-                "assignee": _format_assignees(data.get("assignees")),
-                "due_date": data.get("due_date"),
-                "priority": _safe_get(data, "priority", "priority"),
-                "time_estimate": data.get("time_estimate"),
-                "tracked_time": data.get("time_spent"),
+                "task_id": _safe_get(task_data, "custom_id") or task_data.get("id"),
+                "name": task_data.get("name"),
+                "description": task_data.get("description"),
+                "status": _safe_get(task_data, "status", "status"),
+                "status_type": _safe_get(task_data, "status", "type"),
+                "assignee": _format_assignees(task_data.get("assignees")),
+                "due_date": task_data.get("due_date"),
+                "priority": _safe_get(task_data, "priority", "priority"),
+                # --- Time Tracking (Accurate) ---
+                "calculated_time_spent": _format_duration(tracked_total),
+                "calculated_time_estimate": _format_duration(est_total),
+                "time_breakdown": {
+                    "total_rolled_up": tracked_total,
+                    "total_direct": tracked_direct,
+                    "subtasks_contribution": tracked_total - tracked_direct,
+                },
+                "api_raw_time_spent": task_data.get("time_spent"),  # Reference only
                 "custom_fields": [
                     {"name": cf.get("name"), "value": cf.get("value")}
-                    for cf in data.get("custom_fields", [])
+                    for cf in task_data.get("custom_fields", [])
                     if isinstance(cf, dict)
                 ],
-                "list_id": _safe_get(data, "list", "id"),
-                "list_name": _safe_get(data, "list", "name"),
-                "folder_id": _safe_get(data, "folder", "id"),
-                "folder_name": _safe_get(data, "folder", "name"),
-                "space_id": _safe_get(data, "space", "id"),
-                "space_name": _safe_get(data, "space", "name"),
+                "list_id": list_id,
+                "list_name": _safe_get(task_data, "list", "name"),
+                "folder_id": _safe_get(task_data, "folder", "id"),
+                "folder_name": _safe_get(task_data, "folder", "name"),
+                "space_id": _safe_get(task_data, "space", "id"),
+                "space_name": _safe_get(task_data, "space", "name"),
             }
         except Exception as e:
             return {"error": str(e)}
