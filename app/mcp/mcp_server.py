@@ -7,6 +7,7 @@ from .task_management import register_task_tools
 from .pm_analytics import register_pm_analytics_tools
 from .project_configuration import register_project_configuration_tools
 from .project_intelligence import register_project_intelligence_tools
+from .sync_mapping import register_sync_mapping_tools
 
 mcp = FastMCP(
     name="ClickUp Sync MCP Server",
@@ -19,6 +20,7 @@ register_task_tools(mcp)
 register_pm_analytics_tools(mcp)
 register_project_configuration_tools(mcp)
 register_project_intelligence_tools(mcp)
+register_sync_mapping_tools(mcp)
 
 if __name__ == "__main__":
     print("Starting ClickUp MCP Server...")
