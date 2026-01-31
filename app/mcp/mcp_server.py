@@ -2,12 +2,12 @@ from fastmcp import FastMCP
 # from app.logging_config import logger  #optional - your existing logger
 
 # Import category modules (we'll create them one by one)
-from .workspace_structure import register_workspace_tools
-from .task_management import register_task_tools
-from .pm_analytics import register_pm_analytics_tools
-from .project_configuration import register_project_configuration_tools
-from .project_intelligence import register_project_intelligence_tools
-from .sync_mapping import register_sync_mapping_tools
+from app.mcp.workspace_structure import register_workspace_tools
+from app.mcp.task_management import register_task_tools
+from app.mcp.pm_analytics import register_pm_analytics_tools
+from app.mcp.project_configuration import register_project_configuration_tools
+from app.mcp.project_intelligence import register_project_intelligence_tools
+from app.mcp.sync_mapping import register_sync_mapping_tools
 
 mcp = FastMCP(
     name="ClickUp Sync MCP Server",
