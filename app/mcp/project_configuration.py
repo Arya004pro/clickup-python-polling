@@ -2,18 +2,85 @@
 """
 Project Configuration Module - Optimized
 Features: Real-time status, Smart Deduplication, Hierarchy Tracking.
+Includes robust status categorization for correct health calculation.
 """
 
 import requests
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
 TRACKED_PROJECTS = []  # In-memory storage
 
+# --- Standardized Status Logic (Consistent with PM Analytics) ---
+STATUS_NAME_OVERRIDES = {
+    "not_started": [
+        "BACKLOG",
+        "QUEUED",
+        "QUEUE",
+        "IN QUEUE",
+        "TO DO",
+        "TO-DO",
+        "PENDING",
+        "OPEN",
+        "IN PLANNING",
+    ],
+    "active": [
+        "SCOPING",
+        "IN DESIGN",
+        "DEV",
+        "IN DEVELOPMENT",
+        "DEVELOPMENT",
+        "REVIEW",
+        "IN REVIEW",
+        "TESTING",
+        "QA",
+        "BUG",
+        "BLOCKED",
+        "WAITING",
+        "STAGING DEPLOY",
+        "READY FOR DEVELOPMENT",
+        "READY FOR PRODUCTION",
+        "IN PROGRESS",
+        "ON HOLD",
+    ],
+    "done": ["SHIPPED", "RELEASE", "COMPLETE", "DONE", "RESOLVED", "PROD", "QC CHECK"],
+    "closed": ["CANCELLED", "CLOSED"],
+}
 
-def _api_call(method: str, endpoint: str, params: None = None, payload: None = None):
+STATUS_OVERRIDE_MAP = {
+    s.upper(): cat for cat, statuses in STATUS_NAME_OVERRIDES.items() for s in statuses
+}
+
+
+def get_status_category(status_name: str, status_type: str = None) -> str:
+    if not status_name:
+        return "other"
+    # 1. Check Overrides (Project Specific naming conventions)
+    if cat := STATUS_OVERRIDE_MAP.get(status_name.upper()):
+        return cat
+    # 2. Check ClickUp Internal Type
+    if status_type:
+        type_map = {
+            "open": "not_started",
+            "done": "done",
+            "closed": "closed",
+            "custom": "active",
+        }
+        return type_map.get(status_type.lower(), "other")
+    return "other"
+
+
+# --- Helpers ---
+
+
+def _api_call(
+    method: str,
+    endpoint: str,
+    params: Optional[Dict] = None,
+    payload: Optional[Dict] = None,
+):
     try:
         headers = {
             "Authorization": CLICKUP_API_TOKEN,
@@ -36,41 +103,46 @@ def _api_call(method: str, endpoint: str, params: None = None, payload: None = N
 
 
 def _get_list_ids(p: Dict) -> List[str]:
+    """Recursively fetch List IDs for a tracked project (List, Folder, or Space)."""
     if p["type"] == "list":
         return [p["id"]]
+
     endpoint = f"/{p['type']}/{p['id']}"
+
     # Fetch direct lists
-    d_lists = (
-        _api_call("GET", f"{endpoint}/list")[0].get("lists", [])
-        if _api_call("GET", f"{endpoint}/list")[0]
-        else []
-    )
+    resp, _ = _api_call("GET", f"{endpoint}/list")
+    d_lists = resp.get("lists", []) if resp else []
     ids = [lst["id"] for lst in d_lists]
+
     # If space, fetch folder lists too
     if p["type"] == "space":
-        folders = (
-            _api_call("GET", f"{endpoint}/folder")[0].get("folders", [])
-            if _api_call("GET", f"{endpoint}/folder")[0]
-            else []
-        )
+        resp, _ = _api_call("GET", f"{endpoint}/folder")
+        folders = resp.get("folders", []) if resp else []
         for f in folders:
             ids.extend([lst["id"] for lst in f.get("lists", [])])
+
     return ids
 
 
 def _calc_health(p: Dict) -> Dict:
+    """
+    Calculates project health based on Task Status distribution.
+    Uses robust status logic to correctly identify 'Done' tasks (e.g. 'Shipped').
+    """
     list_ids = _get_list_ids(p)
     if not list_ids:
         return {
             "status": "empty",
             "progress": "0%",
             "health": "Empty",
-            "metrics": {"total": 0},
+            "metrics": {"total": 0, "active": 0, "done": 0},
         }
 
     total, active, done = 0, 0, 0
+
     for lid in list_ids:
-        # Optimization: Fetch minimal fields if possible, page=0 checks health
+        # Fetch minimal fields to check health.
+        # Using subtasks=true to get accurate count of all work items.
         data, _ = _api_call(
             "GET",
             f"/list/{lid}/task",
@@ -78,11 +150,18 @@ def _calc_health(p: Dict) -> Dict:
         )
         if not data:
             continue
+
         for t in data.get("tasks", []):
             total += 1
-            if t.get("status", {}).get("type") == "closed" or t.get("status", {}).get(
-                "status"
-            ) in ["complete", "done", "shipped"]:
+
+            # Use Robust Status Logic
+            status_obj = t.get("status", {})
+            status_name = status_obj.get("status", "")
+            status_type = status_obj.get("type", "")
+
+            cat = get_status_category(status_name, status_type)
+
+            if cat in ["done", "closed"]:
                 done += 1
             else:
                 active += 1
@@ -92,18 +171,21 @@ def _calc_health(p: Dict) -> Dict:
             "status": "inactive",
             "progress": "0%",
             "health": "No Tasks",
-            "metrics": {"total": 0},
+            "metrics": {"total": 0, "active": 0, "done": 0},
         }
+
     progress = int((done / total) * 100)
-    health = (
-        "Completed"
-        if progress == 100
-        else "Overloaded"
-        if active > 50
-        else "At Risk (Stagnant)"
-        if (active > 20 and progress < 20)
-        else "Good"
-    )
+
+    # Simple Health Heuristics
+    if progress == 100:
+        health = "Completed"
+    elif active > 50:
+        health = "Overloaded"
+    elif active > 20 and progress < 20:
+        health = "At Risk (Stagnant)"
+    else:
+        health = "Good"
+
     return {
         "status": "active" if active > 0 else "completed",
         "progress": f"{progress}%",
@@ -117,19 +199,23 @@ def register_project_configuration_tools(mcp: FastMCP):
     def discover_projects(workspace_id: str, project_level: str = "folder") -> dict:
         """Scan workspace to find potential projects."""
         if project_level not in {"space", "folder", "list"}:
-            return {"error": "Invalid level"}
+            return {"error": "Invalid level. Must be 'space', 'folder', or 'list'."}
+
         data, err = _api_call("GET", f"/team/{workspace_id}/space")
         if err:
             return {"error": err}
 
         results = []
-        for s in data.get("spaces", []):
+        spaces = data.get("spaces", [])
+
+        for s in spaces:
             if project_level == "space":
                 results.append({"id": s["id"], "name": s["name"], "type": "space"})
             else:
                 # Fetch folders
-                f_data = _api_call("GET", f"/space/{s['id']}/folder")[0]
+                f_data, _ = _api_call("GET", f"/space/{s['id']}/folder")
                 folders = f_data.get("folders", []) if f_data else []
+
                 if project_level == "folder":
                     results.extend(
                         [
@@ -143,9 +229,9 @@ def register_project_configuration_tools(mcp: FastMCP):
                         ]
                     )
                 elif project_level == "list":
-                    # Direct lists
-                    l_data = _api_call("GET", f"/space/{s['id']}/list")[0]
-                    if l_data:
+                    # Direct lists in Space
+                    l_data, _ = _api_call("GET", f"/space/{s['id']}/list")
+                    if l_data and l_data.get("lists"):
                         results.extend(
                             [
                                 {
@@ -157,7 +243,7 @@ def register_project_configuration_tools(mcp: FastMCP):
                                 for lst in l_data.get("lists", [])
                             ]
                         )
-                    # Folder lists
+                    # Lists in Folders
                     for f in folders:
                         results.extend(
                             [
@@ -185,9 +271,11 @@ def register_project_configuration_tools(mcp: FastMCP):
         if err:
             return {"error": f"ID invalid: {err}"}
 
-        # Simple Hierarchy check logic
+        # Check overlaps (Prevent tracking a List if its Folder is already tracked)
         entity = data.get(type) or data
-        pid, sid = entity.get("folder", {}).get("id"), entity.get("space", {}).get("id")
+        pid = entity.get("folder", {}).get("id")
+        sid = entity.get("space", {}).get("id")
+
         for p in TRACKED_PROJECTS:
             if (p["type"] == "folder" and pid == p["id"]) or (
                 p["type"] == "space" and sid == p["id"]
@@ -229,18 +317,21 @@ def register_project_configuration_tools(mcp: FastMCP):
 
     @mcp.tool()
     def refresh_projects() -> dict:
+        """Verifies all tracked projects still exist in ClickUp."""
         global TRACKED_PROJECTS
-        valid = [
-            p
-            for p in TRACKED_PROJECTS
-            if _api_call("GET", f"/{p['type']}/{p['id']}")[0]
-        ]
+        valid = []
+        for p in TRACKED_PROJECTS:
+            resp, _ = _api_call("GET", f"/{p['type']}/{p['id']}")
+            if resp:
+                valid.append(p)
+
         removed = len(TRACKED_PROJECTS) - len(valid)
         TRACKED_PROJECTS[:] = valid
         return {"status": "success", "removed_count": removed}
 
     @mcp.tool()
     def get_project_status(project_name: str) -> dict:
+        """Get high-level status metrics for a project."""
         p = next((x for x in TRACKED_PROJECTS if x["name"] == project_name), None)
         return (
             {"project": p["name"], **_calc_health(p)} if p else {"error": "Not found"}
@@ -248,6 +339,7 @@ def register_project_configuration_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_all_projects_status() -> dict:
+        """Get summary status for all tracked projects."""
         return {
             "projects": [
                 {"name": p["name"], **_calc_health(p)} for p in TRACKED_PROJECTS

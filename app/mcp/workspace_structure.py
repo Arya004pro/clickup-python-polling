@@ -12,7 +12,7 @@ def register_workspace_tools(mcp: FastMCP):
         return json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False)
 
     @mcp.tool
-    def get_workspaces() -> str:
+    def get_workspaces():
         """
         List all accessible workspaces (teams) in ClickUp.
         Returns pretty-printed JSON list.
@@ -22,9 +22,7 @@ def register_workspace_tools(mcp: FastMCP):
             teams = teams_data.get("teams", [])
 
             if not teams:
-                return pretty_json(
-                    {"error": "No teams/workspaces found for this API token"}
-                )
+                return {"error": "No teams/workspaces found for this API token"}
 
             result = [
                 {
@@ -38,13 +36,13 @@ def register_workspace_tools(mcp: FastMCP):
                 for t in teams
             ]
 
-            return pretty_json(result)
+            return result
 
         except Exception as e:
-            return pretty_json({"error": f"Failed to fetch workspaces: {str(e)}"})
+            return {"error": f"Failed to fetch workspaces: {str(e)}"}
 
     @mcp.tool
-    def get_spaces(workspace_id: str = None) -> str:
+    def get_spaces(workspace_id: str = None):
         """
         List all spaces inside a specific workspace (team).
         Returns pretty-printed JSON list.
@@ -54,7 +52,7 @@ def register_workspace_tools(mcp: FastMCP):
         if not team_id:
             teams = _get(f"{BASE_URL}/team").get("teams", [])
             if not teams:
-                return pretty_json({"error": "No workspaces found"})
+                return {"error": "No workspaces found"}
             team_id = teams[0]["id"]
 
         try:
@@ -73,13 +71,13 @@ def register_workspace_tools(mcp: FastMCP):
                 for s in spaces
             ]
 
-            return pretty_json(result)
+            return result
 
         except Exception as e:
-            return pretty_json({"error": f"Failed to fetch spaces: {str(e)}"})
+            return {"error": f"Failed to fetch spaces: {str(e)}"}
 
     @mcp.tool
-    def get_space(space_id: str) -> str:
+    def get_space(space_id: str):
         """
         Get detailed information about a specific ClickUp space.
         Returns pretty-printed JSON object.
@@ -90,8 +88,7 @@ def register_workspace_tools(mcp: FastMCP):
             space = space_data.get("space", {})
 
             if space and space.get("id") == space_id:
-                print(f"[DEBUG] Direct fetch successful for space {space_id}")
-                return pretty_json(format_space_details(space))
+                return format_space_details(space)
 
             # Fallback: search in team spaces
             print(f"[DEBUG] Direct fetch failed. Trying team fallback for {space_id}")
@@ -106,20 +103,16 @@ def register_workspace_tools(mcp: FastMCP):
                 all_spaces = spaces_data.get("spaces", [])
                 for s in all_spaces:
                     if s["id"] == space_id:
-                        print(f"[DEBUG] Found via fallback: {space_id}")
-                        return pretty_json(format_space_details(s))
+                        return format_space_details(s)
 
-            return pretty_json(
-                {
-                    "space_id": space_id,
-                    "error": "Space not found or not accessible",
-                    "hint": "Check if ID exists in get_spaces output and token has access",
-                }
-            )
+            return {
+                "space_id": space_id,
+                "error": "Space not found or not accessible",
+                "hint": "Check if ID exists in get_spaces output and token has access",
+            }
 
         except Exception as e:
-            print(f"[ERROR] get_space failed: {str(e)}")
-            return pretty_json({"error": str(e)})
+            return {"error": str(e)}
 
     def format_space_details(space: dict) -> dict:
         """Consistent formatting helper"""
@@ -138,7 +131,7 @@ def register_workspace_tools(mcp: FastMCP):
         }
 
     @mcp.tool
-    def get_folders(space_id: str) -> str:
+    def get_folders(space_id: str):
         """
         List all folders inside a specific ClickUp space.
 
@@ -153,13 +146,11 @@ def register_workspace_tools(mcp: FastMCP):
             folders = folders_data.get("folders", [])
 
             if not folders:
-                return pretty_json(
-                    {
-                        "space_id": space_id,
-                        "folders": [],
-                        "message": "No folders found in this space (or space has only folderless lists)",
-                    }
-                )
+                return {
+                    "space_id": space_id,
+                    "folders": [],
+                    "message": "No folders found in this space (or space has only folderless lists)",
+                }
 
             result = []
             for f in folders:
@@ -183,9 +174,7 @@ def register_workspace_tools(mcp: FastMCP):
             return result
 
         except Exception as e:
-            return pretty_json(
-                {"error": f"Failed to fetch folders for space {space_id}: {str(e)}"}
-            )
+            return {"error": f"Failed to fetch folders for space {space_id}: {str(e)}"}
 
     @mcp.tool
     def get_folder(folder_id: str) -> dict:  # ← return dict, not str
@@ -272,7 +261,7 @@ def register_workspace_tools(mcp: FastMCP):
         return result
 
     @mcp.tool
-    def get_lists(folder_id: str) -> str:
+    def get_lists(folder_id: str):
         """
         List all lists inside a specific ClickUp folder.
 
@@ -292,7 +281,7 @@ def register_workspace_tools(mcp: FastMCP):
                 print(
                     f"[DEBUG] Direct fetch successful for lists in folder {folder_id}"
                 )
-                return pretty_json(build_lists_result(lists, folder_id=folder_id))
+                return build_lists_result(lists, folder_id=folder_id)
 
             # Step 2: Fallback - find the folder first, then get its lists
             print(
@@ -306,7 +295,7 @@ def register_workspace_tools(mcp: FastMCP):
                     team_id = teams[0]["id"]
 
             if not team_id:
-                return pretty_json({"error": "No team/workspace found for fallback"})
+                return {"error": "No team/workspace found for fallback"}
 
             spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
             spaces = spaces_data.get("spaces", [])
@@ -332,23 +321,19 @@ def register_workspace_tools(mcp: FastMCP):
                     break
 
             if found_lists is not None:
-                return pretty_json(
-                    build_lists_result(
-                        found_lists, folder_id=folder_id, space_id=found_space_id
-                    )
+                return build_lists_result(
+                    found_lists, folder_id=folder_id, space_id=found_space_id
                 )
 
-            return pretty_json(
-                {
-                    "folder_id": folder_id,
-                    "error": "No lists found in folder (or folder not accessible)",
-                    "hint": "Run get_folders on the parent space to confirm folder exists and has lists",
-                }
-            )
+            return {
+                "folder_id": folder_id,
+                "error": "No lists found in folder (or folder not accessible)",
+                "hint": "Run get_folders on the parent space to confirm folder exists and has lists",
+            }
 
         except Exception as e:
             print(f"[ERROR] get_lists failed: {str(e)}")
-            return pretty_json({"error": str(e)})
+            return {"error": str(e)}
 
     def build_lists_result(
         lists: list, folder_id: str = None, space_id: str = None
@@ -371,7 +356,7 @@ def register_workspace_tools(mcp: FastMCP):
         return result
 
     @mcp.tool
-    def get_folderless_lists(space_id: str) -> str:
+    def get_folderless_lists(space_id: str):
         """
         List all lists that are directly in the space (not inside any folder).
 
@@ -386,13 +371,11 @@ def register_workspace_tools(mcp: FastMCP):
             lists = lists_data.get("lists", [])
 
             if not lists:
-                return pretty_json(
-                    {
-                        "space_id": space_id,
-                        "lists": [],
-                        "message": "No folderless lists found in this space (all lists may be in folders, or space is empty)",
-                    }
-                )
+                return {
+                    "space_id": space_id,
+                    "lists": [],
+                    "message": "No folderless lists found in this space (all lists may be in folders, or space is empty)",
+                }
 
             result = []
             for lst in lists:
@@ -407,19 +390,17 @@ def register_workspace_tools(mcp: FastMCP):
                     }
                 )
 
-            return pretty_json(result)
+            return result
 
         except Exception as e:
             print(f"[ERROR] get_folderless_lists failed: {str(e)}")
-            return pretty_json(
-                {
-                    "error": f"Failed to fetch folderless lists for space {space_id}: {str(e)}",
-                    "hint": "Verify space_id exists in get_spaces output and token has access",
-                }
-            )
+            return {
+                "error": f"Failed to fetch folderless lists for space {space_id}: {str(e)}",
+                "hint": "Verify space_id exists in get_spaces output and token has access",
+            }
 
     @mcp.tool
-    def get_list(list_id: str) -> str:
+    def get_list(list_id: str):
         """
         Get detailed information about a specific ClickUp list.
 
@@ -436,7 +417,7 @@ def register_workspace_tools(mcp: FastMCP):
 
             if lst and lst.get("id") == list_id:
                 print(f"[DEBUG] Direct fetch OK for list {list_id}")
-                return pretty_json(build_list_result(lst))
+                return build_list_result(lst)
 
             # Step 2: Fallback - search in all spaces/folders
             print(
@@ -450,7 +431,7 @@ def register_workspace_tools(mcp: FastMCP):
                     team_id = teams[0]["id"]
 
             if not team_id:
-                return pretty_json({"error": "No team found for fallback"})
+                return {"error": "No team found for fallback"}
 
             spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
             spaces = spaces_data.get("spaces", [])
@@ -507,23 +488,21 @@ def register_workspace_tools(mcp: FastMCP):
             if found_list:
                 result = build_list_result(found_list)
                 result["parent"] = found_parent
-                return pretty_json(result)
+                return result
 
-            return pretty_json(
-                {
-                    "list_id": list_id,
-                    "error": "List not found or not accessible after full search",
-                    "hint": "Run get_folderless_lists or get_folder to confirm list exists",
-                }
-            )
+            return {
+                "list_id": list_id,
+                "error": "List not found or not accessible after full search",
+                "hint": "Run get_folderless_lists or get_folder to confirm list exists",
+            }
 
         except Exception as e:
             print(f"[ERROR] get_list failed: {str(e)}")
-            return pretty_json({"error": str(e)})
+            return {"error": str(e)}
 
     def build_list_result(lst: dict) -> dict:
         """Format list data consistently"""
-        return {
+        res = {
             "list_id": lst["id"],
             "name": lst["name"],
             "orderindex": lst.get("orderindex"),
@@ -537,12 +516,95 @@ def register_workspace_tools(mcp: FastMCP):
             "status_count": len(lst.get("statuses", [])),
             "priority_enabled": lst.get("priority_enabled", False),
             "custom_fields_enabled": lst.get("custom_fields_enabled", False),
-            "multiple_assignees": lst.get("multiple_assignees", False),
+            "multiple_assignees_flag": lst.get("multiple_assignees", None),
+            "multiple_assignees_enabled_flag": lst.get(
+                "multiple_assignees_enabled", None
+            ),
             "permissions": lst.get("permissions", {}),
         }
 
+        # Stronger detection for multiple assignees:
+        # 1) Check list-level explicit flags (new and old keys)
+        # 2) Fallback to folder-level and space-level settings
+        # 3) As a final check, scan recent tasks to see if multiple assignees are actually used
+
+        def _truthy(v):
+            return bool(v) or (isinstance(v, str) and v.lower() == "true")
+
+        list_ma = None
+        if res.get("multiple_assignees_enabled_flag") is not None:
+            list_ma = _truthy(res.get("multiple_assignees_enabled_flag"))
+        elif res.get("multiple_assignees_flag") is not None:
+            list_ma = _truthy(res.get("multiple_assignees_flag"))
+
+        source = "list" if list_ma else None
+
+        # Check folder
+        folder_id = res.get("folder_id")
+        if list_ma is not True and folder_id:
+            try:
+                f_data = _get(f"{BASE_URL}/folder/{folder_id}") or {}
+                folder_obj = f_data.get("folder", {})
+                f_ma = folder_obj.get("multiple_assignees_enabled")
+                if f_ma is None:
+                    f_ma = folder_obj.get("multiple_assignees")
+                if f_ma is not None:
+                    f_ma = _truthy(f_ma)
+                    if f_ma:
+                        list_ma = True
+                        source = "folder"
+            except Exception:
+                pass
+
+        # Check space
+        space_id = res.get("space_id")
+        if list_ma is not True and space_id:
+            try:
+                s_data = _get(f"{BASE_URL}/space/{space_id}") or {}
+                space_obj = s_data.get("space", {})
+                s_ma = space_obj.get("multiple_assignees_enabled")
+                if s_ma is None:
+                    s_ma = space_obj.get("multiple_assignees")
+                if s_ma is not None:
+                    s_ma = _truthy(s_ma)
+                    if s_ma:
+                        list_ma = True
+                        source = "space"
+            except Exception:
+                pass
+
+        # Scan a small sample of tasks to infer actual usage
+        tasks_have_multiple = False
+        try:
+            tasks_data = (
+                _get(
+                    f"{BASE_URL}/list/{res['list_id']}/task",
+                    params={"page": 0, "subtasks": "false", "archived": "false"},
+                )
+                or {}
+            )
+            task_list = tasks_data.get("tasks", [])
+            multi_count = 0
+            for t in task_list[:50]:
+                ass = t.get("assignees", []) or []
+                if len(ass) > 1:
+                    multi_count += 1
+            tasks_have_multiple = multi_count > 0
+            if tasks_have_multiple and not list_ma:
+                # If tasks show multiple assignees but flags say false, mark as inferred
+                source = "inferred_from_tasks"
+                list_ma = True
+        except Exception:
+            pass
+
+        res["effective_multiple_assignees"] = bool(list_ma)
+        res["multiple_assignees_source"] = source or "none"
+        res["tasks_have_multiple_assignees"] = tasks_have_multiple
+
+        return res
+
     @mcp.tool
-    def invalidate_cache(type: str = "all") -> str:
+    def invalidate_cache(type: str = "all"):
         """
         Clear cached ClickUp data for fresh results.
 
@@ -576,22 +638,16 @@ def register_workspace_tools(mcp: FastMCP):
             #     cleared.append("tasks")
 
             if not cleared:
-                return pretty_json(
-                    {
-                        "status": "nothing_cleared",
-                        "message": f"No caches cleared for type '{type}'. Valid types: 'all', 'workspaces', 'spaces', 'folders', 'lists', 'tasks'",
-                    }
-                )
-
-            return pretty_json(
-                {
-                    "status": "success",
-                    "cleared": cleared,
-                    "message": f"Cache cleared for: {', '.join(cleared)}",
+                return {
+                    "status": "nothing_cleared",
+                    "message": f"No caches cleared for type '{type}'. Valid types: 'all', 'workspaces', 'spaces', 'folders', 'lists', 'tasks'",
                 }
-            )
+
+            return {
+                "status": "success",
+                "cleared": cleared,
+                "message": f"Cache cleared for: {', '.join(cleared)}",
+            }
 
         except Exception as e:
-            return pretty_json(
-                {"status": "error", "message": f"Failed to clear cache: {str(e)}"}
-            )
+            return {"status": "error", "message": f"Failed to clear cache: {str(e)}"}

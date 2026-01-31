@@ -290,7 +290,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
         }
 
     @mcp.tool()
-    def list_projects() -> List[Dict[str, Any]]:
+    def list_mapped_projects() -> List[Dict[str, Any]]:
         """Show all currently mapped projects."""
         projects = db.projects
         output = []
@@ -306,7 +306,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
         return output
 
     @mcp.tool()
-    def get_project(alias: str) -> dict:
+    def get_mapped_project(alias: str) -> dict:
         """Get detailed info about a specifically mapped project."""
         project = db.projects.get(alias)
         if not project:

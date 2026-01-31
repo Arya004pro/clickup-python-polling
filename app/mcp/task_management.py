@@ -88,16 +88,18 @@ def _format_duration(ms: int) -> str:
 # ============================================================================
 
 
-def _fetch_all_tasks(list_ids: List[str], base_params: Dict) -> List[Dict]:
+def _fetch_all_tasks(
+    list_ids: List[str], base_params: Dict, include_archived: bool = True
+) -> List[Dict]:
     """
-    Fetch ALL tasks including deeply nested subtasks using the flattened API approach.
-    Fetches both Open and Archived tasks to ensure complete time history.
+    Fetch ALL tasks including deeply nested subtasks.
+
+    By default this will include archived tasks. Set `include_archived=False` to only fetch active tasks.
     """
     all_tasks = []
     seen_ids = set()
 
-    # We must fetch twice: once for active tasks, once for archived (closed) tasks
-    flags = [False, True]
+    flags = [False, True] if include_archived else [False]
 
     for list_id in list_ids:
         for is_archived in flags:
@@ -247,6 +249,29 @@ def _calculate_task_metrics(all_tasks: List[Dict]) -> Dict[str, Dict[str, int]]:
     return final_map
 
 
+def _build_subtask_tree(all_tasks: List[Dict], parent_id: str) -> List[Dict]:
+    """
+    Recursively build a nested tree of subtasks for a given parent task.
+    Returns list of subtasks, each with their own 'subtasks' field if they have children.
+    """
+    subtasks = []
+    for t in all_tasks:
+        if t.get("parent") == parent_id:
+            subtask = {
+                "task_id": t.get("id"),
+                "name": t.get("name"),
+                "status": _safe_get(t, "status", "status"),
+                "assignee": _format_assignees(t.get("assignees")),
+                "due_date": t.get("due_date"),
+            }
+            # Recursively add subtasks
+            children = _build_subtask_tree(all_tasks, t["id"])
+            if children:
+                subtask["subtasks"] = children
+            subtasks.append(subtask)
+    return subtasks
+
+
 def _paginate_tasks(list_id, include_closed=True):
     """Fetch all tasks from a list with pagination (Legacy Helper)."""
     all_tasks, page = [], 0
@@ -318,7 +343,25 @@ def register_task_tools(mcp: FastMCP):
                 for t in all_tasks
             ]
 
-            return {"total_tasks": len(formatted), "tasks": formatted}
+            # Build status counts for returned tasks
+            status_counts = {}
+            for t in all_tasks:
+                sname = _safe_get(t, "status", "status") or "Unknown"
+                status_counts[sname] = status_counts.get(sname, 0) + 1
+
+            # If caller provided a `statuses` filter, ensure counts for each requested status are present (0 if absent)
+            requested_status_counts = {}
+            if statuses:
+                for s in statuses:
+                    # Keep original casing for keys as caller provided
+                    requested_status_counts[s] = status_counts.get(s, 0)
+
+            return {
+                "total_tasks": len(formatted),
+                "tasks": formatted,
+                "status_counts": status_counts,
+                "requested_status_counts": requested_status_counts,
+            }
         except Exception as e:
             return {"error": str(e), "tasks": []}
 
@@ -338,16 +381,12 @@ def register_task_tools(mcp: FastMCP):
                 return {"error": f"Task {task_id} not found"}
 
             # 2. Fetch Context (All tasks in the same list to build tree)
-            # This is critical for the calculation logic to work
             list_id = _safe_get(task_data, "list", "id")
 
             calc_metrics = {}
             if list_id:
-                # Fetch List + Closed Tasks + Missing Parents (Robust Logic)
                 tasks_in_list = _fetch_all_tasks([list_id], {})
                 all_tree_tasks = _fetch_missing_parents(tasks_in_list)
-
-                # Calculate
                 metrics_map = _calculate_task_metrics(all_tree_tasks)
                 calc_metrics = metrics_map.get(task_data["id"], {})
 
@@ -360,7 +399,8 @@ def register_task_tools(mcp: FastMCP):
                 "est_total", task_data.get("time_estimate") or 0
             )
 
-            return {
+            # Build result and then attempt a best-effort space name lookup before returning
+            result = {
                 "task_id": _safe_get(task_data, "custom_id") or task_data.get("id"),
                 "name": task_data.get("name"),
                 "description": task_data.get("description"),
@@ -377,7 +417,6 @@ def register_task_tools(mcp: FastMCP):
                     "total_direct": tracked_direct,
                     "subtasks_contribution": tracked_total - tracked_direct,
                 },
-                "api_raw_time_spent": task_data.get("time_spent"),  # Reference only
                 "custom_fields": [
                     {"name": cf.get("name"), "value": cf.get("value")}
                     for cf in task_data.get("custom_fields", [])
@@ -390,6 +429,33 @@ def register_task_tools(mcp: FastMCP):
                 "space_id": _safe_get(task_data, "space", "id"),
                 "space_name": _safe_get(task_data, "space", "name"),
             }
+
+            # Add subtasks if available
+            subtasks = []
+            if list_id and all_tree_tasks:
+                subtasks = _build_subtask_tree(all_tree_tasks, task_data["id"])
+            result["subtasks"] = subtasks
+
+            # If ClickUp task object lacks the space name, try a direct space fetch (best-effort)
+            try:
+                if not result.get("space_name"):
+                    space_id = result.get("space_id") or _safe_get(
+                        task_data, "space", "id"
+                    )
+                    if space_id:
+                        space_data, sp_err = _api_call("get", f"/space/{space_id}")
+                        if not sp_err and space_data:
+                            space_obj = space_data.get("space") or space_data
+                            if isinstance(space_obj, dict):
+                                name = space_obj.get("name")
+                                if name:
+                                    result["space_name"] = name
+                                    result["space_id"] = space_id
+            except Exception:
+                # Don't fail the whole tool on this best-effort lookup
+                pass
+
+            return result
         except Exception as e:
             return {"error": str(e)}
 
