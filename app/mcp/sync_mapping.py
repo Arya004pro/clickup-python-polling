@@ -253,21 +253,57 @@ def register_sync_mapping_tools(mcp: FastMCP):
     def map_project(id: str, type: str, alias: str = None) -> dict:
         """
         Map a ClickUp entity (Space, Folder, or List) as a 'Project'.
-        Verifies ID, fetches internal structure, and persists mapping.
+        Verifies ID/Name, fetches internal structure, and persists mapping.
+
+        Args:
+            id: Entity ID or Name (will auto-resolve names to IDs for spaces).
+            type: Entity type - must be 'space', 'folder', or 'list'.
+            alias: Optional custom alias for the project (auto-generated if not provided).
+
+        Returns:
+            Mapping confirmation with project details.
         """
         if type not in ["space", "folder", "list"]:
             return {"error": "Type must be 'space', 'folder', or 'list'."}
 
-        # Verify ID and get initial Name
-        structure = _fetch_full_structure(id, type)
+        # Step 1: Resolve name to ID if needed (for spaces)
+        resolved_id = id
+        if type == "space" and not id.isdigit():
+            # Try to resolve space name to ID
+            teams_data = _api_get("/team")
+            if teams_data and teams_data.get("teams"):
+                team_id = teams_data["teams"][0]["id"]
+                spaces_data = _api_get(f"/team/{team_id}/space")
+
+                if spaces_data:
+                    all_spaces = spaces_data.get("spaces", [])
+                    found = False
+
+                    for s in all_spaces:
+                        if s["name"].lower() == id.lower():
+                            resolved_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+        # Step 2: Verify ID and get initial structure
+        structure = _fetch_full_structure(resolved_id, type)
         if "name" not in structure:
             return {
-                "error": f"Could not verify {type} with ID {id}. Check ID or permissions."
+                "error": f"Could not verify {type} with ID/Name '{id}'. Check ID or permissions."
             }
 
         final_alias = alias or _slugify(structure["name"])
 
-        # Check if alias exists
+        # Step 3: Check if alias exists
         if final_alias in db.projects:
             return {
                 "error": f"Alias '{final_alias}' already exists. Please choose another."
@@ -275,7 +311,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
 
         mapping_data = {
             "alias": final_alias,
-            "clickup_id": id,
+            "clickup_id": resolved_id,
             "clickup_type": type,
             "last_sync": time.time(),
             "structure": structure,

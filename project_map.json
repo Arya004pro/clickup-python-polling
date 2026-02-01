@@ -1,10 +1,10 @@
 {
   "mapped_projects": {
-    "Linkutm": {
-      "alias": "Linkutm",
+    "linkutm": {
+      "alias": "linkutm",
       "clickup_id": "90165243069",
       "clickup_type": "space",
-      "last_sync": 1769834437.5727012,
+      "last_sync": 1769953773.591172,
       "structure": {
         "id": "90165243069",
         "type": "space",
@@ -94,11 +94,11 @@
         "name": "linkutm"
       }
     },
-    "Prabhupada Library": {
-      "alias": "Prabhupada Library",
+    "prabhupada-s-library": {
+      "alias": "prabhupada-s-library",
       "clickup_id": "901613097715",
       "clickup_type": "list",
-      "last_sync": 1769834445.6374767,
+      "last_sync": 1769953774.4941099,
       "structure": {
         "id": "901613097715",
         "type": "list",
@@ -106,11 +106,11 @@
         "name": "Prabhupada's Library"
       }
     },
-    "Taxation -CPA Assistant": {
-      "alias": "Taxation -CPA Assistant",
+    "taxation-cpa-assistant": {
+      "alias": "taxation-cpa-assistant",
       "clickup_id": "90167885908",
       "clickup_type": "folder",
-      "last_sync": 1769834533.49933,
+      "last_sync": 1769953775.9826322,
       "structure": {
         "id": "90167885908",
         "type": "folder",
@@ -122,6 +122,310 @@
           }
         ],
         "name": "Taxation - CPA Assistant "
+      }
+    },
+    "AIX": {
+      "alias": "AIX",
+      "clickup_id": "90165253762",
+      "clickup_type": "space",
+      "last_sync": 1769955742.8251746,
+      "structure": {
+        "id": "90165253762",
+        "type": "space",
+        "children": [
+          {
+            "id": "90166912255",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901611401530",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "R1"
+          },
+          {
+            "id": "90167640140",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612384564",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613067323",
+                "name": "R1",
+                "type": "list"
+              }
+            ],
+            "name": "AI Headshots"
+          },
+          {
+            "id": "90167640931",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385488",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Welcome Cure AI Agent"
+          },
+          {
+            "id": "90167640951",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385512",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AyuRAG Agent"
+          },
+          {
+            "id": "90167641115",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385713",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI for Image playground"
+          },
+          {
+            "id": "90167641034",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385620",
+                "name": "Clear this list FAST",
+                "type": "list"
+              },
+              {
+                "id": "901613067292",
+                "name": "R1",
+                "type": "list"
+              }
+            ],
+            "name": "RealEstate Voice Agent"
+          },
+          {
+            "id": "90167641054",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385642",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Bank Statement Model"
+          },
+          {
+            "id": "90167641072",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385663",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": " AI Video Ad Generator"
+          },
+          {
+            "id": "90167641102",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385699",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Ad Plus"
+          },
+          {
+            "id": "90167641117",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385717",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Conversation AI"
+          },
+          {
+            "id": "90167641141",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385739",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Remover AI"
+          },
+          {
+            "id": "90167726806",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612495694",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "BizIntel: Corporate Intelligence Engine"
+          },
+          {
+            "id": "90167735477",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612507760",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613067456",
+                "name": "R1",
+                "type": "list"
+              }
+            ],
+            "name": "AI Photo Manager"
+          },
+          {
+            "id": "90167738032",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612510835",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "OTP Listener"
+          },
+          {
+            "id": "90167738054",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612510862",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Visiting card scanner"
+          },
+          {
+            "id": "90167828942",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612631911",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Fin Memory"
+          },
+          {
+            "id": "90167870295",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612689082",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Mobile App R&D Tasks"
+          },
+          {
+            "id": "90167885908",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612709931",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Taxation - CPA Assistant "
+          },
+          {
+            "id": "90167898809",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612728366",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Product Showcase"
+          },
+          {
+            "id": "90168226581",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613173669",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Sales Analysis"
+          },
+          {
+            "id": "90168229095",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613176583",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Clickup Analysis & Report"
+          },
+          {
+            "id": "90168238889",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613188020",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI/ML Deep Search"
+          },
+          {
+            "id": "90168304271",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613268407",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI RAG Agent"
+          }
+        ],
+        "name": "AIX"
       }
     }
   },

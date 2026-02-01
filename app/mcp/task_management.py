@@ -304,8 +304,19 @@ def register_task_tools(mcp: FastMCP):
         statuses: list[str] = None,
         assignees: list[int] = None,
         page: int = None,
+        filter_no_time_entries: bool = False,
     ) -> dict:
-        """List tasks in a list with optional filters."""
+        """
+        List tasks in a list with optional filters.
+
+        Args:
+            list_id: The ClickUp list ID to fetch tasks from.
+            include_closed: Whether to include closed tasks.
+            statuses: Filter by specific status names.
+            assignees: Filter by assignee IDs.
+            page: Specific page number (None = fetch all pages).
+            filter_no_time_entries: If True, only return tasks with zero tracked time (time_spent = 0 or None).
+        """
         try:
             params = [("include_closed", str(include_closed).lower())]
             if statuses:
@@ -332,6 +343,10 @@ def register_task_tools(mcp: FastMCP):
                 if page is not None:
                     break
 
+            # Filter for tasks with no time entries if requested
+            if filter_no_time_entries:
+                all_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) == 0]
+
             formatted = [
                 {
                     "task_id": t.get("id"),
@@ -339,6 +354,10 @@ def register_task_tools(mcp: FastMCP):
                     "status": _safe_get(t, "status", "status"),
                     "assignee": _format_assignees(t.get("assignees")),
                     "due_date": t.get("due_date"),
+                    "time_spent": int(t.get("time_spent") or 0),
+                    "time_spent_readable": _format_duration(
+                        int(t.get("time_spent") or 0)
+                    ),
                 }
                 for t in all_tasks
             ]
@@ -361,6 +380,7 @@ def register_task_tools(mcp: FastMCP):
                 "tasks": formatted,
                 "status_counts": status_counts,
                 "requested_status_counts": requested_status_counts,
+                "filter_applied": "no_time_entries" if filter_no_time_entries else None,
             }
         except Exception as e:
             return {"error": str(e), "tasks": []}

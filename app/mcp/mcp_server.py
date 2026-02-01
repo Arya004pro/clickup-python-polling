@@ -25,8 +25,7 @@ register_sync_mapping_tools(mcp)
 if __name__ == "__main__":
     print("Starting ClickUp MCP Server...")
     mcp.run(
-        transport="streamable-http",  # most reliable for your current success
+        transport="sse",  # SSE transport for MCP client compatibility
         host="0.0.0.0",
-        port=8001,  # or 8001 if you prefer to keep separate from FastAPI
-        stateless=True,
+        port=8001,
     )

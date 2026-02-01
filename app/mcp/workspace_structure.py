@@ -45,17 +45,44 @@ def register_workspace_tools(mcp: FastMCP):
     def get_spaces(workspace_id: str = None):
         """
         List all spaces inside a specific workspace (team).
-        Returns pretty-printed JSON list.
+
+        Args:
+            workspace_id: Workspace/Team ID or Name (will auto-resolve names to IDs).
+                         If not provided, uses default team from config.
+
+        Returns:
+            List of spaces with their IDs, names, and metadata.
         """
-        team_id = workspace_id or CLICKUP_TEAM_ID
-
-        if not team_id:
-            teams = _get(f"{BASE_URL}/team").get("teams", [])
-            if not teams:
-                return {"error": "No workspaces found"}
-            team_id = teams[0]["id"]
-
         try:
+            # Step 1: Resolve workspace_id (could be name or ID)
+            team_id = workspace_id or CLICKUP_TEAM_ID
+
+            if not team_id:
+                teams = _get(f"{BASE_URL}/team").get("teams", [])
+                if not teams:
+                    return {"error": "No workspaces found"}
+                team_id = teams[0]["id"]
+
+            # Step 2: If team_id looks like a name (not numeric), resolve it
+            if team_id and not team_id.isdigit():
+                teams = _get(f"{BASE_URL}/team").get("teams", [])
+                found = False
+                for t in teams:
+                    if t["name"].lower() == team_id.lower():
+                        team_id = t["id"]
+                        found = True
+                        break
+
+                if not found:
+                    return {
+                        "error": f"Workspace '{workspace_id}' not found",
+                        "hint": f"Available workspaces: {[t['name'] for t in teams]}",
+                        "available_workspaces": [
+                            {"id": t["id"], "name": t["name"]} for t in teams
+                        ],
+                    }
+
+            # Step 3: Fetch spaces
             spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
             spaces = spaces_data.get("spaces", [])
 
@@ -71,7 +98,14 @@ def register_workspace_tools(mcp: FastMCP):
                 for s in spaces
             ]
 
-            return result
+            return {
+                "workspace_id": team_id,
+                "workspace_name": workspace_id
+                if workspace_id and not workspace_id.isdigit()
+                else None,
+                "total_spaces": len(result),
+                "spaces": result,
+            }
 
         except Exception as e:
             return {"error": f"Failed to fetch spaces: {str(e)}"}
@@ -80,35 +114,64 @@ def register_workspace_tools(mcp: FastMCP):
     def get_space(space_id: str):
         """
         Get detailed information about a specific ClickUp space.
-        Returns pretty-printed JSON object.
+
+        Args:
+            space_id: Space ID or Name (will auto-resolve names to IDs).
+
+        Returns:
+            Detailed space information including statuses, features, and permissions.
         """
         try:
-            # Try direct fetch first
-            space_data = _get(f"{BASE_URL}/space/{space_id}")
-            space = space_data.get("space", {})
-
-            if space and space.get("id") == space_id:
-                return format_space_details(space)
-
-            # Fallback: search in team spaces
-            print(f"[DEBUG] Direct fetch failed. Trying team fallback for {space_id}")
+            # Step 1: Get team ID for resolution
             team_id = CLICKUP_TEAM_ID
             if not team_id:
                 teams = _get(f"{BASE_URL}/team").get("teams", [])
                 if teams:
                     team_id = teams[0]["id"]
 
+            # Step 2: If space_id looks like a name (not numeric), resolve it
+            resolved_space_id = space_id
+            if not space_id.isdigit():
+                if team_id:
+                    spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
+                    all_spaces = spaces_data.get("spaces", [])
+
+                    # Search by name (case-insensitive)
+                    found = False
+                    for s in all_spaces:
+                        if s["name"].lower() == space_id.lower():
+                            resolved_space_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{space_id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+            # Step 3: Try direct fetch with resolved ID
+            space_data = _get(f"{BASE_URL}/space/{resolved_space_id}")
+            space = space_data.get("space", {})
+
+            if space and space.get("id") == resolved_space_id:
+                return format_space_details(space)
+
+            # Step 4: Fallback search
             if team_id:
                 spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
                 all_spaces = spaces_data.get("spaces", [])
                 for s in all_spaces:
-                    if s["id"] == space_id:
+                    if s["id"] == resolved_space_id:
                         return format_space_details(s)
 
             return {
                 "space_id": space_id,
                 "error": "Space not found or not accessible",
-                "hint": "Check if ID exists in get_spaces output and token has access",
+                "hint": "Check if ID/name exists in get_spaces output and token has access",
             }
 
         except Exception as e:
@@ -135,14 +198,44 @@ def register_workspace_tools(mcp: FastMCP):
         """
         List all folders inside a specific ClickUp space.
 
-        Parameters:
-        - space_id (string, required): The ID of the space to fetch folders from.
+        Args:
+            space_id: Space ID or Name (will auto-resolve names to IDs).
 
         Returns:
-        Pretty-printed JSON list of folders with IDs, names, list count, etc.
+            List of folders with IDs, names, and list summaries.
         """
         try:
-            folders_data = _get(f"{BASE_URL}/space/{space_id}/folder")
+            # Step 1: Resolve space name to ID if needed
+            resolved_space_id = space_id
+            if not space_id.isdigit():
+                team_id = CLICKUP_TEAM_ID
+                if not team_id:
+                    teams = _get(f"{BASE_URL}/team").get("teams", [])
+                    if teams:
+                        team_id = teams[0]["id"]
+
+                if team_id:
+                    spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
+                    all_spaces = spaces_data.get("spaces", [])
+
+                    found = False
+                    for s in all_spaces:
+                        if s["name"].lower() == space_id.lower():
+                            resolved_space_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{space_id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+            # Step 2: Fetch folders
+            folders_data = _get(f"{BASE_URL}/space/{resolved_space_id}/folder")
             folders = folders_data.get("folders", [])
 
             if not folders:
