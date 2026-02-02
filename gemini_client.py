@@ -148,19 +148,39 @@ def format_tools_for_gemini(tools_list) -> List[Dict[str, Any]]:
     """Convert MCP tools to Gemini function declarations"""
     function_declarations = []
 
+    def map_json_type_to_gemini(json_type: str) -> str:
+        """Map JSON Schema types to Gemini proto types"""
+        type_map = {
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+            "array": "ARRAY",
+            "object": "OBJECT",
+        }
+        return type_map.get(json_type, "STRING")
+
     for tool in tools_list.tools:
         properties = tool.inputSchema.get("properties", {})
         required = tool.inputSchema.get("required", [])
 
-        # Convert to Gemini-compatible parameter format
-        # Use STRING type for all properties to avoid proto type issues
+        # Convert to Gemini-compatible parameter format with proper types
         param_defs = {}
         for param_name, param_schema in properties.items():
             param_desc = param_schema.get("description", param_name)
-            param_defs[param_name] = {
-                "type_": "STRING",  # Gemini expects STRING enum, not string
+            param_type = param_schema.get("type", "string")
+
+            param_def = {
+                "type_": map_json_type_to_gemini(param_type),
                 "description": param_desc,
             }
+
+            # Add items schema for arrays
+            if param_type == "array" and "items" in param_schema:
+                items_type = param_schema["items"].get("type", "string")
+                param_def["items"] = {"type_": map_json_type_to_gemini(items_type)}
+
+            param_defs[param_name] = param_def
 
         function_declarations.append(
             {
