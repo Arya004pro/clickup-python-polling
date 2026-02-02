@@ -21,6 +21,9 @@ Author: ClickUp MCP Team
 Version: 4.0 (Optimized Multi-Provider)
 """
 
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from dotenv import load_dotenv
 import asyncio
 import json
 import os
@@ -31,6 +34,10 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from enum import Enum
+import uuid
+import re
+
+load_dotenv()
 
 # Python 3.11+ compatibility for ExceptionGroup
 if sys.version_info >= (3, 11):
@@ -45,11 +52,7 @@ else:
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from dotenv import load_dotenv
 
-load_dotenv()
 
 # ============================================================================
 # CONFIGURATION
@@ -259,6 +262,38 @@ def sanitize_schema(schema: Dict, provider: Provider) -> Dict:
     return result
 
 
+def _fallback_parse_tool_calls(text: str) -> List[Dict]:
+    """Parse plain-text tool call like `get_tasks(list_id=123, include_closed=true)`
+    into a list of tool call dicts: {"id":..., "name":..., "arguments": {...}}
+    This is a best-effort fallback when the model returns text instead of structured tool_calls.
+    """
+    if not text or not isinstance(text, str):
+        return []
+
+    text = text.strip()
+    m = re.match(r"^([a-zA-Z_][\w\-]*)\s*\((.*)\)\s*$", text, re.S)
+    if not m:
+        return []
+
+    name = m.group(1)
+    args_raw = m.group(2).strip()
+    # Convert key=value pairs to JSON-like string by quoting keys
+    try:
+        transformed = re.sub(r"(\w+)\s*=", r'"\1":', args_raw)
+        # wrap into object
+        json_text = "{" + transformed + "}"
+        # Replace single quotes with double quotes for JSON
+        json_text = json_text.replace("'", '"')
+        # Ensure true/false/null are JSON-friendly (lowercase)
+        json_text = re.sub(r"\bNone\b", "null", json_text)
+        parsed = json.loads(json_text)
+    except Exception:
+        # best-effort: fallback to empty args
+        parsed = {}
+
+    return [{"id": str(uuid.uuid4()), "name": name, "arguments": parsed}]
+
+
 # ============================================================================
 # BASE PROVIDER CLASS
 # ============================================================================
@@ -309,6 +344,24 @@ You can access and manage ClickUp data through these tool categories:
 
 ## CRITICAL INSTRUCTIONS - NEVER BREAK THESE RULES:
 
+### 🧠 LOGICAL STEP-BY-STEP PROCESSING (MANDATORY):
+**For EVERY user request, you MUST:**
+1. **Understand**: Parse the user's request to identify EXACTLY what data they need
+2. **Plan**: Determine which tools are needed and in what order
+3. **Execute**: Call the appropriate tools with correct parameters
+4. **Verify**: Check tool results for success/failure before proceeding
+5. **Respond**: Present ONLY the data returned by tools, nothing else
+
+**Example Workflow:**
+- User: "fetch all spaces inside Avinashi workspace"
+- Step 1: Understand → User wants spaces from workspace "Avinashi"
+- Step 2: Plan → Use get_spaces(workspace_id="Avinashi")
+- Step 3: Execute → Call get_spaces with workspace_id="Avinashi"
+- Step 4: Verify → Check if tool returned data or error
+- Step 5: Respond → List the spaces returned, or report the error
+
+**NEVER skip steps. NEVER assume data. ALWAYS follow this workflow.**
+
 ### 🚫 ANTI-HALLUCINATION RULES:
 1. **ONLY use data from actual tool results or the knowledge graph**
 2. **NEVER invent, guess, or assume data that wasn't returned by tools**
@@ -325,11 +378,37 @@ You can access and manage ClickUp data through these tool categories:
 - Never fill in "reasonable" values that weren't actually provided
 
 ### 🔧 Tool Usage Rules:
+- **CRITICAL**: Tool parameters must ALWAYS be IDs (numeric strings), NEVER names
+- **list_id**: Must be a numeric ID like "901613173669", NOT a name like "Sales Analysis"
+- **folder_id**: Must be a numeric ID like "90167907863", NOT a name like "Luminique"
+- **space_id**: Can be a NAME or ID (tools auto-resolve names)
+- **workspace_id**: Can be a NAME or ID (tools auto-resolve names)
+- When you get folder/list data, EXTRACT the ID from the response before using it
 - Use tools to get fresh, current data rather than relying on old information
 - If one tool fails, try alternative tools when appropriate
 - Explain what each tool call is attempting to accomplish
 - When multiple tools are available for a task, choose the most appropriate one
 - Always validate tool results before presenting them to the user
+
+**HIERARCHY: Workspace → Space → Folder → List → Task**
+- To get tasks, you need a list_id
+- To get lists, you need a folder_id (or space_id)
+- ALWAYS call get_lists() after get_folders() to get the actual list IDs
+
+**Example - Get tasks from "Sales Analysis" folder:**
+1. Call get_folders(space_id="AIX") → Find folder (folder_id: "90168226581", name: "Sales Analysis")
+2. Extract folder_id: "90168226581"
+3. Call get_lists(folder_id="90168226581") → Find list (list_id: "901613173669", name: "List")
+4. Extract list_id: "901613173669"
+5. Call get_tasks(list_id="901613173669", filter_no_time_entries=true)
+
+**Example ID Extraction:**
+1. User: "Get tasks from Sales Analysis"
+2. Step 1: Call get_folders to find Sales Analysis folder → Returns {{folder_id: "90168226581"}}
+3. Step 2: Extract ID: folder_id = "90168226581"
+4. Step 3: Call get_lists(folder_id="90168226581") → Returns {{list_id: "901613173669"}}
+5. Step 4: Extract ID: list_id = "901613173669"
+6. Step 5: Call get_tasks(list_id="901613173669")
 
 ### 🆔 ID vs NAME Resolution (IMPORTANT):
 **The enhanced tools now accept BOTH IDs and Names!**
@@ -446,7 +525,7 @@ class CerebrasProvider(LLMProvider):
         except Exception as e:
             # If tools fail, try without tools
             if "tool" in str(e).lower() or "function" in str(e).lower():
-                print(f"   ⚠ Function calling failed, retrying without tools")
+                print("   ⚠ Function calling failed, retrying without tools")
                 response = await asyncio.to_thread(
                     self.client.chat.completions.create,
                     model=CEREBRAS_MODEL,
@@ -468,9 +547,20 @@ class CerebrasProvider(LLMProvider):
             raise e
 
         assistant_message = response.choices[0].message
+
+        # Debug: show raw assistant message structure (truncate content)
+        try:
+            raw_content = (assistant_message.content or "")[:1000]
+        except Exception:
+            raw_content = str(assistant_message)[:1000]
+        print(f"🔍 Cerebras - assistant content (truncated): {raw_content}")
+
+        has_tool_calls = bool(getattr(assistant_message, "tool_calls", None))
+        print(f"🔍 Cerebras - tool_calls present: {has_tool_calls}")
+
         clean_message = {"role": "assistant", "content": assistant_message.content}
 
-        if assistant_message.tool_calls:
+        if has_tool_calls:
             clean_message["tool_calls"] = [
                 {
                     "id": tc.id,
@@ -484,6 +574,35 @@ class CerebrasProvider(LLMProvider):
             ]
 
         self.conversation_history.append(clean_message)
+
+        # Build tool_calls list for caller. If provider did not return structured tool calls,
+        # attempt to parse the assistant text for a function-like call as a fallback.
+        tool_calls = []
+        if has_tool_calls:
+            for tc in assistant_message.tool_calls:
+                try:
+                    arguments = (
+                        json.loads(tc.function.arguments)
+                        if tc.function.arguments
+                        else {}
+                    )
+                    tool_calls.append(
+                        {
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "arguments": arguments,
+                        }
+                    )
+                except json.JSONDecodeError as e:
+                    print(f"   ⚠ Failed to parse args for {tc.function.name}: {e}")
+        else:
+            # Fallback: try parse textual function call
+            fallback = _fallback_parse_tool_calls(assistant_message.content or "")
+            if fallback:
+                print(f"🔧 Cerebras - Fallback parsed tool call: {fallback}")
+                tool_calls.extend(fallback)
+
+        return assistant_message.content or "", tool_calls
 
         # Extract tool calls
         tool_calls = []
@@ -683,11 +802,21 @@ class GroqProvider(LLMProvider):
 
         assistant_message = response.choices[0].message
 
+        # Debug: log assistant content and presence of tool_calls
+        try:
+            raw_content = (assistant_message.content or "")[:1000]
+        except Exception:
+            raw_content = str(assistant_message)[:1000]
+        print(f"🔍 Groq - assistant content (truncated): {raw_content}")
+
+        has_tool_calls = bool(getattr(assistant_message, "tool_calls", None))
+        print(f"🔍 Groq - tool_calls present: {has_tool_calls}")
+
         # Create clean message dict for history (no annotations or unsupported fields)
         clean_message = {"role": "assistant", "content": assistant_message.content}
 
         # Add tool calls if present
-        if assistant_message.tool_calls:
+        if has_tool_calls:
             clean_message["tool_calls"] = [
                 {
                     "id": tc.id,
@@ -702,9 +831,9 @@ class GroqProvider(LLMProvider):
 
         self.conversation_history.append(clean_message)
 
-        # Extract tool calls for processing
+        # Extract tool calls for processing, or fall back to text parsing
         tool_calls = []
-        if assistant_message.tool_calls:
+        if has_tool_calls:
             for tc in assistant_message.tool_calls:
                 try:
                     # Debug: Print the raw tool call to see its format
@@ -729,18 +858,20 @@ class GroqProvider(LLMProvider):
                         f"⚠️ Failed to parse tool call arguments for {tc.function.name}: {e}"
                     )
                     print(f"   Raw arguments: {tc.function.arguments}")
-                    # Try to extract function name and arguments from malformed format
                     if "<function=" in str(tc.function.arguments):
                         print(
-                            "🔧 Detected malformed Groq function call format, attempting to parse..."
+                            "🔧 Detected malformed Groq function call format, skipping this call"
                         )
-                        # Skip this tool call - Groq is generating wrong format
                         continue
                 except Exception as e:
                     print(f"⚠️ Unexpected error processing tool call: {e}")
-                except Exception as e:
-                    print(f"⚠️ Unexpected error processing tool call: {e}")
                     continue
+        else:
+            # Fallback: try parse textual function call like get_tasks(...)
+            fallback = _fallback_parse_tool_calls(assistant_message.content or "")
+            if fallback:
+                print(f"🔧 Groq - Fallback parsed tool call: {fallback}")
+                tool_calls.extend(fallback)
 
         return assistant_message.content or "", tool_calls
 
@@ -1005,11 +1136,11 @@ class OllamaProvider(LLMProvider):
 
         # If no small model available, try to pull qwen2.5:3b
         if not model_to_use:
-            print(f"   📥 No small model found. Pulling qwen2.5:3b (2GB RAM)...")
+            print("   📥 No small model found. Pulling qwen2.5:3b (2GB RAM)...")
             try:
                 self.client.pull("qwen2.5:3b")
                 model_to_use = "qwen2.5:3b"
-                print(f"   ✓ Successfully pulled qwen2.5:3b")
+                print("   ✓ Successfully pulled qwen2.5:3b")
             except Exception as e:
                 print(f"   ⚠ Could not pull qwen2.5:3b: {e}")
                 # Last resort: use smallest available model
@@ -1069,10 +1200,25 @@ class OllamaProvider(LLMProvider):
         )
 
         assistant_message = response["message"]
-        self.conversation_history.append(assistant_message)
+
+        # Debug: show raw assistant message structure (truncate content)
+        try:
+            raw_content = (assistant_message.get("content", "") or "")[:1000]
+        except Exception:
+            raw_content = str(assistant_message)[:1000]
+        print(f"🔍 Ollama - assistant content (truncated): {raw_content}")
+
+        has_tool_calls = bool(assistant_message.get("tool_calls"))
+        print(f"🔍 Ollama - tool_calls present: {has_tool_calls}")
+
+        # Only append to history if we have actual content or tool calls
+        if assistant_message.get("content") or has_tool_calls:
+            self.conversation_history.append(assistant_message)
+        else:
+            print("⚠️ Ollama - Skipping empty message from history")
 
         tool_calls = []
-        if "tool_calls" in assistant_message and assistant_message["tool_calls"]:
+        if has_tool_calls:
             for tc in assistant_message["tool_calls"]:
                 tool_calls.append(
                     {
@@ -1081,6 +1227,14 @@ class OllamaProvider(LLMProvider):
                         "arguments": tc["function"].get("arguments", {}),
                     }
                 )
+        else:
+            # Fallback: try to parse plain text function calls
+            content = assistant_message.get("content", "")
+            if content and content.strip():
+                parsed = _fallback_parse_tool_calls(content)
+                if parsed:
+                    print(f"🔧 Ollama - Fallback parsed tool call: {parsed}")
+                    tool_calls = parsed
 
         return assistant_message.get("content", ""), tool_calls
 
@@ -1493,7 +1647,7 @@ async def main():
         print("\n📋 Please ensure the MCP server is running:")
         print("   fastmcp run app/mcp/mcp_server.py:mcp --transport sse --port 8001")
     except ExceptionGroup as eg:
-        print(f"\n❌ ERROR: ExceptionGroup caught:")
+        print("\n❌ ERROR: ExceptionGroup caught:")
         for i, exc in enumerate(eg.exceptions, 1):
             print(f"   Sub-exception {i}: {type(exc).__name__}: {exc}")
     except Exception as e:

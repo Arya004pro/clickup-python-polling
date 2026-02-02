@@ -41,22 +41,24 @@ The Model Context Protocol (MCP) is an open standard that enables AI models to i
 
 ## 🤖 AI Provider Comparison
 
-| Provider    | Free Tier Limit    | Context Window | Speed      | Best For                 |
-| ----------- | ------------------ | -------------- | ---------- | ------------------------ |
-| **🏆 GROQ** | **14,400 req/day** | 128K tokens    | ⚡ Fastest | **Testing & Production** |
-| GEMINI      | ~50 req/day        | 1M tokens      | Fast       | Large context needs      |
-| OLLAMA      | **Unlimited**      | 128K tokens    | Varies     | Privacy & offline use    |
+| Provider        | Free Tier Limit       | Context Window | Speed      | Best For                  |
+| --------------- | --------------------- | -------------- | ---------- | ------------------------- |
+| **🏆 CEREBRAS** | **UNLIMITED! 🎉**     | 128K tokens    | ⚡ Fastest | **Primary (Recommended)** |
+| GROQ            | 14,400 req/day        | 128K tokens    | ⚡ Fast    | Backup/Secondary          |
+| GEMINI          | ~50 req/day           | 1M tokens      | Fast       | Large context needs       |
+| OLLAMA          | **Unlimited (local)** | 128K tokens    | Varies     | Privacy & offline use     |
 
-### Why Groq is Recommended (Primary Provider)
+### Why Cerebras is Recommended (Primary Provider)
 
-| Feature               | Groq (Llama 3.3 70B) | Gemini 2.0 Flash |
-| --------------------- | -------------------- | ---------------- |
-| **Free Requests/Day** | 14,400 ✅            | ~50 ❌           |
-| **Context Window**    | 128K tokens          | 1M tokens        |
-| **Inference Speed**   | 100+ tokens/sec      | ~50 tokens/sec   |
-| **Tool Calling**      | Native support       | Native support   |
-| **Accuracy**          | Excellent            | Excellent        |
-| **Rate Limit Issues** | Rare                 | Very common      |
+| Feature               | Cerebras (Llama 3.3 70B) | Groq (Llama 3.3 70B) | Gemini 2.0 Flash |
+| --------------------- | ------------------------ | -------------------- | ---------------- |
+| **Free Requests/Day** | UNLIMITED ✅             | 14,400 ✅            | ~50 ❌           |
+| **Free Tokens/Day**   | UNLIMITED ✅             | 100K ✅              | Limited ❌       |
+| **Context Window**    | 128K tokens              | 128K tokens          | 1M tokens        |
+| **Inference Speed**   | 2000+ tokens/sec ⚡      | 100+ tokens/sec      | ~50 tokens/sec   |
+| **Tool Calling**      | Native support           | Native support       | Native support   |
+| **Accuracy**          | Excellent                | Excellent            | Excellent        |
+| **Rate Limit Issues** | None (Unlimited)         | Rare                 | Very common      |
 
 ---
 
@@ -220,11 +222,10 @@ The Model Context Protocol (MCP) is an open standard that enables AI models to i
 - PostgreSQL database (Supabase recommended)
 - An API Key from Gemini, Groq, or Ollama
 
-
 ### 5-Minute Setup
 
 ```bash
-# 1. Clone the repository
+# 1. Clone the repository, now here a branch might need to be cloned
 git clone https://github.com/Arya004pro/clickup-python-polling.git
 cd clickup-python-polling
 
@@ -240,14 +241,10 @@ pip install -r requirements.txt
 copy .env.example .env
 # Edit .env with your credentials (see below)
 
-# 5. Validate setup
-python check_models.py
+# 5. Start MCP Server (Terminal 1)
+python app/mcp/mcp_server.py
 
-# 6. Start MCP Server (Terminal 1)
-$env:PYTHONPATH = (Get-Location).Path
-fastmcp run app/mcp/mcp_server.py:mcp --transport sse --port 8001
-
-# 7. Start SLM Client (Terminal 2)
+# 6. Start SLM Client (Terminal 2)
 python slm_client.py
 ```
 
@@ -258,9 +255,13 @@ python slm_client.py
 CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
 DATABASE_URL=postgresql://user:pass@host:6543/postgres
 
-# AI Provider (choose one)
-LLM_PROVIDER=groq
-GROQ_API_KEY=gsk_YOUR_KEY_HERE  # Get from https://console.groq.com/keys
+# AI Provider (Cerebras recommended - UNLIMITED free!)
+LLM_PROVIDER=cerebras
+CEREBRAS_API_KEY=csk_YOUR_KEY_HERE  # Get from https://cloud.cerebras.ai/
+
+# OR use Groq as backup
+# LLM_PROVIDER=groq
+# GROQ_API_KEY=gsk_YOUR_KEY_HERE  # Get from https://console.groq.com/keys
 ```
 
 ---
@@ -358,7 +359,16 @@ python -c "import google.generativeai; print('Gemini SDK: OK')"
 
 #### AI Provider API Keys
 
-##### 🏆 Groq API Key (RECOMMENDED - 14,400 requests/day FREE)
+##### 🏆 Cerebras API Key (RECOMMENDED - UNLIMITED FREE!)
+
+1. Go to [Cerebras Cloud](https://cloud.cerebras.ai/)
+2. Sign up/Login (free)
+3. Navigate to **API Keys**
+4. Click **Create API Key**
+5. Copy the key (starts with `csk_...`)
+6. Set in `.env`: `CEREBRAS_API_KEY=csk_YOUR_KEY`
+
+##### Groq API Key (Secondary - 14,400 requests/day FREE)
 
 1. Go to [Groq Console](https://console.groq.com/keys)
 2. Sign up/Login (free)
@@ -373,9 +383,21 @@ python -c "import google.generativeai; print('Gemini SDK: OK')"
 
 ##### Ollama (Local - Unlimited, requires GPU)
 
+**Windows:**
+
+1. Download installer from [ollama.ai](https://ollama.ai)
+2. Run the `.exe` installer
+3. Open PowerShell and verify: `ollama --version`
+4. Pull a model (small for 6GB RAM): `ollama pull qwen2.5:3b`
+5. Start Ollama service: `ollama serve`
+6. Set in `.env`: `OLLAMA_BASE_URL=http://localhost:11434`
+
+**Linux/Mac:**
+
 1. Install from [ollama.ai](https://ollama.ai)
-2. Run: `ollama pull llama3.1:8b`
-3. No API key needed
+2. Run: `ollama pull qwen2.5:3b` (or `llama3.1:8b` for 8GB+ RAM)
+3. Ollama runs automatically in background
+4. Set in `.env`: `OLLAMA_BASE_URL=http://localhost:11434`
 
 #### Supabase/PostgreSQL
 
@@ -431,79 +453,31 @@ CLICKUP_TEAM_ID=12345678
 CLICKUP_SPACE_ID=
 ```
 
-### Step 6: Validate Setup
+### Step 6: Start MCP Server
 
-Run the comprehensive validation script:
-
-```bash
-python check_models.py
-```
-
-Expected output:
-
-```
-============================================================
-         ClickUp MCP Server - Setup Validator
-============================================================
-
-▶ Python Version
-  ✓ Python 3.11.9 ✓ (Recommended: 3.11.9)
-
-▶ Environment Configuration (.env)
-  ✓ .env file exists
-  ✓ CLICKUP_API_TOKEN: pk_1***...***XX
-  ✓ DATABASE_URL: post***...***gres
-  ✓ GROQ_API_KEY: gsk_***...***XX
-
-▶ Python Dependencies
-  ✓ fastapi
-  ✓ uvicorn
-  ✓ fastmcp
-  ... (all packages)
-
-▶ Google Gemini API
-  ✓ API Key configured
-  ✓ models/gemini-2.0-flash
-  ✓ Recommended model available
-
-▶ ClickUp API
-  ✓ API Token valid
-  ✓ Found 1 workspace(s)
-    • My Workspace (ID: 12345678)
-
-▶ MCP Tools Inventory
-  ✓ Total Tools Registered: 54
-  ... (tool categories)
-
-============================================================
-               Validation Summary
-============================================================
-Result: 8/8 checks passed
-
-✓ All checks passed! Your setup is ready.
-
-Next Steps:
-  1. Start MCP Server:  python -m app.mcp.mcp_server
-  2. Start SLM Client:  python slm_client.py
-```
-
-### Step 7: Start the System
-
-**Terminal 1 - MCP Server:**
+**Terminal 1 - Start the MCP Server:**
 
 ```bash
-python -m app.mcp.mcp_server
+# Activate virtual environment first (if not already activated)
+myenv\Scripts\Activate.ps1
+
+# Start the server
+python app/mcp/mcp_server.py
 ```
 
 Expected output:
 
 ```
 Starting ClickUp MCP Server...
-INFO:     Started server process
 INFO:     Uvicorn running on http://0.0.0.0:8001
+INFO:     Application startup complete
 ```
 
-**Terminal 2 - SLM Client:**
+**Important:** Keep this terminal open. The server must run continuously for the SLM client to work.
+
+### Step 7: Start SLM Client
+
+**Terminal 2 - Run the SLM Client:**
 
 ```bash
 python slm_client.py
@@ -875,9 +849,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🛠 Step-by-Step Setup Guide for Testers
+## 🛠 Quick Setup for Testers (Non-Technical Users)
 
-Follow these steps to set up the ClickUp MCP Server on your device:
+Follow these simple steps to get the ClickUp MCP Server running on your device (even if you're not a developer):
 
 ### 1. Prerequisites
 
@@ -912,25 +886,46 @@ $ pip install -r requirements.txt
 ### 5. Configure Environment Variables
 
 - Create a `.env` file in the root directory.
-- Add the following variables:
+- Add the following **REQUIRED** variables:
+
   ```env
+  # Required
+  CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
+  DATABASE_URL=postgresql://user:pass@host:6543/postgres
+
+  # AI Provider (get FREE key from https://cloud.cerebras.ai/)
   LLM_PROVIDER=cerebras
-  CEREBRAS_API_KEY=your_cerebras_api_key
-  GROQ_API_KEY=your_groq_api_key
-  GEMINI_API_KEY=your_gemini_api_key
+  CEREBRAS_API_KEY=csk_YOUR_KEY_HERE
+
+  # Server URL (default)
   MCP_SERVER_URL=http://127.0.0.1:8001/sse
   ```
 
-### 6. Run the MCP Server
+### 6. Run the MCP Server (Keep This Terminal Open!)
 
 ```bash
 # Start the MCP server
-$ fastmcp run app/mcp/mcp_server.py:mcp --transport sse --port 8001
+$ python app/mcp/mcp_server.py
 ```
 
-### 7. Test the SLM Client
+You should see:
+
+```
+Starting ClickUp MCP Server...
+INFO:     Uvicorn running on http://0.0.0.0:8001
+```
+
+**⚠️ Important:** Do NOT close this terminal. It must stay running!
+
+### 7. Test the SLM Client (Open NEW Terminal)
+
+**Open a NEW terminal window** (keep step 6 terminal running in background):
 
 ```bash
+# Activate virtual environment in NEW terminal
+$ source myenv/Scripts/activate  # On Windows
+$ source myenv/bin/activate      # On macOS/Linux
+
 # Run the SLM client
 $ python slm_client.py
 ```
