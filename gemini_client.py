@@ -217,34 +217,14 @@ async def run_chat_loop():
             # Convert tools to Gemini format
             gemini_tools = format_tools_for_gemini(tools_list)
 
-            # Create system instruction
-            system_instruction = f"""You are an expert ClickUp Project Analytics Assistant with access to {len(tools_list.tools)} specialized tools.
+            # Create system instruction (optimized for minimal tokens)
+            system_instruction = f"""You are a ClickUp Analytics Assistant with {len(tools_list.tools)} tools.
 
-CONTEXT KNOWLEDGE:
-- Available Spaces: {json.dumps(SPACE_MAP, indent=2)}
-- Available Folders: {json.dumps(FOLDER_MAP, indent=2) if FOLDER_MAP else "Not yet loaded"}
-
-CAPABILITIES:
-1. Workspace Structure: Get spaces, folders, lists, and their hierarchies
-2. Task Management: Query, filter, and analyze tasks by status, assignee, dates, tags
-3. PM Analytics: Generate reports on task distribution, time tracking, progress metrics
-4. Project Intelligence: Analyze patterns, bottlenecks, employee performance
-5. Configuration: Access custom fields, statuses, tags, priorities
-6. Sync Mapping: Access database-synced data for complex queries
-
-GUIDELINES:
-1. For complex queries, break them into logical tool calls
-2. Always use exact IDs from context when available
-3. For user-friendly names, first resolve them to IDs using list/search tools
-4. Aggregate data across multiple tool calls when needed for comprehensive reports
-5. Present insights clearly with metrics, percentages, and actionable summaries
-6. If you need to find a space/folder/list by name, use the get_* tools first
-
-CONVERSATION STYLE:
-- Be direct and data-driven
-- Use markdown tables for multi-item results
-- Highlight key metrics in bold
-- Provide context for numbers (e.g., "15 tasks (30% of total)")
+RULES:
+1. Use tools to fetch data before answering. Start with get_spaces, get_folders, etc.
+2. For names, resolve to IDs first using list/search tools.
+3. Present results in markdown tables. Be concise and data-driven.
+4. For complex queries, chain multiple tool calls logically.
 """
 
             # Initialize Gemini model with tools (try fallback models if quota exceeded)
@@ -310,108 +290,122 @@ CONVERSATION STYLE:
                                 if fc:
                                     function_calls.append(fc)
 
-                            # Execute all function calls
-                            function_responses = []
+                        # If no function calls, model has final answer
+                        if not function_calls:
+                            try:
+                                answer = response.text
+                                print(f"\n🤖 Assistant:\n{answer}\n")
+                            except Exception:
+                                print("\n🤖 Assistant: (empty response)\n")
+                            break
 
-                            for fc in function_calls:
-                                tool_name = fc.name
-                                tool_args = dict(fc.args)
+                        # Execute all function calls
+                        function_responses = []
 
-                                print(
-                                    f"   🔧 Tool: {tool_name}({json.dumps(tool_args, indent=2)})"
+                        for fc in function_calls:
+                            tool_name = fc.name
+                            tool_args = dict(fc.args)
+
+                            print(
+                                f"   🔧 Tool: {tool_name}({json.dumps(tool_args, indent=2)})"
+                            )
+
+                            try:
+                                # Call MCP tool
+                                logger.log_tool_call()
+                                result = await session.call_tool(
+                                    tool_name, arguments=tool_args
                                 )
-
-                                try:
-                                    # Call MCP tool
-                                    logger.log_tool_call()
-                                    result = await session.call_tool(
-                                        tool_name, arguments=tool_args
-                                    )
-                                    # Normalize tool output to a string. Some tool implementations
-                                    # may return protobuf messages (RepeatedComposite, Message, etc.)
-                                    tool_output = "{}"
-                                    if getattr(result, "content", None):
-                                        part0 = result.content[0]
-                                        part_text = getattr(part0, "text", None)
-                                        if isinstance(part_text, str):
-                                            tool_output = part_text
-                                        else:
-                                            # Try protobuf -> json conversion
-                                            if MessageToJson and hasattr(
-                                                part_text, "__class__"
-                                            ):
+                                # Normalize tool output to a string. Some tool implementations
+                                # may return protobuf messages (RepeatedComposite, Message, etc.)
+                                tool_output = "{}"
+                                if getattr(result, "content", None):
+                                    part0 = result.content[0]
+                                    part_text = getattr(part0, "text", None)
+                                    if isinstance(part_text, str):
+                                        tool_output = part_text
+                                    else:
+                                        # Try protobuf -> json conversion
+                                        if MessageToJson and hasattr(
+                                            part_text, "__class__"
+                                        ):
+                                            try:
+                                                tool_output = MessageToJson(part_text)
+                                            except Exception:
                                                 try:
-                                                    tool_output = MessageToJson(
-                                                        part_text
+                                                    tool_output = (
+                                                        json.dumps(
+                                                            MessageToDict(part_text)
+                                                        )
+                                                        if MessageToDict
+                                                        else str(part_text)
                                                     )
                                                 except Exception:
-                                                    try:
-                                                        tool_output = (
-                                                            json.dumps(
-                                                                MessageToDict(part_text)
-                                                            )
-                                                            if MessageToDict
-                                                            else str(part_text)
-                                                        )
-                                                    except Exception:
-                                                        tool_output = str(part_text)
-                                            else:
-                                                try:
-                                                    tool_output = json.dumps(part_text)
-                                                except Exception:
                                                     tool_output = str(part_text)
+                                        else:
+                                            try:
+                                                tool_output = json.dumps(part_text)
+                                            except Exception:
+                                                tool_output = str(part_text)
 
-                                    # Parse and optionally truncate
-                                    try:
-                                        parsed = json.loads(tool_output)
-                                        # For very large responses, truncate but keep structure
-                                        if len(tool_output) > 50000:
-                                            if (
-                                                isinstance(parsed, list)
-                                                and len(parsed) > 50
-                                            ):
-                                                parsed = parsed[:50]
-                                                parsed.append(
-                                                    {
-                                                        "_truncated": f"Showing first 50 of {len(parsed)} items"
-                                                    }
-                                                )
-                                            tool_output = json.dumps(parsed, indent=2)
-                                            print(f"      ⚠️  Large response truncated")
-                                    except:
-                                        pass
+                                # Parse and truncate to save tokens
+                                try:
+                                    parsed = json.loads(tool_output)
+                                    original_len = len(tool_output)
+                                    # Truncate large lists to 20 items
+                                    if isinstance(parsed, list) and len(parsed) > 20:
+                                        total = len(parsed)
+                                        parsed = parsed[:20]
+                                        parsed.append(
+                                            {
+                                                "_truncated": f"Showing 20 of {total} items"
+                                            }
+                                        )
+                                        tool_output = json.dumps(
+                                            parsed, separators=(",", ":")
+                                        )
+                                    # Compact JSON (no indent) to save tokens
+                                    elif isinstance(parsed, (dict, list)):
+                                        tool_output = json.dumps(
+                                            parsed, separators=(",", ":")
+                                        )
+                                    # Hard limit at 8000 chars
+                                    if len(tool_output) > 8000:
+                                        tool_output = (
+                                            tool_output[:8000] + "...(truncated)"
+                                        )
+                                        print(
+                                            f"      ⚠️  Truncated {original_len} → 8000 chars"
+                                        )
+                                except:
+                                    pass
 
-                                    print(f"      ✓ Success ({len(tool_output)} chars)")
+                                print(f"      ✓ Success ({len(tool_output)} chars)")
 
-                                    function_responses.append(
-                                        genai.protos.Part(
-                                            function_response=genai.protos.FunctionResponse(
-                                                name=tool_name,
-                                                response={"result": tool_output},
-                                            )
+                                function_responses.append(
+                                    genai.protos.Part(
+                                        function_response=genai.protos.FunctionResponse(
+                                            name=tool_name,
+                                            response={"result": tool_output},
                                         )
                                     )
+                                )
 
-                                except Exception as e:
-                                    print(f"      ❌ Error: {e}")
-                                    function_responses.append(
-                                        genai.protos.Part(
-                                            function_response=genai.protos.FunctionResponse(
-                                                name=tool_name,
-                                                response={"error": str(e)},
-                                            )
+                            except Exception as e:
+                                print(f"      ❌ Error: {e}")
+                                function_responses.append(
+                                    genai.protos.Part(
+                                        function_response=genai.protos.FunctionResponse(
+                                            name=tool_name,
+                                            response={"error": str(e)},
                                         )
                                     )
+                                )
 
-                            # Send function results back to model
+                        # Send function results back to model
+                        if function_responses:
                             response = chat.send_message(function_responses)
                             logger.log_api_call(response)
-
-                        else:
-                            # Model has final answer
-                            answer = response.text
-                            print(f"\n🤖 Assistant:\n{answer}\n")
-                            break
 
                     if iteration >= max_iterations:
                         print(
