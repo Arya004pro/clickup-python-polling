@@ -1,66 +1,69 @@
-# ClickUp → PostgreSQL Sync
+# ClickUp → PostgreSQL Sync + MCP AI Analytics
 
-Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase).
+Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase) with AI-powered analytics via MCP (Model Context Protocol).
 
-## Features
+## 🌟 Features
 
-- **Full Sync** - Full sync every 7 min
+### Data Sync
+
+- **Auto Sync** - Background scheduler syncs all tasks, time, and comments every 45 seconds
 - **Time Tracking** - Session-wise `start_times[]` and `end_times[]` arrays
 - **Assigned Comments** - Tracks unresolved comments assigned to users
 - **Employee Mapping** - Links ClickUp users to database employees
-- **REST API** - FastAPI endpoints for querying synced data
+- **Daily Snapshots** - Stores daily task snapshots for reporting/analytics
 
-## Tech Stack
+### AI Analytics (NEW!)
 
-- **Python 3.11+**
-- **FastAPI** - REST API
-- **psycopg2** - Direct PostgreSQL connection
-- **APScheduler** - Background sync jobs
-- **Supabase** - PostgreSQL database (Transaction Pooler)
+- **54 MCP Tools** - Comprehensive ClickUp data access via Model Context Protocol
+- **Multi-Model Support** - Works with Gemini, OpenRouter, Groq, local LLMs
+- **Large Context Windows** - Up to 1M-2M tokens for complex multi-turn analysis
+- **Executive Reports** - AI-generated insights for CTOs and project managers
 
-# ClickUp → PostgreSQL Sync
-
-Real-time and daily snapshot sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase).
-
-## Features
-
-- **Auto Sync:** Background scheduler syncs all tasks, time, and comments every 45 seconds.
-- **Full Sync:** All tasks are fully synced on each run.
-- **Time Tracking:** Session-wise `start_times[]` and `end_times[]` arrays.
-- **Assigned Comments:** Tracks unresolved comments assigned to users.
-- **Employee Mapping:** Links ClickUp users to database employees.
-- **REST API:** FastAPI endpoints for querying synced data.
-- **Daily Sync:** Snapshots all tasks updated today into `daily_syncs` for reporting/analytics.
-
-## Tech Stack
+## 🚀 Tech Stack
 
 - **Python 3.11+**
 - **FastAPI** – REST API
 - **psycopg2** – Direct PostgreSQL connection
 - **APScheduler** – Background sync jobs
 - **Supabase** – PostgreSQL database (Transaction Pooler)
+- **FastMCP** – Model Context Protocol server
+- **Gemini/OpenRouter** – AI models for analytics
 
-## Project Structure
+## 📂 Project Structure
 
 ```
 app/
-├── main.py          # FastAPI app & endpoints
-├── clickup.py       # ClickUp API client
-├── sync.py          # Task sync logic (main tasks table)
-├── daily_sync.py    # Daily snapshot sync for reporting (daily_syncs table)
-├── supabase_db.py   # PostgreSQL queries
-├── scheduler.py     # Background job scheduler
-├── time_tracking.py # Time entry aggregation
-├── employee_sync.py # Employee sync
-├── config.py        # Environment config
-└── logging_config.py
+├── main.py              # FastAPI app & endpoints
+├── clickup.py           # ClickUp API client
+├── sync.py              # Task sync logic (main tasks table)
+├── daily_sync.py        # Daily snapshot sync for reporting
+├── supabase_db.py       # PostgreSQL queries
+├── scheduler.py         # Background job scheduler
+├── time_tracking.py     # Time entry aggregation
+├── employee_sync.py     # Employee sync
+├── config.py            # Environment config
+├── logging_config.py    # Logging configuration
+└── mcp/
+    ├── mcp_server.py           # MCP server (54 tools)
+    ├── workspace_structure.py  # Workspace/Space/Folder/List tools
+    ├── task_management.py      # Task query and management tools
+    ├── pm_analytics.py         # Project manager analytics tools
+    ├── project_intelligence.py # AI insights and pattern detection
+    ├── project_configuration.py # Configuration access tools
+    └── sync_mapping.py         # Database sync tools
+
+# AI Clients
+gemini_client.py         # Gemini 2.0 Flash client (1M context)
+openrouter_client.py     # Multi-model client (RECOMMENDED)
+slm_client_groq_backup.py # Groq backup client
 ```
 
-## Quick Start
+## 🎯 Quick Start
+
+### 1. Data Sync Setup
 
 ```bash
 # Clone & setup
-
 cd clickup-python-polling
 python -m venv myenv
 myenv\Scripts\activate  # Windows
@@ -74,6 +77,83 @@ DATABASE_URL=postgresql://postgres.xxx:password@aws-0-region.pooler.supabase.com
 # Run API server
 uvicorn app.main:app --reload
 ```
+
+### 2. AI Analytics Setup (NEW!)
+
+```bash
+# Terminal 1: Start MCP Server
+python -m app.mcp.mcp_server
+
+# Terminal 2: Get FREE API key from OpenRouter
+# Visit: https://openrouter.ai/ (no credit card required)
+
+# Add to .env
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+
+# Run AI client
+python openrouter_client.py
+```
+
+### 3. Try AI Analytics
+
+```
+You: Show me all tasks in progress across all spaces
+
+You: Generate a weekly report for the CTO showing task distribution,
+     time spent, bottlenecks, and team performance
+
+You: Which employee has the most overdue tasks and why?
+```
+
+## 📊 AI Analytics Features
+
+### Available Capabilities (54 Tools)
+
+1. **Workspace Structure** (9 tools)
+   - Get workspaces, spaces, folders, lists
+   - Navigate hierarchies
+   - Search by name or ID
+
+2. **Task Management** (9 tools)
+   - Query tasks by status, assignee, dates
+   - Filter by tags, priorities, custom fields
+   - Get task details and relationships
+
+3. **PM Analytics** (9 tools)
+   - Task distribution reports
+   - Time tracking summaries
+   - Progress metrics and trends
+
+4. **Project Intelligence** (10 tools)
+   - Bottleneck detection
+   - Employee performance analysis
+   - Pattern recognition
+   - Risk assessment
+
+5. **Configuration** (7 tools)
+   - Custom fields access
+   - Status and tag management
+   - Priority settings
+
+6. **Sync Mapping** (10 tools)
+   - Database queries
+   - Cross-reference ClickUp ↔ DB
+   - Historical data access
+
+### Model Options
+
+| Option                      | Context     | Cost           | Best For                       |
+| --------------------------- | ----------- | -------------- | ------------------------------ |
+| **OpenRouter (Gemini 2.0)** | 1M tokens   | FREE           | ✅ Complex reports, multi-turn |
+| **Gemini Direct**           | 1M tokens   | FREE (limited) | Daily quota limits             |
+| **OpenRouter (Llama 3.3)**  | 128K tokens | FREE           | Quick queries                  |
+| **Local Ollama**            | Varies      | FREE           | Privacy, offline               |
+
+## 📚 Documentation
+
+- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Complete setup guide
+- **[GEMINI_SETUP.md](GEMINI_SETUP.md)** - Gemini-specific setup
+- **[QUOTA_SOLUTIONS.md](QUOTA_SOLUTIONS.md)** - Troubleshooting guide
 
 ## Daily Sync
 
