@@ -15,6 +15,23 @@ try:
 except Exception:
     MessageToJson = None
     MessageToDict = None
+
+
+def proto_to_dict(obj):
+    """Recursively convert protobuf objects to JSON-serializable dict/list"""
+    if isinstance(obj, dict):
+        return {k: proto_to_dict(v) for k, v in obj.items()}
+    elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+        # Handle RepeatedComposite and other iterables
+        return [proto_to_dict(item) for item in obj]
+    elif hasattr(obj, "DESCRIPTOR"):  # Protobuf message
+        if MessageToDict:
+            return MessageToDict(obj, preserving_proto_field_name=True)
+        return str(obj)
+    else:
+        return obj
+
+
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from dotenv import load_dotenv
@@ -314,9 +331,19 @@ RULES:
                         if not function_calls:
                             try:
                                 answer = response.text
-                                print(f"\n🤖 Assistant:\n{answer}\n")
-                            except Exception:
-                                print("\n🤖 Assistant: (empty response)\n")
+                                if answer and answer.strip():
+                                    print(f"\n🤖 Assistant:\n{answer}\n")
+                                else:
+                                    print("\n🤖 Assistant: (empty response)\n")
+                                    # Debug: check what's in the response
+                                    if candidates:
+                                        print(
+                                            f"[DEBUG] Response has {len(candidates)} candidates but no text/function_calls"
+                                        )
+                            except Exception as e:
+                                print(
+                                    f"\n🤖 Assistant: (error getting response: {e})\n"
+                                )
                             break
 
                         # Execute all function calls
@@ -324,7 +351,8 @@ RULES:
 
                         for fc in function_calls:
                             tool_name = fc.name
-                            tool_args = dict(fc.args)
+                            # Recursively convert protobuf args to dict (handles RepeatedComposite)
+                            tool_args = proto_to_dict(dict(fc.args))
 
                             print(
                                 f"   🔧 Tool: {tool_name}({json.dumps(tool_args, indent=2)})"
