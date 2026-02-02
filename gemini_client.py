@@ -8,6 +8,13 @@ import json
 import os
 from typing import Dict, List, Any
 import google.generativeai as genai
+
+# Optional protobuf JSON helpers (used when tool outputs are protobuf messages)
+try:
+    from google.protobuf.json_format import MessageToJson, MessageToDict
+except Exception:
+    MessageToJson = None
+    MessageToDict = None
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from dotenv import load_dotenv
@@ -288,14 +295,20 @@ CONVERSATION STYLE:
                     while iteration < max_iterations:
                         iteration += 1
 
-                        # Check if model wants to call functions
-                        if response.candidates[0].content.parts[0].function_call:
-                            function_calls = []
-
-                            # Collect all function calls from this response
-                            for part in response.candidates[0].content.parts:
-                                if hasattr(part, "function_call"):
-                                    function_calls.append(part.function_call)
+                        # Safely check for function calls in the response
+                        function_calls = []
+                        candidates = getattr(response, "candidates", []) or []
+                        if candidates:
+                            content = getattr(candidates[0], "content", None)
+                            parts = (
+                                getattr(content, "parts", [])
+                                if content is not None
+                                else []
+                            )
+                            for part in parts:
+                                fc = getattr(part, "function_call", None)
+                                if fc:
+                                    function_calls.append(fc)
 
                             # Execute all function calls
                             function_responses = []
@@ -314,11 +327,39 @@ CONVERSATION STYLE:
                                     result = await session.call_tool(
                                         tool_name, arguments=tool_args
                                     )
-                                    tool_output = (
-                                        result.content[0].text
-                                        if result.content
-                                        else "{}"
-                                    )
+                                    # Normalize tool output to a string. Some tool implementations
+                                    # may return protobuf messages (RepeatedComposite, Message, etc.)
+                                    tool_output = "{}"
+                                    if getattr(result, "content", None):
+                                        part0 = result.content[0]
+                                        part_text = getattr(part0, "text", None)
+                                        if isinstance(part_text, str):
+                                            tool_output = part_text
+                                        else:
+                                            # Try protobuf -> json conversion
+                                            if MessageToJson and hasattr(
+                                                part_text, "__class__"
+                                            ):
+                                                try:
+                                                    tool_output = MessageToJson(
+                                                        part_text
+                                                    )
+                                                except Exception:
+                                                    try:
+                                                        tool_output = (
+                                                            json.dumps(
+                                                                MessageToDict(part_text)
+                                                            )
+                                                            if MessageToDict
+                                                            else str(part_text)
+                                                        )
+                                                    except Exception:
+                                                        tool_output = str(part_text)
+                                            else:
+                                                try:
+                                                    tool_output = json.dumps(part_text)
+                                                except Exception:
+                                                    tool_output = str(part_text)
 
                                     # Parse and optionally truncate
                                     try:
