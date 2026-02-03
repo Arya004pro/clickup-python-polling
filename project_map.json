@@ -3654,11 +3654,186 @@
         ],
         "name": "linkutm"
       }
+    },
+    "Luminique": {
+      "alias": "Luminique",
+      "clickup_id": "90167907863",
+      "clickup_type": "folder",
+      "last_sync": 1770110040.464708,
+      "structure": {
+        "id": "90167907863",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901612742608",
+            "name": "List",
+            "type": "list"
+          },
+          {
+            "id": "901613177446",
+            "name": "Store Front",
+            "type": "list"
+          },
+          {
+            "id": "901613241141",
+            "name": "Research",
+            "type": "list"
+          },
+          {
+            "id": "901613241313",
+            "name": "Backlog",
+            "type": "list"
+          },
+          {
+            "id": "901613241170",
+            "name": "In Queue",
+            "type": "list"
+          },
+          {
+            "id": "901613241189",
+            "name": "Development",
+            "type": "list"
+          },
+          {
+            "id": "901613241286",
+            "name": "Testing",
+            "type": "list"
+          }
+        ],
+        "name": "Luminique"
+      }
+    },
+    "MYOJ": {
+      "alias": "MYOJ",
+      "clickup_id": "90167917115",
+      "clickup_type": "folder",
+      "last_sync": 1770109828.264333,
+      "structure": {
+        "id": "90167917115",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901612754980",
+            "name": "List",
+            "type": "list"
+          },
+          {
+            "id": "901613241336",
+            "name": "Research",
+            "type": "list"
+          },
+          {
+            "id": "901613241350",
+            "name": "Backlog",
+            "type": "list"
+          },
+          {
+            "id": "901613241370",
+            "name": "In Queue",
+            "type": "list"
+          },
+          {
+            "id": "901613241381",
+            "name": "Development",
+            "type": "list"
+          },
+          {
+            "id": "901613241394",
+            "name": "Testing",
+            "type": "list"
+          }
+        ],
+        "name": "MYOJ"
+      }
+    },
+    "Aarshhmi": {
+      "alias": "Aarshhmi",
+      "clickup_id": "90168131464",
+      "clickup_type": "folder",
+      "last_sync": 1770109829.8122044,
+      "structure": {
+        "id": "90168131464",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901613050493",
+            "name": "List",
+            "type": "list"
+          }
+        ],
+        "name": "Aarshhmi"
+      }
+    },
+    "Scrap": {
+      "alias": "Scrap",
+      "clickup_id": "90168266809",
+      "clickup_type": "folder",
+      "last_sync": 1770109831.4338207,
+      "structure": {
+        "id": "90168266809",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901612488442",
+            "name": "queue",
+            "type": "list"
+          },
+          {
+            "id": "901613162207",
+            "name": "Explore the flow of Jewellery website",
+            "type": "list"
+          },
+          {
+            "id": "901612488457",
+            "name": "backlog list",
+            "type": "list"
+          },
+          {
+            "id": "901612488452",
+            "name": "R1 - Reach PIM",
+            "type": "list"
+          },
+          {
+            "id": "901612488478",
+            "name": "scope",
+            "type": "list"
+          },
+          {
+            "id": "901612488612",
+            "name": "design",
+            "type": "list"
+          },
+          {
+            "id": "901612860872",
+            "name": "List",
+            "type": "list"
+          }
+        ],
+        "name": "Scrap "
+      }
+    },
+    "Indian Demo": {
+      "alias": "Indian Demo",
+      "clickup_id": "90168359093",
+      "clickup_type": "folder",
+      "last_sync": 1770109833.179016,
+      "structure": {
+        "id": "90168359093",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901613335816",
+            "name": "List",
+            "type": "list"
+          }
+        ],
+        "name": "Indian Demo"
+      }
     }
   },
   "discovery_cache": {
     "hierarchy_3301011_False": {
-      "timestamp": 1770094224.6487782,
+      "timestamp": 1770113411.24039,
       "data": {
         "workspace_id": "3301011",
         "hierarchy": [
@@ -4303,6 +4478,18 @@
                   },
                   {
                     "id": "901612860872",
+                    "name": "List",
+                    "type": "list"
+                  }
+                ]
+              },
+              {
+                "id": "90168359093",
+                "name": "Indian Demo",
+                "type": "folder",
+                "lists": [
+                  {
+                    "id": "901613335816",
                     "name": "List",
                     "type": "list"
                   }
