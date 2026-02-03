@@ -1,6 +1,6 @@
-# ClickUp → PostgreSQL Sync + MCP AI Analytics
+# ClickUp → PostgreSQL Sync + Local AI Analytics
 
-Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase) with AI-powered analytics via MCP (Model Context Protocol).
+Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supabase) with **local AI-powered analytics** via LM Studio and MCP (Model Context Protocol).
 
 ## 🌟 Features
 
@@ -12,11 +12,12 @@ Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supa
 - **Employee Mapping** - Links ClickUp users to database employees
 - **Daily Snapshots** - Stores daily task snapshots for reporting/analytics
 
-### AI Analytics (NEW!)
+### Local AI Analytics 🤖
 
 - **54 MCP Tools** - Comprehensive ClickUp data access via Model Context Protocol
-- **Multi-Model Support** - Works with Gemini, OpenRouter, Groq, local LLMs
-- **Large Context Windows** - Up to 1M-2M tokens for complex multi-turn analysis
+- **100% Local & Private** - Runs on your PC using LM Studio
+- **Optimized Model** - gemma-3-4b (4B parameters) for medium-heavy workloads
+- **No API Costs** - Zero cloud API fees, fully offline capable
 - **Executive Reports** - AI-generated insights for CTOs and project managers
 
 ## 🚀 Tech Stack
@@ -27,7 +28,7 @@ Real-time sync of ClickUp tasks, time tracking, and comments to PostgreSQL (Supa
 - **APScheduler** – Background sync jobs
 - **Supabase** – PostgreSQL database (Transaction Pooler)
 - **FastMCP** – Model Context Protocol server
-- **Gemini/OpenRouter** – AI models for analytics
+- **LM Studio** – Local LLM server (gemma-3-4b)
 
 ## 📂 Project Structure
 
@@ -52,15 +53,27 @@ app/
     ├── project_configuration.py # Configuration access tools
     └── sync_mapping.py         # Database sync tools
 
-# AI Clients
-gemini_client.py         # Gemini 2.0 Flash client (1M context)
-openrouter_client.py     # Multi-model client (RECOMMENDED)
-slm_client_groq_backup.py # Groq backup client
+# Local AI Client
+lmstudio_client.py       # LM Studio local AI client (gemma-3-4b)
 ```
 
 ## 🎯 Quick Start
 
-### 1. Data Sync Setup
+### 1. Install LM Studio
+
+1. **Download LM Studio**: Visit [lmstudio.ai](https://lmstudio.ai) and download for your OS
+2. **Install and Launch** LM Studio
+3. **Download gemma-3-4b**:
+   - Open LM Studio
+   - Go to "Discover" tab
+   - Search for "gemma-3-4b"
+   - Click download and wait for completion
+4. **Load the Model**:
+   - Go to "Chat" tab
+   - Select gemma-3-4b from model dropdown
+   - Click "Start Server" (default: http://localhost:1234)
+
+### 2. Data Sync Setup
 
 ```bash
 # Clone & setup
@@ -74,27 +87,26 @@ CLICKUP_API_TOKEN=pk_xxx
 CLICKUP_TEAM_ID=xxx
 DATABASE_URL=postgresql://postgres.xxx:password@aws-0-region.pooler.supabase.com:6543/postgres
 
+# Optional: Customize LM Studio settings
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_MODEL=gemma-3-4b
+
 # Run API server
 uvicorn app.main:app --reload
 ```
 
-### 2. AI Analytics Setup (NEW!)
+### 3. Start AI Analytics
 
 ```bash
 # Terminal 1: Start MCP Server
-python -m app.mcp.mcp_server
+$env:PYTHONPATH = (Get-Location).Path
+fastmcp run app/mcp/mcp_server.py:mcp --transport sse --port 8001
 
-# Terminal 2: Get FREE API key from OpenRouter
-# Visit: https://openrouter.ai/ (no credit card required)
-
-# Add to .env
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-
-# Run AI client
-python openrouter_client.py
+# Terminal 2: Run Local AI Client
+python lmstudio_client.py
 ```
 
-### 3. Try AI Analytics
+### 4. Try AI Analytics
 
 ```
 You: Show me all tasks in progress across all spaces
@@ -103,9 +115,21 @@ You: Generate a weekly report for the CTO showing task distribution,
      time spent, bottlenecks, and team performance
 
 You: Which employee has the most overdue tasks and why?
+
+You: Get time tracking report for Luminique project grouped by assignee
 ```
 
-## 📊 AI Analytics Features
+## 📊 Local AI Analytics Features
+
+### Why LM Studio + gemma-3-4b?
+
+| Feature               | Benefit                                 |
+| --------------------- | --------------------------------------- |
+| **100% Local**        | Your data never leaves your PC          |
+| **Zero Cost**         | No API fees, unlimited usage            |
+| **Privacy**           | No cloud providers, full control        |
+| **Optimized for MCP** | 4B params balanced for 54 complex tools |
+| **Fast Inference**    | Runs smoothly on modern CPUs/GPUs       |
 
 ### Available Capabilities (54 Tools)
 
@@ -121,8 +145,9 @@ You: Which employee has the most overdue tasks and why?
 
 3. **PM Analytics** (9 tools)
    - Task distribution reports
-   - Time tracking summaries
+   - Time tracking summaries with nested subtask support
    - Progress metrics and trends
+   - Estimation accuracy analysis
 
 4. **Project Intelligence** (10 tools)
    - Bottleneck detection
@@ -140,20 +165,66 @@ You: Which employee has the most overdue tasks and why?
    - Cross-reference ClickUp ↔ DB
    - Historical data access
 
-### Model Options
+### System Requirements
 
-| Option                      | Context     | Cost           | Best For                       |
-| --------------------------- | ----------- | -------------- | ------------------------------ |
-| **OpenRouter (Gemini 2.0)** | 1M tokens   | FREE           | ✅ Complex reports, multi-turn |
-| **Gemini Direct**           | 1M tokens   | FREE (limited) | Daily quota limits             |
-| **OpenRouter (Llama 3.3)**  | 128K tokens | FREE           | Quick queries                  |
-| **Local Ollama**            | Varies      | FREE           | Privacy, offline               |
+| Component   | Minimum      | Recommended                            |
+| ----------- | ------------ | -------------------------------------- |
+| **RAM**     | 8 GB         | 16 GB+                                 |
+| **CPU**     | 4 cores      | 8+ cores                               |
+| **GPU**     | Not required | NVIDIA GPU (CUDA) for faster inference |
+| **Storage** | 5 GB free    | 10 GB+                                 |
+| **OS**      | Windows 10+  | Windows 11                             |
 
 ## 📚 Documentation
 
-- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Complete setup guide
-- **[GEMINI_SETUP.md](GEMINI_SETUP.md)** - Gemini-specific setup
-- **[QUOTA_SOLUTIONS.md](QUOTA_SOLUTIONS.md)** - Troubleshooting guide
+- **[QUICK_START.md](QUICK_START.md)** - 10-minute setup guide for LM Studio + MCP
+- **[LM Studio Setup Guide](https://lmstudio.ai/docs)** - Official LM Studio documentation
+- **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol specs
+- **Local-first AI** - No cloud dependencies, full privacy
+
+## 🔧 Advanced Configuration
+
+### LM Studio Settings (.env)
+
+```bash
+# LM Studio API endpoint (default: http://localhost:1234/v1)
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+
+# Model identifier (as shown in LM Studio)
+LM_STUDIO_MODEL=gemma-3-4b
+
+# Optional: Adjust inference parameters in LM Studio UI
+# - Temperature: 0.7 (creativity vs accuracy)
+# - Max tokens: 2048 (response length)
+# - Context length: Auto (based on model)
+```
+
+### Performance Tips
+
+1. **Enable GPU Acceleration**: In LM Studio settings, enable GPU offloading if you have an NVIDIA GPU
+2. **Adjust Thread Count**: Set to match your CPU cores for optimal CPU inference
+3. **Monitor Resource Usage**: Keep Task Manager open to monitor RAM/CPU usage
+4. **Model Selection**: gemma-3-4b is optimal for 8-16GB RAM systems
+
+### Troubleshooting
+
+**LM Studio not responding?**
+
+- Check if server is running in LM Studio (should show "Server Running" in UI)
+- Verify port 1234 is not blocked by firewall
+- Restart LM Studio if needed
+
+**Out of memory errors?**
+
+- Close other applications
+- Reduce context length in LM Studio settings
+- Consider upgrading RAM or using smaller model
+
+**Slow responses?**
+
+- Enable GPU acceleration if available
+- Reduce max_tokens in client
+- Check system resources aren't maxed out
 
 ## Daily Sync
 
