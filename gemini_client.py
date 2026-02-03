@@ -1,12 +1,14 @@
 """
-Gemini 2.0 Flash MCP Client with 1M Context Window
+Gemini MCP Client with flexible model selection
 Optimized for complex multi-turn ClickUp analytics queries
 """
 
 import asyncio
 import json
 import os
-from typing import Dict, List, Any
+import time
+import hashlib
+from typing import Dict, List, Any, Optional
 import google.generativeai as genai
 
 # Optional protobuf JSON helpers (used when tool outputs are protobuf messages)
@@ -30,6 +32,71 @@ def proto_to_dict(obj):
         return str(obj)
     else:
         return obj
+
+
+# --- INTELLIGENT CACHING SYSTEM ---
+class ResponseCache:
+    """Cache tool outputs and model responses with TTL to reduce token usage"""
+
+    def __init__(self, default_ttl: int = 300):  # 5 minutes default
+        self.cache: Dict[str, tuple[Any, float]] = {}  # key -> (value, expiry_time)
+        self.default_ttl = default_ttl
+        self.hits = 0
+        self.misses = 0
+
+    def _make_key(self, tool_name: str, args: dict) -> str:
+        """Generate cache key from tool name and arguments"""
+        args_json = json.dumps(args, sort_keys=True, separators=(",", ":"))
+        return f"{tool_name}:{hashlib.md5(args_json.encode()).hexdigest()}"
+
+    def get(self, tool_name: str, args: dict) -> Optional[str]:
+        """Get cached tool output if not expired"""
+        key = self._make_key(tool_name, args)
+        if key in self.cache:
+            value, expiry = self.cache[key]
+            if time.time() < expiry:
+                self.hits += 1
+                return value
+            else:
+                # Expired - remove from cache
+                del self.cache[key]
+        self.misses += 1
+        return None
+
+    def set(self, tool_name: str, args: dict, value: str, ttl: Optional[int] = None):
+        """Store tool output in cache with TTL"""
+        key = self._make_key(tool_name, args)
+        expiry_time = time.time() + (ttl or self.default_ttl)
+        self.cache[key] = (value, expiry_time)
+
+    def invalidate(self, pattern: Optional[str] = None):
+        """Invalidate cache entries matching pattern (or all if None)"""
+        if pattern is None:
+            count = len(self.cache)
+            self.cache.clear()
+            return count
+        else:
+            keys_to_remove = [k for k in self.cache.keys() if pattern in k]
+            for key in keys_to_remove:
+                del self.cache[key]
+            return len(keys_to_remove)
+
+    def get_stats(self) -> dict:
+        """Get cache statistics"""
+        total = self.hits + self.misses
+        hit_rate = (self.hits / total * 100) if total > 0 else 0
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "total_requests": total,
+            "hit_rate": f"{hit_rate:.1f}%",
+            "cached_items": len(self.cache),
+        }
+
+    def reset_stats(self):
+        """Reset hit/miss counters"""
+        self.hits = 0
+        self.misses = 0
 
 
 from mcp import ClientSession
@@ -65,8 +132,12 @@ class ConversationLogger:
         """Log a tool call"""
         self.tool_calls += 1
 
-    def print_summary(self):
-        """Print conversation statistics"""
+    def log_cache_hit(self):
+        """Log a cache hit (tool call avoided)"""
+        self.tool_calls += 1  # Count as tool call for consistency
+
+    def print_summary(self, cache: Optional["ResponseCache"] = None):
+        """Print conversation statistics with cache stats"""
         total_tokens = self.total_input_tokens + self.total_output_tokens
         print("\n" + "=" * 60)
         print("📊 CONVERSATION STATISTICS")
@@ -76,6 +147,20 @@ class ConversationLogger:
         print(f"   Input Tokens:      {self.total_input_tokens:,}")
         print(f"   Output Tokens:     {self.total_output_tokens:,}")
         print(f"   Total Tokens Used: {total_tokens:,}")
+
+        if cache:
+            cache_stats = cache.get_stats()
+            print("\n   CACHE PERFORMANCE:")
+            print(f"   Cache Hits:        {cache_stats['hits']}")
+            print(f"   Cache Misses:      {cache_stats['misses']}")
+            print(f"   Hit Rate:          {cache_stats['hit_rate']}")
+            print(f"   Cached Items:      {cache_stats['cached_items']}")
+
+            # Estimate token savings (approximate 2000 tokens per cache hit)
+            if cache_stats["hits"] > 0:
+                estimated_savings = cache_stats["hits"] * 2000
+                print(f"   Est. Tokens Saved: ~{estimated_savings:,}")
+
         print("=" * 60 + "\n")
 
     def reset(self):
@@ -101,9 +186,11 @@ FALLBACK_MODELS = [
     "gemini-exp-1206",  # Experimental fallback
 ]
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8001/sse")
+CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # Default 5 minutes
 
-# Initialize conversation logger
+# Initialize conversation logger and cache
 logger = ConversationLogger()
+response_cache = ResponseCache(default_ttl=CACHE_TTL)
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
@@ -287,7 +374,11 @@ RULES:
             chat = model.start_chat(enable_automatic_function_calling=False)
 
             print("━" * 60)
-            print("🚀 Gemini 2.0 Flash Ready! (Type 'quit' to exit)")
+            # Display the actual model selected rather than a hardcoded label
+            try:
+                print(f"🚀 Using model: {model_name} (Type 'quit' to exit)")
+            except Exception:
+                print("🚀 Gemini model initialized (Type 'quit' to exit)")
             print("💡 Try: 'Show me all tasks in progress assigned to John'")
             print("━" * 60)
 
@@ -359,42 +450,73 @@ RULES:
                             )
 
                             try:
-                                # Call MCP tool
-                                logger.log_tool_call()
-                                result = await session.call_tool(
-                                    tool_name, arguments=tool_args
-                                )
-                                # Normalize tool output to a string. Some tool implementations
-                                # may return protobuf messages (RepeatedComposite, Message, etc.)
-                                tool_output = "{}"
-                                if getattr(result, "content", None):
-                                    part0 = result.content[0]
-                                    part_text = getattr(part0, "text", None)
-                                    if isinstance(part_text, str):
-                                        tool_output = part_text
-                                    else:
-                                        # Try protobuf -> json conversion
-                                        if MessageToJson and hasattr(
-                                            part_text, "__class__"
-                                        ):
-                                            try:
-                                                tool_output = MessageToJson(part_text)
-                                            except Exception:
+                                # Check cache first
+                                cached_output = response_cache.get(tool_name, tool_args)
+
+                                if cached_output is not None:
+                                    tool_output = cached_output
+                                    logger.log_cache_hit()
+                                    print(
+                                        f"      💾 Cache hit ({len(tool_output)} chars)"
+                                    )
+                                else:
+                                    # Call MCP tool
+                                    logger.log_tool_call()
+                                    result = await session.call_tool(
+                                        tool_name, arguments=tool_args
+                                    )
+                                    # Normalize tool output to a string. Some tool implementations
+                                    # may return protobuf messages (RepeatedComposite, Message, etc.)
+                                    tool_output = "{}"
+                                    if getattr(result, "content", None):
+                                        part0 = result.content[0]
+                                        part_text = getattr(part0, "text", None)
+                                        if isinstance(part_text, str):
+                                            tool_output = part_text
+                                        else:
+                                            # Try protobuf -> json conversion
+                                            if MessageToJson and hasattr(
+                                                part_text, "__class__"
+                                            ):
                                                 try:
-                                                    tool_output = (
-                                                        json.dumps(
-                                                            MessageToDict(part_text)
-                                                        )
-                                                        if MessageToDict
-                                                        else str(part_text)
+                                                    tool_output = MessageToJson(
+                                                        part_text
                                                     )
                                                 except Exception:
+                                                    try:
+                                                        tool_output = (
+                                                            json.dumps(
+                                                                MessageToDict(part_text)
+                                                            )
+                                                            if MessageToDict
+                                                            else str(part_text)
+                                                        )
+                                                    except Exception:
+                                                        tool_output = str(part_text)
+                                            else:
+                                                try:
+                                                    tool_output = json.dumps(part_text)
+                                                except Exception:
                                                     tool_output = str(part_text)
-                                        else:
-                                            try:
-                                                tool_output = json.dumps(part_text)
-                                            except Exception:
-                                                tool_output = str(part_text)
+
+                                    # Cache the raw output before truncation
+                                    # Determine TTL based on tool type
+                                    if tool_name in [
+                                        "list_mapped_projects",
+                                        "list_spaces",
+                                        "get_workspaces",
+                                    ]:
+                                        ttl = (
+                                            600  # 10 minutes for workspace/space lists
+                                        )
+                                    elif tool_name.startswith("get_project"):
+                                        ttl = 180  # 3 minutes for project data
+                                    else:
+                                        ttl = None  # Use default (5 min)
+
+                                    response_cache.set(
+                                        tool_name, tool_args, tool_output, ttl
+                                    )
 
                                 # Parse and truncate to save tokens
                                 try:
@@ -428,7 +550,8 @@ RULES:
                                 except:
                                     pass
 
-                                print(f"      ✓ Success ({len(tool_output)} chars)")
+                                if cached_output is None:
+                                    print(f"      ✓ Success ({len(tool_output)} chars)")
 
                                 function_responses.append(
                                     genai.protos.Part(
@@ -486,8 +609,8 @@ async def test_connection():
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("  GEMINI 2.0 FLASH - CLICKUP MCP CLIENT")
-    print("  1M Context Window | Function Calling Enabled")
+    print("  GEMINI MCP CLIENT")
+    print("  Function Calling Enabled")
     print("=" * 60 + "\n")
 
     if not GEMINI_API_KEY:
