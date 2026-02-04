@@ -1,12 +1,14 @@
 """
-LM Studio MCP Client - Prompt-Based Tool Calling for gemma-3-4b
-Uses XML-style tags to teach gemma-3-4b how to call MCP tools reliably.
+LM Studio MCP Client - IMPROVED VERSION
+Structured Report Generation with Step-by-Step Instructions
+Optimized for gemma-3-4b with minimal hallucination
 """
 
 import asyncio
 import os
 import json
 import re
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from openai import OpenAI
 from mcp import ClientSession
@@ -26,6 +28,223 @@ client = OpenAI(
     base_url=LM_STUDIO_BASE_URL,
     api_key="lm-studio",
 )
+
+
+# ============================================================================
+# STRUCTURED REPORT WORKFLOWS
+# ============================================================================
+
+REPORT_WORKFLOWS = {
+    "space_time_report": {
+        "name": "Space-wise Time Entry Report",
+        "description": "Generate time tracking report grouped by Space",
+        "steps": [
+            {
+                "step": 1,
+                "action": "get_workspaces",
+                "description": "First, fetch all workspaces to get workspace_id",
+                "params": {},
+            },
+            {
+                "step": 2,
+                "action": "get_spaces",
+                "description": "Get all spaces in the workspace using workspace_id from step 1",
+                "params": {"workspace_id": "FROM_STEP_1"},
+            },
+            {
+                "step": 3,
+                "action": "map_project",
+                "description": "Map each space as a project for time tracking",
+                "params": {"id": "FROM_STEP_2", "type": "space"},
+            },
+            {
+                "step": 4,
+                "action": "get_project_time_tracking",
+                "description": "Get time tracking report for each mapped space",
+                "params": {"project_name": "FROM_STEP_3", "group_by": "assignee"},
+            },
+        ],
+    },
+    "folder_team_time_report": {
+        "name": "Space > Folder > Team Member Time Report",
+        "description": "Generate hierarchical time tracking report",
+        "steps": [
+            {
+                "step": 1,
+                "action": "get_workspaces",
+                "description": "Get workspace ID",
+                "params": {},
+            },
+            {
+                "step": 2,
+                "action": "get_spaces",
+                "description": "Get all spaces",
+                "params": {"workspace_id": "FROM_STEP_1"},
+            },
+            {
+                "step": 3,
+                "action": "get_folders",
+                "description": "For each space, get all folders",
+                "params": {"space_id": "FROM_STEP_2"},
+            },
+            {
+                "step": 4,
+                "action": "map_project",
+                "description": "Map each folder as a project",
+                "params": {"id": "FROM_STEP_3", "type": "folder"},
+            },
+            {
+                "step": 5,
+                "action": "get_project_time_tracking",
+                "description": "Get time report grouped by team member",
+                "params": {"project_name": "FROM_STEP_4", "group_by": "assignee"},
+            },
+        ],
+    },
+    "team_member_time_report": {
+        "name": "Team Member-wise Time Entry Report",
+        "description": "Generate time report for all team members across all projects",
+        "steps": [
+            {
+                "step": 1,
+                "action": "list_mapped_projects",
+                "description": "Get all mapped projects",
+                "params": {},
+            },
+            {
+                "step": 2,
+                "action": "get_time_tracking_report",
+                "description": "For each project, get time tracking grouped by assignee",
+                "params": {"project": "FROM_STEP_1", "group_by": "assignee"},
+            },
+        ],
+    },
+    "weekly_report_all": {
+        "name": "Weekly Report for All Report Types",
+        "description": "Generate weekly digest combining all report types",
+        "steps": [
+            {
+                "step": 1,
+                "action": "list_mapped_projects",
+                "description": "Get all mapped projects",
+                "params": {},
+            },
+            {
+                "step": 2,
+                "action": "get_project_weekly_digest",
+                "description": "Generate weekly digest for each project",
+                "params": {"project_name": "FROM_STEP_1"},
+            },
+            {
+                "step": 3,
+                "action": "get_time_tracking_report",
+                "description": "Get time tracking for the week",
+                "params": {"project": "FROM_STEP_1", "group_by": "assignee"},
+            },
+        ],
+    },
+}
+
+
+# ============================================================================
+# SYSTEM PROMPT TEMPLATES
+# ============================================================================
+
+
+def create_structured_system_prompt(tools_list):
+    """Create a highly structured system prompt with minimal hallucination"""
+
+    return f"""You are a ClickUp Data Analysis Assistant with access to {len(tools_list)} tools.
+
+CRITICAL RULES TO PREVENT ERRORS:
+1. NEVER invent or guess data - ALWAYS use tools to get real information
+2. ALWAYS call tools in the EXACT sequence specified in the workflow
+3. NEVER skip steps in a workflow
+4. If a tool call fails, STOP and report the error - DO NOT continue
+5. Use the exact tool names and parameters as documented
+
+TOOL CALLING FORMAT (STRICT):
+To call a tool, use this EXACT XML format:
+
+<tool_call>
+<name>exact_tool_name</name>
+<arguments>{{"param_name": "param_value"}}</arguments>
+</tool_call>
+
+IMPORTANT NOTES:
+- Use {{}} for empty parameters if tool needs no arguments
+- Always wait for tool results before proceeding
+- Extract IDs carefully from previous results
+- Never make assumptions about workspace/space/folder structure
+
+AVAILABLE WORKFLOW COMMANDS:
+When user requests a report, identify the workflow type and execute steps sequentially:
+
+1. "space time report" → Execute space_time_report workflow
+2. "folder team report" → Execute folder_team_time_report workflow  
+3. "team member report" → Execute team_member_time_report workflow
+4. "weekly report" → Execute weekly_report_all workflow
+
+WORKFLOW EXECUTION RULES:
+- Execute ONE step at a time
+- Wait for confirmation before next step
+- Extract required IDs from previous step results
+- If a step fails, report the error and STOP
+
+EXAMPLE CORRECT WORKFLOW:
+User: "Generate space time report"
+
+Step 1: Get workspaces
+<tool_call>
+<name>get_workspaces</name>
+<arguments>{{}}</arguments>
+</tool_call>
+
+[Wait for result, extract workspace_id]
+
+Step 2: Get spaces
+<tool_call>
+<name>get_spaces</name>
+<arguments>{{"workspace_id": "extracted_id_here"}}</arguments>
+</tool_call>
+
+[Continue step by step...]
+
+TOP 20 MOST USEFUL TOOLS FOR REPORTS:
+
+1. get_workspaces - Get all workspaces (NO parameters)
+2. get_spaces - Get spaces (workspace_id required)
+3. get_folders - Get folders in space (space_id required)
+4. get_folderless_lists - Get lists not in folders (space_id required)
+5. list_mapped_projects - List all mapped projects (NO parameters)
+6. map_project - Map space/folder/list as project (id, type required)
+7. get_project_time_tracking - Time report for project (project_name, group_by)
+8. get_time_tracking_report - Time report (project OR list_id, group_by)
+9. get_project_weekly_digest - Weekly digest (project_name required)
+10. get_workload - Workload by assignee (list_id required)
+11. get_tasks - Get tasks from list (list_id required)
+12. get_project_tasks - Get tasks from project (project required)
+13. get_project_team_workload - Team workload (project_name required)
+14. get_project_health_score - Health score (project_name required)
+15. discover_hierarchy - Full workspace hierarchy (workspace_id optional)
+16. get_sync_status - Check sync status (NO parameters)
+17. refresh_project - Refresh project data (alias required)
+18. get_progress_since - Progress since date (project/list_id, since_date)
+19. get_project_daily_standup - Daily standup (project_name required)
+20. get_project_blockers - Find blockers (project_name required)
+
+REMEMBER:
+- Start with get_workspaces to get workspace_id
+- Then get_spaces to list all spaces
+- Map entities before using project-specific tools
+- Use exact IDs from tool responses
+- Never guess or invent IDs
+"""
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
 
 class ConversationLogger:
@@ -58,20 +277,8 @@ class ConversationLogger:
 
 
 def parse_tool_calls(text):
-    """
-    Parse XML-style tool calls from model response.
-
-    Expected format:
-    <tool_call>
-    <name>tool_name</name>
-    <arguments>{"key": "value"}</arguments>
-    </tool_call>
-
-    Returns list of {'name': str, 'arguments': dict, 'raw': str}
-    """
+    """Parse XML-style tool calls from model response."""
     tool_calls = []
-
-    # Regex to match tool_call blocks
     pattern = r"<tool_call>\s*<name>([^<]+)</name>\s*<arguments>(.*?)</arguments>\s*</tool_call>"
     matches = re.finditer(pattern, text, re.DOTALL | re.IGNORECASE)
 
@@ -79,7 +286,6 @@ def parse_tool_calls(text):
         tool_name = match.group(1).strip()
         args_str = match.group(2).strip()
 
-        # Parse JSON arguments
         try:
             if args_str and args_str not in ["{}", ""]:
                 arguments = json.loads(args_str)
@@ -96,16 +302,13 @@ def parse_tool_calls(text):
     return tool_calls
 
 
-def format_result_human_readable(tool_name, result_data):
-    """
-    Format tool results in human-readable format for non-technical users.
-    """
+def format_result_for_display(tool_name, result_data):
+    """Format tool results in readable format."""
     try:
-        # Parse if it's JSON string
         if isinstance(result_data, str):
             try:
                 data = json.loads(result_data)
-            except:
+            except Exception:
                 return result_data
         else:
             data = result_data
@@ -113,90 +316,84 @@ def format_result_human_readable(tool_name, result_data):
         # Format based on tool type
         if tool_name == "get_workspaces":
             if isinstance(data, list) and len(data) > 0:
-                ws = data[0]
-                return f"Workspace: {ws.get('name', 'Unknown')} (ID: {ws.get('id', 'N/A')})"
-            return str(data)
+                output = "WORKSPACES:\n"
+                for ws in data:
+                    output += f"  • {ws.get('name', 'Unknown')} (ID: {ws.get('workspace_id', ws.get('id', 'N/A'))})\n"
+                return output
 
         elif tool_name == "get_spaces":
             if isinstance(data, list):
-                output = "Spaces in Workspace:\n"
+                output = "SPACES:\n"
                 for i, space in enumerate(data, 1):
-                    name = space.get("name", "Unknown")
-                    space_id = space.get("space_id", "N/A")
-                    color = space.get("color", "#gray")
-                    lists = space.get("list_count", 0)
-                    archived = " (Archived)" if space.get("is_archived") else ""
-                    output += f"\n{i}. {name} (ID: {space_id}){archived}\n"
-                    output += f"   Color: {color} | Lists: {lists}\n"
+                    output += f"  {i}. {space.get('name', 'Unknown')} (ID: {space.get('space_id', 'N/A')})\n"
                 return output
-            return str(data)
 
-        elif tool_name == "get_lists":
+        elif tool_name == "get_folders":
             if isinstance(data, list):
-                output = "Lists/Folders:\n"
-                for i, lst in enumerate(data, 1):
-                    name = lst.get("name", "Unknown")
-                    list_id = lst.get("list_id", "N/A")
-                    tasks = lst.get("task_count", 0)
-                    output += f"\n{i}. {name} (ID: {list_id}) - {tasks} tasks\n"
+                output = "FOLDERS:\n"
+                for folder in data:
+                    output += f"  • {folder.get('name', 'Unknown')} (ID: {folder.get('folder_id', 'N/A')})\n"
                 return output
-            return str(data)
 
-        elif tool_name == "get_tasks":
-            if isinstance(data, list):
-                output = "Tasks:\n"
-                for i, task in enumerate(data, 1):
-                    name = task.get("name", "Unknown")
-                    task_id = task.get("id", "N/A")
-                    status = task.get("status", "Unknown")
-                    assignee = task.get("assignee", {})
-                    assignee_name = (
-                        assignee.get("username", "Unassigned")
-                        if assignee
-                        else "Unassigned"
-                    )
-                    output += f"\n{i}. {name} (ID: {task_id})\n"
-                    output += f"   Status: {status} | Assigned to: {assignee_name}\n"
+        elif tool_name in ["get_project_time_tracking", "get_time_tracking_report"]:
+            if isinstance(data, dict) and "report" in data:
+                output = "TIME TRACKING REPORT:\n"
+                for member, stats in data["report"].items():
+                    output += f"\n  {member}:\n"
+                    output += f"    Tracked: {stats.get('human_tracked', stats.get('time_tracked', 'N/A'))}\n"
+                    output += f"    Estimated: {stats.get('human_est', stats.get('time_estimate', 'N/A'))}\n"
+                    output += f"    Tasks: {stats.get('tasks', 'N/A')}\n"
                 return output
-            return str(data)
+
+        elif tool_name == "get_project_weekly_digest":
+            if isinstance(data, dict):
+                output = "WEEKLY DIGEST:\n"
+                output += f"  Summary: {data.get('summary', 'N/A')}\n"
+                if "key_metrics" in data:
+                    output += "\n  Key Metrics:\n"
+                    for k, v in data["key_metrics"].items():
+                        output += f"    {k}: {v}\n"
+                return output
 
         elif tool_name == "list_mapped_projects":
             if isinstance(data, list):
-                output = "Mapped Projects:\n"
-                for i, proj in enumerate(data, 1):
-                    name = proj.get("name", "Unknown")
-                    proj_id = proj.get("id", "N/A")
-                    output += f"\n{i}. {name} (ID: {proj_id})\n"
+                output = "MAPPED PROJECTS:\n"
+                for proj in data:
+                    output += f"  • {proj.get('alias', proj.get('name', 'Unknown'))} "
+                    output += (
+                        f"(Type: {proj.get('type', proj.get('clickup_type', 'N/A'))})\n"
+                    )
                 return output
-            return str(data)
 
-        # Default formatting for unknown tools
-        if isinstance(data, list):
-            output = f"Results from {tool_name}:\n"
-            for i, item in enumerate(data[:10], 1):  # Show first 10 items
-                if isinstance(item, dict):
-                    item_name = item.get("name") or item.get("title") or str(item)
-                    output += f"{i}. {item_name}\n"
-                else:
-                    output += f"{i}. {item}\n"
-            if len(data) > 10:
-                output += f"\n... and {len(data) - 10} more items"
-            return output
-        elif isinstance(data, dict):
-            output = f"Result from {tool_name}:\n"
-            for key, value in list(data.items())[:10]:
-                output += f"  {key}: {value}\n"
-            if len(data) > 10:
-                output += f"  ... and {len(data) - 10} more fields"
-            return output
+        # Default JSON formatting
+        return json.dumps(data, indent=2)[:1000]
 
-        return str(data)
-    except Exception as e:
-        return str(data)
+    except Exception:
+        return str(data)[:500]
+
+
+def display_workflow_menu():
+    """Display available workflows to user"""
+    print("\n" + "=" * 70)
+    print("AVAILABLE REPORT WORKFLOWS:")
+    print("=" * 70)
+    for key, workflow in REPORT_WORKFLOWS.items():
+        print(f"\n  Command: '{key}'")
+        print(f"  Name: {workflow['name']}")
+        print(f"  Description: {workflow['description']}")
+        print(f"  Steps: {len(workflow['steps'])}")
+    print("\n" + "=" * 70)
+    print("\nType a workflow command or ask a question. Type 'menu' to see this again.")
+    print("Type 'quit' to exit.\n")
+
+
+# ============================================================================
+# MAIN CLIENT
+# ============================================================================
 
 
 async def run_mcp_client():
-    """Main client function with prompt-based tool calling."""
+    """Main client function with structured workflows"""
 
     async with sse_client(MCP_SERVER_URL) as (read, write):
         async with ClientSession(read, write) as session:
@@ -207,74 +404,17 @@ async def run_mcp_client():
             tools = tools_result.tools
 
             print("\n" + "=" * 70)
-            print("ClickUp MCP Client - Prompt-Based Tool Calling (gemma-3-4b)")
+            print("ClickUp MCP Client - STRUCTURED REPORT GENERATION")
             print("=" * 70)
             print(f"Connected to MCP server: {len(tools)} tools available")
             print(f"LM Studio model: {LM_STUDIO_MODEL}")
-            print("\nType your questions or 'quit' to exit\n")
 
-            # Build tool descriptions
-            tool_descriptions = []
-            for tool in tools:
-                desc = f"- {tool.name}: {tool.description}"
+            # Display workflow menu
+            display_workflow_menu()
 
-                # Add parameter info if available
-                if hasattr(tool, "inputSchema") and "properties" in tool.inputSchema:
-                    params = []
-                    for param_name, param_info in tool.inputSchema[
-                        "properties"
-                    ].items():
-                        param_type = param_info.get("type", "any")
-                        param_desc = param_info.get("description", "")
-                        params.append(
-                            f"    * {param_name} ({param_type}): {param_desc}"
-                        )
-
-                    if params:
-                        desc += "\n" + "\n".join(params)
-
-                tool_descriptions.append(desc)
-
-            # Create system prompt with STRICT tool calling instructions
-            system_prompt = f"""You are an AI assistant with access to {len(tools)} ClickUp project management tools.
-
-CRITICAL RULES:
-1. NEVER make up or guess data - you MUST use tools to get real information
-2. When asked about ClickUp data, ALWAYS call the appropriate tool first
-3. To call a tool, use this EXACT format:
-
-<tool_call>
-<name>tool_name_here</name>
-<arguments>{{"param": "value"}}</arguments>
-</tool_call>
-
-4. Use {{}} for empty arguments if tool needs no parameters
-5. You can call multiple tools in one response if needed
-6. After I show you the tool results, answer the user's question using that REAL data
-
-AVAILABLE TOOLS:
-{chr(10).join(tool_descriptions[:30])}
-{"... and " + str(len(tools) - 30) + " more tools" if len(tools) > 30 else ""}
-
-EXAMPLE CONVERSATION:
-User: "List all mapped projects"
-You: I'll fetch the mapped projects for you.
-<tool_call>
-<name>list_mapped_projects</name>
-<arguments>{{}}</arguments>
-</tool_call>
-
-User: "Get details for project named Luminique"
-You: Let me get the details for the Luminique project.
-<tool_call>
-<name>get_project_details</name>
-<arguments>{{"project_name": "Luminique"}}</arguments>
-</tool_call>
-
-Remember: ALWAYS use tools. NEVER invent data."""
-
+            # Create system prompt
+            system_prompt = create_structured_system_prompt(tools)
             conversation_history = [{"role": "system", "content": system_prompt}]
-
             logger = ConversationLogger()
 
             # Interactive loop
@@ -290,21 +430,25 @@ Remember: ALWAYS use tools. NEVER invent data."""
                         print("\nGoodbye!\n")
                         break
 
+                    if user_input.lower() == "menu":
+                        display_workflow_menu()
+                        continue
+
                     # Add user message
                     conversation_history.append({"role": "user", "content": user_input})
 
-                    # Multi-turn loop: model may need several iterations
-                    max_iterations = 8
+                    # Multi-turn loop
+                    max_iterations = 15  # Increased for complex workflows
                     iteration = 0
 
                     while iteration < max_iterations:
                         iteration += 1
 
-                        # Call LM Studio (NO function calling parameters - just chat)
+                        # Call LM Studio
                         response = client.chat.completions.create(
                             model=LM_STUDIO_MODEL,
                             messages=conversation_history,
-                            temperature=0.2,  # Low temp for predictable tool calls
+                            temperature=0.1,  # Very low for deterministic responses
                             max_tokens=2000,
                         )
 
@@ -314,31 +458,32 @@ Remember: ALWAYS use tools. NEVER invent data."""
                         message = response.choices[0].message
                         assistant_response = message.content or ""
 
-                        # Parse response for tool calls
+                        # Parse for tool calls
                         tool_calls = parse_tool_calls(assistant_response)
 
                         if not tool_calls:
-                            # No tool calls detected - this is the final answer
+                            # No tool calls - final answer
                             print(f"\nAssistant: {assistant_response}\n")
                             conversation_history.append(
                                 {"role": "assistant", "content": assistant_response}
                             )
                             break
 
-                        # Tool calls detected - execute them
-                        print(f"\n[Detected {len(tool_calls)} tool call(s)]")
+                        # Execute tool calls
+                        print(
+                            f"\n[Step {iteration}: Detected {len(tool_calls)} tool call(s)]"
+                        )
 
                         tool_results = []
                         for tc in tool_calls:
                             tool_name = tc["name"]
                             tool_args = tc["arguments"]
 
-                            print(f"  → Calling: {tool_name}({json.dumps(tool_args)})")
+                            print(f"  → {tool_name}({json.dumps(tool_args)})")
 
                             try:
                                 result = await session.call_tool(tool_name, tool_args)
 
-                                # Format result - keep raw for model, display formatted for user
                                 if (
                                     isinstance(result.content, list)
                                     and len(result.content) > 0
@@ -352,11 +497,10 @@ Remember: ALWAYS use tools. NEVER invent data."""
                                 else:
                                     raw_result = str(result.content)
 
-                                # Format for display
-                                display_result = format_result_human_readable(
+                                display_result = format_result_for_display(
                                     tool_name, raw_result
                                 )
-                                print(f"    ✓ Result received\n")
+                                print("    ✓ Success\n")
 
                                 tool_results.append(
                                     {
@@ -369,7 +513,7 @@ Remember: ALWAYS use tools. NEVER invent data."""
 
                             except Exception as e:
                                 error_msg = f"Error: {str(e)}"
-                                print(f"    ✗ {error_msg}")
+                                print(f"    ✗ {error_msg}\n")
                                 tool_results.append(
                                     {
                                         "tool": tool_name,
@@ -379,36 +523,42 @@ Remember: ALWAYS use tools. NEVER invent data."""
                                     }
                                 )
 
-                        # Display human-readable results to user
+                        # Display results
                         print("\n" + "=" * 60)
                         for tr in tool_results:
                             print(tr["display"])
                         print("=" * 60 + "\n")
 
-                        # Add model's response (with tool calls) to history
+                        # Add to conversation history
                         conversation_history.append(
                             {"role": "assistant", "content": assistant_response}
                         )
 
-                        # Format tool results for model (use raw data)
-                        results_message = "TOOL RESULTS:\n\n"
+                        # Format results for model
+                        results_message = "TOOL EXECUTION RESULTS:\n\n"
                         for tr in tool_results:
-                            status = "SUCCESS" if tr["success"] else "FAILED"
-                            results_message += (
-                                f"=== {tr['tool']} ({status}) ===\n{tr['result']}\n\n"
-                            )
+                            status = "✓ SUCCESS" if tr["success"] else "✗ FAILED"
+                            results_message += f"Tool: {tr['tool']} ({status})\n"
+                            results_message += f"Result: {tr['result']}\n\n"
 
-                        results_message += "Now answer the user's original question using this REAL data. Do NOT call tools again."
+                        # Check if workflow is complete
+                        all_success = all(tr["success"] for tr in tool_results)
 
-                        # Add tool results as user message (simulating tool system)
+                        if all_success:
+                            results_message += "\nAll tools executed successfully. Continue to next step or provide final summary if workflow complete."
+                        else:
+                            results_message += "\nERROR: Some tools failed. Stop workflow and report error to user."
+
                         conversation_history.append(
                             {"role": "user", "content": results_message}
                         )
 
-                        print()  # Blank line before next iteration
+                        print()  # Blank line
 
                     if iteration >= max_iterations:
-                        print("[Warning: Max iterations reached]\n")
+                        print(
+                            "[Warning: Max iterations reached - workflow may be incomplete]\n"
+                        )
 
                 except KeyboardInterrupt:
                     logger.summary()
@@ -422,7 +572,7 @@ Remember: ALWAYS use tools. NEVER invent data."""
 
 
 if __name__ == "__main__":
-    print("\nStarting LM Studio MCP Client with Prompt-Based Tool Calling...")
+    print("\nStarting Structured ClickUp Report Generator...")
     print("Ensure LM Studio is running with gemma-3-4b loaded!")
     print("Ensure MCP server is running on port 8001\n")
     asyncio.run(run_mcp_client())
