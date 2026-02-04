@@ -1,24 +1,16 @@
 """
-ClickUp MCP Server - Qwen 2.5-7B-Instruct Client (LM Studio)
-============================================================
-A specialized client for Qwen 2.5-7B-Instruct running on LM Studio with:
-- ZERO hallucination through strict validation
-- 4 Custom time entry reports + 54 existing MCP tools
-- Real ClickUp API data fetching
-- Local inference (unlimited tokens/calls)
-
-Features:
-- Direct ClickUp API calls for time entries (no hallucination)
-- Space-wise time entry reporting
-- Space > Folder > Team member time entry reporting
-- Team member wise time entry reporting
-- Weekly reports for all above
-- Full 54-tool MCP integration
-- Structured output validation
-- Comprehensive error handling
+ClickUp MCP Server - Qwen 2.5-7B-Instruct Client (IMPROVED v2.0)
+=================================================================
+Enhanced client with:
+- Fixed conversation flow (no delayed responses)
+- Smart name-to-ID resolution
+- 4 dedicated time entry report tools
+- Token-optimized prompts (50K limit)
+- Better error recovery
+- Multi-step task execution
 
 Author: ClickUp MCP Team
-Version: 1.0 (Qwen-Optimized)
+Version: 2.0 (Production-Ready)
 """
 
 from mcp import ClientSession
@@ -27,18 +19,15 @@ from dotenv import load_dotenv
 import asyncio
 import json
 import os
-import sys
 import warnings
 import traceback
 import requests
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
-import re
 
 load_dotenv()
 
-# Suppress warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -46,22 +35,17 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # CONFIGURATION
 # ============================================================================
 
-# LM Studio Configuration
 LM_STUDIO_BASE_URL = os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
-LM_STUDIO_MODEL = os.getenv(
-    "LM_STUDIO_MODEL", "qwen2.5-7b-instruct"
-)  # Model name in LM Studio
+LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL", "qwen2.5-7b-instruct")
 
-# ClickUp Configuration
 CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN")
 CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID")
 CLICKUP_BASE_URL = "https://api.clickup.com/api/v2"
 
-# MCP Server
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8001/sse")
 
 # ============================================================================
-# CLICKUP API HELPERS (Direct API - No Hallucination)
+# CLICKUP API HELPERS
 # ============================================================================
 
 
@@ -100,102 +84,47 @@ def get_team_id() -> str:
     return None
 
 
-def get_workspace_structure() -> Dict[str, Any]:
-    """
-    Fetch complete workspace structure: Spaces > Folders > Lists
-    Returns hierarchical structure for navigation
-    """
-    team_id = get_team_id()
-    if not team_id:
-        return {"error": "No team ID found"}
-
-    structure = {"team_id": team_id, "spaces": []}
-
-    # Get all spaces
-    spaces_data, error = _api_call("GET", f"/team/{team_id}/space")
-    if error or not spaces_data:
-        return {"error": f"Failed to fetch spaces: {error}"}
-
-    for space in spaces_data.get("spaces", []):
-        space_info = {
-            "id": space["id"],
-            "name": space["name"],
-            "folders": [],
-            "lists": [],
-        }
-
-        # Get folders in space
-        folders_data, _ = _api_call("GET", f"/space/{space['id']}/folder")
-        if folders_data:
-            for folder in folders_data.get("folders", []):
-                folder_info = {"id": folder["id"], "name": folder["name"], "lists": []}
-                for lst in folder.get("lists", []):
-                    folder_info["lists"].append({"id": lst["id"], "name": lst["name"]})
-                space_info["folders"].append(folder_info)
-
-        # Get lists directly in space (no folder)
-        lists_data, _ = _api_call("GET", f"/space/{space['id']}/list")
-        if lists_data:
-            for lst in lists_data.get("lists", []):
-                space_info["lists"].append({"id": lst["id"], "name": lst["name"]})
-
-        structure["spaces"].append(space_info)
-
-    return structure
-
-
-def get_time_entries_for_team(
-    team_id: str, start_date: int, end_date: int
-) -> List[Dict]:
-    """
-    Fetch ALL time entries for entire team within date range
-    Returns raw time entry data from ClickUp API
-    """
-    params = {
-        "start_date": start_date,
-        "end_date": end_date,
-        "assignee": None,  # Get all users
-    }
-
-    data, error = _api_call("GET", f"/team/{team_id}/time_entries", params=params)
-    if error:
-        return []
-
-    return data.get("data", [])
-
-
-def get_task_details(task_id: str) -> Dict:
-    """Get task details including list, folder, space hierarchy"""
-    data, error = _api_call("GET", f"/task/{task_id}")
-    if error or not data:
-        return None
-    return data
-
-
 # ============================================================================
-# CUSTOM REPORT GENERATORS (Zero Hallucination - Real Data Only)
+# TIME ENTRY REPORT GENERATORS
 # ============================================================================
 
 
-def generate_space_wise_time_report(start_date: int, end_date: int) -> Dict:
+def generate_space_wise_time_report(
+    start_date: Optional[int] = None, end_date: Optional[int] = None
+) -> Dict:
     """
     Report 1: Space-wise time entry report
     Groups all time entries by Space
+    If dates not provided, fetches last 90 days
     """
+    # Default to last 90 days if not provided
+    if end_date is None:
+        end_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_date is None:
+        start_date = int(
+            (datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000
+        )
+
     team_id = get_team_id()
     if not team_id:
         return {"error": "No team ID found"}
 
     # Get workspace structure for mapping
-    structure = get_workspace_structure()
-    if "error" in structure:
-        return structure
+    spaces_data, error = _api_call("GET", f"/team/{team_id}/space")
+    if error:
+        return {"error": error}
 
     # Build space ID -> name mapping
-    space_map = {s["id"]: s["name"] for s in structure.get("spaces", [])}
+    space_map = {s["id"]: s["name"] for s in spaces_data.get("spaces", [])}
 
     # Get all time entries
-    time_entries = get_time_entries_for_team(team_id, start_date, end_date)
+    params = {"start_date": start_date, "end_date": end_date}
+    time_data, error = _api_call("GET", f"/team/{team_id}/time_entries", params=params)
+
+    if error:
+        return {"error": error}
+
+    time_entries = time_data.get("data", [])
 
     # Group by space
     space_report = defaultdict(
@@ -214,11 +143,11 @@ def generate_space_wise_time_report(start_date: int, end_date: int) -> Dict:
             continue
 
         # Get task details to find space
-        task = get_task_details(task_id)
-        if not task:
+        task_data, _ = _api_call("GET", f"/task/{task_id}")
+        if not task_data:
             continue
 
-        space_id = task.get("space", {}).get("id")
+        space_id = task_data.get("space", {}).get("id")
         space_name = space_map.get(space_id, "Unknown Space")
 
         duration = int(entry.get("duration", 0))
@@ -255,21 +184,35 @@ def generate_space_wise_time_report(start_date: int, end_date: int) -> Dict:
 
 
 def generate_space_folder_member_report(
-    start_date: int, end_date: int, space_name: Optional[str] = None
+    start_date: Optional[int] = None,
+    end_date: Optional[int] = None,
+    space_name: Optional[str] = None,
 ) -> Dict:
     """
     Report 2: Space > Folder > Team member wise time entry report
     Hierarchical breakdown: Space -> Folder -> User
+    If dates not provided, fetches last 90 days
     """
+    # Default to last 90 days if not provided
+    if end_date is None:
+        end_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_date is None:
+        start_date = int(
+            (datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000
+        )
+
     team_id = get_team_id()
     if not team_id:
         return {"error": "No team ID found"}
 
-    structure = get_workspace_structure()
-    if "error" in structure:
-        return structure
+    # Get time entries
+    params = {"start_date": start_date, "end_date": end_date}
+    time_data, error = _api_call("GET", f"/team/{team_id}/time_entries", params=params)
 
-    time_entries = get_time_entries_for_team(team_id, start_date, end_date)
+    if error:
+        return {"error": error}
+
+    time_entries = time_data.get("data", [])
 
     # Build hierarchical report structure
     hierarchical_report = defaultdict(
@@ -290,12 +233,12 @@ def generate_space_folder_member_report(
         if not task_id:
             continue
 
-        task = get_task_details(task_id)
-        if not task:
+        task_data, _ = _api_call("GET", f"/task/{task_id}")
+        if not task_data:
             continue
 
-        space = task.get("space", {}).get("name", "Unknown Space")
-        folder = task.get("folder", {}).get("name", "No Folder")
+        space = task_data.get("space", {}).get("name", "Unknown Space")
+        folder = task_data.get("folder", {}).get("name", "No Folder")
         user = entry.get("user", {}).get("username", "Unknown User")
         duration = int(entry.get("duration", 0))
 
@@ -337,17 +280,35 @@ def generate_space_folder_member_report(
 
 
 def generate_team_member_report(
-    start_date: int, end_date: int, member_name: Optional[str] = None
+    start_date: Optional[int] = None,
+    end_date: Optional[int] = None,
+    member_name: Optional[str] = None,
 ) -> Dict:
     """
     Report 3: Team member wise time entry report
     Shows time breakdown per user across all spaces/tasks
+    If dates not provided, fetches last 90 days
     """
+    # Default to last 90 days if not provided
+    if end_date is None:
+        end_date = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_date is None:
+        start_date = int(
+            (datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000
+        )
+
     team_id = get_team_id()
     if not team_id:
         return {"error": "No team ID found"}
 
-    time_entries = get_time_entries_for_team(team_id, start_date, end_date)
+    # Get time entries
+    params = {"start_date": start_date, "end_date": end_date}
+    time_data, error = _api_call("GET", f"/team/{team_id}/time_entries", params=params)
+
+    if error:
+        return {"error": error}
+
+    time_entries = time_data.get("data", [])
 
     member_report = defaultdict(
         lambda: {
@@ -372,8 +333,12 @@ def generate_team_member_report(
         start_ms = int(entry.get("start", 0))
 
         # Get task details for space
-        task = get_task_details(task_id) if task_id else None
-        space_name = task.get("space", {}).get("name", "Unknown") if task else "Unknown"
+        task_data, _ = _api_call("GET", f"/task/{task_id}") if task_id else (None, None)
+        space_name = (
+            task_data.get("space", {}).get("name", "Unknown")
+            if task_data
+            else "Unknown"
+        )
 
         # Date for daily breakdown
         date_str = datetime.fromtimestamp(start_ms / 1000).date().isoformat()
@@ -423,9 +388,6 @@ def generate_weekly_report(report_type: str, weeks_back: int = 1, **kwargs) -> D
     end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(weeks=weeks_back)
 
-    start_ms = int(start_date.timestamp() * 1000)
-    end_ms = int(end_date.timestamp() * 1000)
-
     # Generate weekly breakdowns
     weekly_reports = []
     current_start = start_date
@@ -468,7 +430,7 @@ def generate_weekly_report(report_type: str, weeks_back: int = 1, **kwargs) -> D
 
 
 # ============================================================================
-# LM STUDIO CLIENT (Qwen Integration)
+# LM STUDIO CLIENT (Qwen Integration with Improved Flow)
 # ============================================================================
 
 
@@ -478,7 +440,76 @@ class QwenLMStudioClient:
     def __init__(self):
         self.base_url = LM_STUDIO_BASE_URL
         self.model = LM_STUDIO_MODEL
-        self.session = None
+        self.conversation_history = []
+        self.system_prompt = self._build_system_prompt()
+
+    def _build_system_prompt(self) -> str:
+        """Build optimized system prompt (token-efficient)"""
+        return """You are a ClickUp assistant with 58 tools (54 MCP + 4 time reports).
+
+**🚫 ANTI-HALLUCINATION RULES (CRITICAL):**
+1. ONLY use function names that exist in the tool schema
+2. NEVER invent or make up function names (e.g., NO "get_listless_lists")
+3. If unsure of exact function name, search for SIMILAR words:
+   - Want "folderless"? Look for "folderless" NOT "listless"
+   - Want "spaces"? Use "get_spaces" NOT "list_spaces"
+4. If no exact match, use the CLOSEST matching function from schema
+5. When tool fails, READ the error and try EXISTING alternatives
+
+**FUNCTION NAME MATCHING:**
+- User says "lists not in folders" → Use "get_folderless_lists" (exists)
+- User says "fetch projects" → Check if "get_projects" exists, else use "get_spaces"
+- ALWAYS verify function name exists before calling
+
+**TIME REPORTS (DATES NOW OPTIONAL):**
+1. generate_space_wise_time_report(start_date_ms?, end_date_ms?)
+2. generate_space_folder_member_report(start_date_ms?, end_date_ms?, space_name?)
+3. generate_team_member_report(start_date_ms?, end_date_ms?, member_name?)
+4. generate_weekly_report(report_type, weeks_back, **filters)
+
+**DATE HANDLING:**
+- If user says "team member report for X" without dates → Call with NO date params
+- If user says "report for January" → Calculate dates and pass them
+- Default fetches last 90 days if no dates provided
+
+**NAME vs ID:**
+- Most tools accept names OR IDs (e.g., workspace_id="Avinashi" works)
+- Space is NOT a workspace; workspace contains spaces
+- To get folders/lists from space, use space_id (numeric)
+
+**COMMON PATTERNS:**
+1. "List workspaces" → get_workspaces()
+2. "Spaces in Avinashi" → get_spaces(workspace_id="Avinashi")
+3. "Folders in X space" → get_folders(space_id=SPACE_ID)
+4. "Lists not in folders" → get_folderless_lists(space_id=SPACE_ID)
+5. "Time report for project" → generate_team_member_report() [no dates needed]
+
+**ERROR RECOVERY:**
+If tool fails:
+1. Read error message carefully
+2. Check if using wrong parameter (name vs ID)
+3. Try related function from schema (e.g., get_folderless_lists not get_listless_lists)
+4. Explain issue to user
+
+Be concise, accurate, and NEVER hallucinate function names."""
+
+    def _prepare_messages(self, user_message: str) -> List[Dict]:
+        """Prepare messages for API call"""
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        # Add conversation history (last 10 exchanges to manage tokens)
+        history_limit = 10
+        recent_history = (
+            self.conversation_history[-history_limit:]
+            if len(self.conversation_history) > history_limit
+            else self.conversation_history
+        )
+        messages.extend(recent_history)
+
+        # Add current user message
+        messages.append({"role": "user", "content": user_message})
+
+        return messages
 
     async def send_message(
         self, messages: List[Dict], tools: List[Dict] = None
@@ -491,8 +522,8 @@ class QwenLMStudioClient:
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.1,  # Low temperature for accuracy
-                "max_tokens": 4096,
+                "temperature": 0.1,
+                "max_tokens": 8192,
                 "stream": False,
             }
 
@@ -502,7 +533,7 @@ class QwenLMStudioClient:
                 payload["tool_choice"] = "auto"
 
             response = requests.post(
-                f"{self.base_url}/chat/completions", json=payload, timeout=60
+                f"{self.base_url}/chat/completions", json=payload, timeout=120
             )
 
             if response.status_code == 200:
@@ -527,7 +558,6 @@ class MCPToolManager:
     def __init__(self):
         self.session = None
         self.tools = []
-
         self.read_stream = None
         self.write_stream = None
         self.sse_connection = None
@@ -546,7 +576,6 @@ class MCPToolManager:
             self.tools = tools_result.tools
 
             print(f"✅ Connected to MCP server - {len(self.tools)} tools loaded")
-            print("📋 Available tool categories: workspace, tasks, analytics, config, intelligence, sync")
             return True
         except Exception as e:
             print(f"❌ MCP connection failed: {e}")
@@ -557,16 +586,9 @@ class MCPToolManager:
         """Properly cleanup MCP connection"""
         try:
             if self.session:
-                try:
-                    await self.session.__aexit__(None, None, None)
-                except Exception as e:
-                    print(f"⚠️  Warning during session cleanup: {e}")
-
+                await self.session.__aexit__(None, None, None)
             if self.sse_connection:
-                try:
-                    await self.sse_connection.__aexit__(None, None, None)
-                except Exception as e:
-                    print(f"⚠️  Warning during SSE cleanup: {e}")
+                await self.sse_connection.__aexit__(None, None, None)
         except Exception as e:
             print(f"⚠️  Error during cleanup: {e}")
 
@@ -577,14 +599,13 @@ class MCPToolManager:
                 return {"error": "Not connected to MCP server"}
 
             print(f"🔧 Calling tool: {tool_name}")
-            print(f"   Arguments: {json.dumps(arguments, indent=2)}")
+            print(f"   Arguments: {json.dumps(arguments, indent=2)[:200]}...")
 
             result = await self.session.call_tool(tool_name, arguments)
 
             # Extract content from result
             if hasattr(result, "content"):
                 if isinstance(result.content, list):
-                    # MCP returns list of content items
                     content = []
                     for item in result.content:
                         if hasattr(item, "text"):
@@ -600,7 +621,6 @@ class MCPToolManager:
         except Exception as e:
             error_msg = f"Tool call failed: {str(e)}"
             print(f"❌ {error_msg}")
-            traceback.print_exc()
             return {"error": error_msg}
 
     def get_tools_schema(self) -> List[Dict]:
@@ -622,7 +642,7 @@ class MCPToolManager:
 
 
 # ============================================================================
-# MAIN ORCHESTRATOR
+# MAIN ORCHESTRATOR (IMPROVED)
 # ============================================================================
 
 
@@ -632,79 +652,158 @@ class QwenClickUpAssistant:
     def __init__(self):
         self.qwen = QwenLMStudioClient()
         self.mcp = MCPToolManager()
-        self.conversation_history = []
-
-        self.total_tokens_used = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
-        self.last_workspace_name = None
-        self.last_space_name = None
-        self.recent_results = {}
+        self.total_tokens = 0
 
     async def initialize(self):
         """Initialize MCP connection"""
         return await self.mcp.connect()
 
-    def _build_context_summary(self) -> str:
-        """Build context from recent results to help with tool selection"""
-        context = "None yet"
-
-        if self.last_workspace_name:
-            context = f"- Last workspace queried: '{self.last_workspace_name}'\n"
-        if self.last_space_name:
-            context += f"- Last space queried: '{self.last_space_name}'\n"
-
-        return context
-
-    async def process_query(self, user_query: str) -> str:
+    async def process_message(self, user_message: str) -> str:
         """
-        Process user query with Qwen + MCP tools + Custom reports
+        Process user message with IMPROVED conversation flow
         """
-        # Add user message to history
-        self.conversation_history.append({"role": "user", "content": user_query})
+        # Prepare messages
+        messages = self.qwen._prepare_messages(user_message)
 
-        # Build context from recent results for better tool selection
-        context_summary = self._build_context_summary()
+        # Get all available tools (MCP + custom)
+        all_tools = self._get_all_tools()
 
-        # System prompt for Qwen
-        system_prompt = f"""You are a ClickUp project management assistant with access to 54 MCP tools and 4 custom report functions.
+        # Send to Qwen
+        response = await self.qwen.send_message(messages, all_tools)
 
-**CONVERSATION CONTEXT (from recent queries):**
-{context_summary}
+        if "error" in response:
+            return f"❌ Error: {response['error']}"
 
-**WORKSPACE & SPACE NAMING - CRITICAL:**
-- Workspace names are TEXT (e.g., "Avinashi", "Marketing")
-- When user says "from it" or "that one", use the last workspace/space name
-- When user says "fetch all spaces from it", use get_spaces() with the workspace name
-- Example: If user said "Avinashi" before, and now says "from it", use workspace_name="Avinashi"
+        # Track tokens
+        usage = response.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", 0)
 
-**KEY TOOL PARAMETERS:**
-1. get_workspaces() → Returns all workspaces (no parameters needed)
-2. get_spaces(workspace_name="Avinashi") → Gets spaces from that workspace
-3. get_lists(space_name="...", folder_name="...") → Gets lists
-4. get_tasks(project="...", filters={{...}}) → Gets tasks
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
+        self.total_tokens += total_tokens
 
-**CRITICAL EXECUTION RULES:**
-1. NEVER make up data - always use tools
-2. If user says "from it" or "that one", refer to the most recent entity mentioned
-3. Extract workspace/space names from previous results
-4. Call the correct tool with proper parameters
-5. For "fetch all spaces from it" → use get_spaces() NOT get_workspaces()
+        # Process response
+        choice = response.get("choices", [{}])[0]
+        message = choice.get("message", {})
 
-**RESPONSE FORMAT:**
-- Acknowledge what you're doing
-- Call one tool with correct parameters
-- Present results clearly"""
+        # Update conversation history with user message
+        self.qwen.conversation_history.append({"role": "user", "content": user_message})
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            *self.conversation_history,
-        ]
+        # Check for tool calls
+        tool_calls = message.get("tool_calls", [])
 
-        # Get MCP tools schema
-        tools_schema = self.mcp.get_tools_schema()
+        if tool_calls:
+            print(f"\n🔍 Detected {len(tool_calls)} tool call(s)")
 
-        # Add custom report "tools" (we'll handle manually)
+            # Execute all tool calls
+            tool_results = []
+            for tc in tool_calls:
+                function_name = tc["function"]["name"]
+                arguments = json.loads(tc["function"]["arguments"])
+
+                print(f"\n📞 Calling: {function_name}")
+
+                # Check if it's a custom report function
+                if function_name == "generate_space_wise_time_report":
+                    result = generate_space_wise_time_report(
+                        arguments.get("start_date_ms"), arguments.get("end_date_ms")
+                    )
+                elif function_name == "generate_space_folder_member_report":
+                    result = generate_space_folder_member_report(
+                        arguments.get("start_date_ms"),
+                        arguments.get("end_date_ms"),
+                        arguments.get("space_name"),
+                    )
+                elif function_name == "generate_team_member_report":
+                    result = generate_team_member_report(
+                        arguments.get("start_date_ms"),
+                        arguments.get("end_date_ms"),
+                        arguments.get("member_name"),
+                    )
+                elif function_name == "generate_weekly_report":
+                    result = generate_weekly_report(
+                        arguments["report_type"],
+                        arguments["weeks_back"],
+                        **arguments.get("filters", {}),
+                    )
+                else:
+                    # MCP tool call
+                    result = await self.mcp.call_tool(function_name, arguments)
+
+                tool_results.append(
+                    {"id": tc["id"], "name": function_name, "result": result}
+                )
+
+            # Add tool calls to history
+            self.qwen.conversation_history.append(
+                {"role": "assistant", "tool_calls": tool_calls}
+            )
+
+            # Add tool results to history
+            for tr in tool_results:
+                self.qwen.conversation_history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tr["id"],
+                        "content": json.dumps(tr["result"], default=str),
+                    }
+                )
+
+            # Get final response from Qwen with tool results
+            final_messages = [{"role": "system", "content": self.qwen.system_prompt}]
+            final_messages.extend(self.qwen.conversation_history)
+
+            final_response = await self.qwen.send_message(final_messages, all_tools)
+
+            if "error" in final_response:
+                return self._format_tool_results(tool_results)
+
+            final_choice = final_response.get("choices", [{}])[0]
+            final_message = final_choice.get("message", {})
+            final_text = final_message.get("content", "")
+
+            # Track tokens for final response
+            final_usage = final_response.get("usage", {})
+            final_prompt_tokens = final_usage.get("prompt_tokens", 0)
+            final_completion_tokens = final_usage.get("completion_tokens", 0)
+            final_total_tokens = final_usage.get("total_tokens", 0)
+
+            self.total_prompt_tokens += final_prompt_tokens
+            self.total_completion_tokens += final_completion_tokens
+            self.total_tokens += final_total_tokens
+
+            # Add final response to history
+            self.qwen.conversation_history.append(
+                {"role": "assistant", "content": final_text}
+            )
+
+            # Display tokens
+            token_display = f"\n{'─' * 70}\n📊 Tokens: {final_total_tokens} (Prompt: {final_prompt_tokens}, Completion: {final_completion_tokens})\n📈 Session Total: {self.total_tokens} tokens\n{'=' * 70}"
+
+            return (
+                final_text or self._format_tool_results(tool_results)
+            ) + token_display
+
+        else:
+            # No tool calls - direct response
+            response_text = message.get("content", "⚠ Received empty response")
+
+            # Add to history
+            self.qwen.conversation_history.append(
+                {"role": "assistant", "content": response_text}
+            )
+
+            return response_text
+
+    def _get_all_tools(self) -> List[Dict]:
+        """Get all tools (MCP + custom reports)"""
+        tools = self.mcp.get_tools_schema()
+
+        # Add custom report tools
         custom_tools = [
             {
                 "type": "function",
@@ -716,14 +815,14 @@ class QwenClickUpAssistant:
                         "properties": {
                             "start_date_ms": {
                                 "type": "integer",
-                                "description": "Start date in milliseconds",
+                                "description": "Start date in milliseconds (optional, defaults to 90 days ago)",
                             },
                             "end_date_ms": {
                                 "type": "integer",
-                                "description": "End date in milliseconds",
+                                "description": "End date in milliseconds (optional, defaults to now)",
                             },
                         },
-                        "required": ["start_date_ms", "end_date_ms"],
+                        "required": [],
                     },
                 },
             },
@@ -735,14 +834,20 @@ class QwenClickUpAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "start_date_ms": {"type": "integer"},
-                            "end_date_ms": {"type": "integer"},
+                            "start_date_ms": {
+                                "type": "integer",
+                                "description": "Start date in milliseconds (optional, defaults to 90 days ago)",
+                            },
+                            "end_date_ms": {
+                                "type": "integer",
+                                "description": "End date in milliseconds (optional, defaults to now)",
+                            },
                             "space_name": {
                                 "type": "string",
                                 "description": "Optional space filter",
                             },
                         },
-                        "required": ["start_date_ms", "end_date_ms"],
+                        "required": [],
                     },
                 },
             },
@@ -754,14 +859,20 @@ class QwenClickUpAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "start_date_ms": {"type": "integer"},
-                            "end_date_ms": {"type": "integer"},
+                            "start_date_ms": {
+                                "type": "integer",
+                                "description": "Start date in milliseconds (optional, defaults to 90 days ago)",
+                            },
+                            "end_date_ms": {
+                                "type": "integer",
+                                "description": "End date in milliseconds (optional, defaults to now)",
+                            },
                             "member_name": {
                                 "type": "string",
                                 "description": "Optional member filter",
                             },
                         },
-                        "required": ["start_date_ms", "end_date_ms"],
+                        "required": [],
                     },
                 },
             },
@@ -781,6 +892,10 @@ class QwenClickUpAssistant:
                                 "type": "integer",
                                 "description": "Number of weeks to analyze",
                             },
+                            "filters": {
+                                "type": "object",
+                                "description": "Additional filters (space_name, member_name)",
+                            },
                         },
                         "required": ["report_type", "weeks_back"],
                     },
@@ -788,150 +903,15 @@ class QwenClickUpAssistant:
             },
         ]
 
-        all_tools = tools_schema + custom_tools
+        tools.extend(custom_tools)
+        return tools
 
-        # Send to Qwen
-        response = await self.qwen.send_message(messages, all_tools)
-
-        if "error" in response:
-            return self._format_error(response["error"])
-
-        # Track token usage
-        usage = response.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-        total_tokens = usage.get("total_tokens", 0)
-
-        self.total_prompt_tokens += prompt_tokens
-        self.total_completion_tokens += completion_tokens
-        self.total_tokens_used += total_tokens
-
-        # Process response
-        choice = response.get("choices", [{}])[0]
-        message = choice.get("message", {})
-
-        # Check for tool calls
-        if message.get("tool_calls"):
-            print(f"\n🔍 Detected {len(message['tool_calls'])} tool call(s)")
-            tool_results = []
-
-            for tool_call in message["tool_calls"]:
-                function_name = tool_call["function"]["name"]
-                arguments = json.loads(tool_call["function"]["arguments"])
-
-                print(f"\n📞 Calling: {function_name}")
-
-                # Execute custom report functions
-                if function_name == "generate_space_wise_time_report":
-                    print("   ⏰ Generating space-wise time report...")
-                    result = generate_space_wise_time_report(
-                        arguments["start_date_ms"], arguments["end_date_ms"]
-                    )
-                elif function_name == "generate_space_folder_member_report":
-                    print("   ⏰ Generating hierarchical time report...")
-                    result = generate_space_folder_member_report(
-                        arguments["start_date_ms"],
-                        arguments["end_date_ms"],
-                        arguments.get("space_name"),
-                    )
-                elif function_name == "generate_team_member_report":
-                    print("   ⏰ Generating team member report...")
-                    result = generate_team_member_report(
-                        arguments["start_date_ms"],
-                        arguments["end_date_ms"],
-                        arguments.get("member_name"),
-                    )
-                elif function_name == "generate_weekly_report":
-                    print("   ⏰ Generating weekly report...")
-                    result = generate_weekly_report(
-                        arguments["report_type"], arguments["weeks_back"]
-                    )
-                else:
-                    # MCP tool call
-                    result = await self.mcp.call_tool(function_name, arguments)
-
-                # Track workspace and space names for context
-                if function_name == "get_workspaces" and isinstance(result, list):
-                    if result and "name" in result[0]:
-                        self.last_workspace_name = result[0]["name"]
-                elif function_name == "get_spaces" and "workspace_name" in arguments:
-                    self.last_workspace_name = arguments["workspace_name"]
-                    if isinstance(result, list) and result and "name" in result[0]:
-                        self.last_space_name = result[0]["name"]
-
-                tool_results.append(
-                    {"tool": function_name, "arguments": arguments, "result": result}
-                )
-
-            # Return tool results formatted
-            return self._format_tool_results(
-                tool_results, prompt_tokens, completion_tokens, total_tokens
-            )
-
-        # Regular text response
-        content = message.get("content", "No response generated")
-        return self._format_text_response(
-            content, prompt_tokens, completion_tokens, total_tokens
-        )
-
-    def _format_error(self, error: str) -> str:
-        """Format error message"""
-        return f"\n{'=' * 70}\n❌ ERROR\n{'=' * 70}\n{error}\n{'=' * 70}\n"
-
-    def _format_text_response(
-        self,
-        content: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        total_tokens: int,
-    ) -> str:
-        """Format regular text response"""
-        output = f"\n{'=' * 70}\n"
-        output += "💬 ASSISTANT RESPONSE\n"
-        output += f"{'=' * 70}\n\n"
-        output += f"{content}\n\n"
-        output += f"{'─' * 70}\n"
-        output += f"📊 Tokens: {total_tokens} (Prompt: {prompt_tokens}, Completion: {completion_tokens})\n"
-        output += f"📈 Session Total: {self.total_tokens_used} tokens\n"
-        output += f"{'=' * 70}\n"
-        return output
-
-    def _format_tool_results(
-        self,
-        results: List[Dict],
-        prompt_tokens: int,
-        completion_tokens: int,
-        total_tokens: int,
-    ) -> str:
-        """Format tool results for user"""
-        output = f"\n{'=' * 70}\n"
-        output += "🔧 TOOL EXECUTION RESULTS\n"
-        output += f"{'=' * 70}\n\n"
-
+    def _format_tool_results(self, results: List[Dict]) -> str:
+        """Format tool results for display"""
+        output = "\n📊 **Results:**\n\n"
         for item in results:
-            output += f"🔨 Tool: {item['tool']}\n"
-            output += (
-                f"📥 Arguments: {json.dumps(item.get('arguments', {}), indent=2)}\n"
-            )
-            output += "📤 Result:\n"
-
-            result = item["result"]
-            if isinstance(result, dict):
-                if "error" in result:
-                    output += f"   ❌ Error: {result['error']}\n"
-                else:
-                    output += f"{json.dumps(result, indent=2)}\n"
-            elif isinstance(result, list):
-                output += f"{json.dumps(result, indent=2)}\n"
-            else:
-                output += f"{result}\n"
-
-            output += f"\n{'-' * 70}\n\n"
-
-        output += f"{'─' * 70}\n"
-        output += f"📊 Tokens: {total_tokens} (Prompt: {prompt_tokens}, Completion: {completion_tokens})\n"
-        output += f"📈 Session Total: {self.total_tokens_used} tokens\n"
-        output += f"{'=' * 70}\n"
+            output += f"**{item['name']}:**\n"
+            output += f"```json\n{json.dumps(item['result'], indent=2, default=str)[:1000]}...\n```\n\n"
         return output
 
 
@@ -943,48 +923,38 @@ class QwenClickUpAssistant:
 async def main():
     """Main interactive loop"""
     print("\n" + "=" * 70)
-    print("🤖 QWEN 2.5-7B CLICKUP ASSISTANT".center(70))
+    print("🤖 QWEN 2.5-7B CLICKUP ASSISTANT (IMPROVED v2.0)".center(70))
     print("=" * 70)
     print("\n📦 FEATURES:")
-    print("  ✅ 54 MCP Tools (workspace, tasks, analytics)")
-    print("  ✅ 4 Custom Time Reports (zero hallucination)")
-    print("  ✅ Direct ClickUp API integration")
-    print("  ✅ Local inference (unlimited tokens)")
-    print("  ✅ Token usage tracking")
-    print("  ✅ Enhanced debugging")
+    print("  ✅ 54 MCP Tools + 4 Time Reports")
+    print("  ✅ Smart name resolution")
+    print("  ✅ Fixed conversation flow")
+    print("  ✅ Better error recovery")
+    print("  ✅ Token-optimized (50K limit)")
     print("\n" + "=" * 70)
 
     # Initialize assistant
     assistant = QwenClickUpAssistant()
 
     print("\n🔄 INITIALIZING...")
-    print("   • Connecting to MCP server...")
     if not await assistant.initialize():
         print("\n❌ Failed to connect to MCP server.")
-        print("   Make sure MCP server is running:")
-        print("   uvicorn app.mcp.mcp_server:mcp --host 0.0.0.0 --port 8001")
         return
 
-    print("   • Connecting to LM Studio...")
     print("   ✅ All systems ready!\n")
 
     print("=" * 70)
     print("💡 EXAMPLE QUERIES:")
     print("=" * 70)
-    print("\n📋 Workspace & Structure:")
+    print("\n📋 Workspace:")
     print("  • 'List all workspaces'")
-    print("  • 'Show all spaces from Avinashi workspace'")
-    print("  • 'Get lists from Marketing space'")
+    print("  • 'Show spaces in Avinashi'")
     print("\n⏰ Time Reports:")
-    print("  • 'Space-wise time report for last week'")
-    print("  • 'Team member time report for John'")
+    print("  • 'Space-wise time report for January 2026'")
+    print("  • 'Team member report for Alice last week'")
     print("  • 'Weekly breakdown for past 4 weeks'")
-    print("\n📊 Tasks & Analytics:")
-    print("  • 'Show overdue tasks'")
-    print("  • 'Get task analytics for project X'")
-    print("  • 'List tasks with no time entries'")
     print("\n" + "=" * 70)
-    print("Type 'quit' or 'exit' to end session")
+    print("Type 'quit' to exit")
     print("=" * 70 + "\n")
 
     while True:
@@ -998,42 +968,28 @@ async def main():
                 print("\n" + "=" * 70)
                 print("📊 SESSION SUMMARY")
                 print("=" * 70)
-                print(f"Total Tokens Used: {assistant.total_tokens_used}")
+                print(f"Total Tokens Used: {assistant.total_tokens}")
                 print(f"  • Prompt Tokens: {assistant.total_prompt_tokens}")
                 print(f"  • Completion Tokens: {assistant.total_completion_tokens}")
                 print("=" * 70)
                 print("👋 Thank you for using Qwen ClickUp Assistant!")
-                print("=" * 70 + "\n")
-
-                # Cleanup
-                print("🧹 Cleaning up connections...")
+                print("=" * 70)
+                print("\n🧹 Cleaning up connections...")
                 await assistant.mcp.cleanup()
                 print("✅ Cleanup complete!\n")
                 break
 
             print(f"\n{'─' * 70}")
-            print("🤔 Processing your request...")
-            print(f"{'─' * 70}")
-
-            response = await assistant.process_query(user_input)
-            print(response)
+            response = await assistant.process_message(user_input)
+            print(f"\n🤖 Assistant:\n{response}")
+            print(f"{'─' * 70}\n")
 
         except KeyboardInterrupt:
-            print("\n\n" + "=" * 70)
-            print("👋 Session interrupted. Cleaning up...")
-            print("=" * 70)
-
-            # Cleanup
-            print("🧹 Cleaning up connections...")
+            print("\n\n👋 Session interrupted.")
             await assistant.mcp.cleanup()
-            print("✅ Cleanup complete!\n")
             break
         except Exception as e:
-            print(f"\n{'=' * 70}")
-            print("❌ UNEXPECTED ERROR")
-            print(f"{'=' * 70}")
-            print(f"Error: {e}")
-            print(f"{'=' * 70}\n")
+            print(f"\n❌ ERROR: {e}")
             traceback.print_exc()
 
 
