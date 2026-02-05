@@ -151,7 +151,7 @@ def parse_tool_calls(text):
             try:
                 fixed_str = args_str.replace("'", '"')
                 arguments = json.loads(fixed_str)
-            except  Exception:
+            except Exception:
                 arguments = {}
 
         tool_calls.append({"name": tool_name, "arguments": arguments})
@@ -405,7 +405,7 @@ async def run_client():
                             model=LM_STUDIO_MODEL,
                             messages=conversation_history,
                             temperature=0.1,
-                            max_tokens=1000,
+                            max_tokens=10000,
                         )
 
                         if iteration == 1:
