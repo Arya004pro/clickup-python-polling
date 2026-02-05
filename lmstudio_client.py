@@ -1,7 +1,15 @@
 """
-LM Studio MCP Client - IMPROVED VERSION
-Structured Report Generation with Step-by-Step Instructions
-Optimized for gemma-3-4b with minimal hallucination
+LM Studio MCP Client - PRODUCTION VERSION
+===============================================
+Comprehensive tool understanding with intelligent context management
+Optimized for gemma-3-4b with minimal hallucination and maximum tool coverage
+
+Features:
+- Automatic workspace initialization and caching
+- Intelligent entity resolution (space/folder/list names to IDs)
+- Natural language understanding for all 54 tools
+- Context-aware report generation
+- Persistent workspace state across queries
 """
 
 import asyncio
@@ -31,253 +39,581 @@ client = OpenAI(
 
 
 # ============================================================================
-# STRUCTURED REPORT WORKFLOWS
-# ============================================================================
-
-REPORT_WORKFLOWS = {
-    "space_time_report": {
-        "name": "Space-wise Time Entry Report",
-        "description": "Generate time tracking report grouped by Space",
-        "steps": [
-            {
-                "step": 1,
-                "action": "get_workspaces",
-                "description": "First, fetch all workspaces to get workspace_id",
-                "params": {},
-            },
-            {
-                "step": 2,
-                "action": "get_spaces",
-                "description": "Get all spaces in the workspace using workspace_id from step 1",
-                "params": {"workspace_id": "FROM_STEP_1"},
-            },
-            {
-                "step": 3,
-                "action": "map_project",
-                "description": "Map each space as a project for time tracking",
-                "params": {"id": "FROM_STEP_2", "type": "space"},
-            },
-            {
-                "step": 4,
-                "action": "get_project_time_tracking",
-                "description": "Get time tracking report for each mapped space",
-                "params": {"project_name": "FROM_STEP_3", "group_by": "assignee"},
-            },
-        ],
-    },
-    "folder_team_time_report": {
-        "name": "Space > Folder > Team Member Time Report",
-        "description": "Generate hierarchical time tracking report",
-        "steps": [
-            {
-                "step": 1,
-                "action": "get_workspaces",
-                "description": "Get workspace ID",
-                "params": {},
-            },
-            {
-                "step": 2,
-                "action": "get_spaces",
-                "description": "Get all spaces",
-                "params": {"workspace_id": "FROM_STEP_1"},
-            },
-            {
-                "step": 3,
-                "action": "get_folders",
-                "description": "For each space, get all folders",
-                "params": {"space_id": "FROM_STEP_2"},
-            },
-            {
-                "step": 4,
-                "action": "map_project",
-                "description": "Map each folder as a project",
-                "params": {"id": "FROM_STEP_3", "type": "folder"},
-            },
-            {
-                "step": 5,
-                "action": "get_project_time_tracking",
-                "description": "Get time report grouped by team member",
-                "params": {"project_name": "FROM_STEP_4", "group_by": "assignee"},
-            },
-        ],
-    },
-    "team_member_time_report": {
-        "name": "Team Member-wise Time Entry Report",
-        "description": "Generate time report for all team members across all projects",
-        "steps": [
-            {
-                "step": 1,
-                "action": "list_mapped_projects",
-                "description": "Get all mapped projects",
-                "params": {},
-            },
-            {
-                "step": 2,
-                "action": "get_time_tracking_report",
-                "description": "For each project, get time tracking grouped by assignee",
-                "params": {"project": "FROM_STEP_1", "group_by": "assignee"},
-            },
-        ],
-    },
-    "weekly_report_all": {
-        "name": "Weekly Report for All Report Types",
-        "description": "Generate weekly digest combining all report types",
-        "steps": [
-            {
-                "step": 1,
-                "action": "list_mapped_projects",
-                "description": "Get all mapped projects",
-                "params": {},
-            },
-            {
-                "step": 2,
-                "action": "get_project_weekly_digest",
-                "description": "Generate weekly digest for each project",
-                "params": {"project_name": "FROM_STEP_1"},
-            },
-            {
-                "step": 3,
-                "action": "get_time_tracking_report",
-                "description": "Get time tracking for the week",
-                "params": {"project": "FROM_STEP_1", "group_by": "assignee"},
-            },
-        ],
-    },
-}
-
-
-# ============================================================================
-# SYSTEM PROMPT TEMPLATES
+# WORKSPACE CONTEXT MANAGER
 # ============================================================================
 
 
-def create_structured_system_prompt(tools_list):
-    """Create a highly structured system prompt with minimal hallucination"""
+class WorkspaceContext:
+    """Maintains workspace state"""
 
-    return f"""You are a ClickUp Data Analysis Assistant with access to {len(tools_list)} tools.
+    def __init__(self):
+        self.workspace_id = None
+        self.workspace_name = None
+        self.spaces = {}  # {space_name_lower: {id, name, status_count}}
+        self.hierarchy_cache = None
 
-CRITICAL RULES TO PREVENT ERRORS:
-1. NEVER invent or guess data - ALWAYS use tools to get real information
-2. ALWAYS call tools in the EXACT sequence specified in the workflow
-3. NEVER skip steps in a workflow
-4. If a tool call fails, STOP and report the error - DO NOT continue
-5. Use the exact tool names and parameters as documented
+    def set_workspace(self, workspace_id, workspace_name):
+        self.workspace_id = workspace_id
+        self.workspace_name = workspace_name
 
-TOOL CALLING FORMAT (STRICT):
-To call a tool, use this EXACT XML format:
+    def add_space(self, space_data):
+        """Add space to cache"""
+        name_lower = space_data.get("name", "").lower()
+        self.spaces[name_lower] = {
+            "id": space_data.get("space_id"),
+            "name": space_data.get("name"),
+            "status_count": space_data.get("status_count", 0),
+        }
+
+    def get_space_id(self, space_name):
+        """Get space ID from name"""
+        name_lower = space_name.lower().strip()
+        space = self.spaces.get(name_lower)
+        return space["id"] if space else None
+
+
+# ============================================================================
+# COMPREHENSIVE SYSTEM PROMPT
+# ============================================================================
+
+
+def create_comprehensive_system_prompt(workspace_context: WorkspaceContext):
+    """Create detailed system prompt with all tool documentation"""
+
+    context_info = ""
+    if workspace_context.workspace_id:
+        summary = workspace_context.get_summary()
+        context_info = f"""
+CURRENT WORKSPACE CONTEXT:
+- Workspace: {summary["workspace"]}
+- Workspace ID: {workspace_context.workspace_id}
+- Cached Spaces: {summary["spaces_count"]}
+- Cached Folders: {summary["folders_count"]}
+- Cached Lists: {summary["lists_count"]}
+- Mapped Projects: {summary["mapped_projects_count"]}
+
+When user mentions entity names, use the cached context to resolve IDs automatically.
+"""
+
+    return f"""You are an expert ClickUp Data Analysis Assistant with access to 54 MCP tools.
+
+{context_info}
+
+CRITICAL OPERATING PRINCIPLES:
+================================
+
+1. NEVER INVENT DATA - Always use tools to get real information
+2. ALWAYS provide complete, formatted answers - don't just echo tool names
+3. Use cached workspace context to resolve entity names to IDs
+4. Execute tool sequences step-by-step, waiting for each result
+5. If a tool fails, report the error clearly and suggest alternatives
+
+TOOL CALLING FORMAT:
+====================
+
+Use this EXACT XML format for tool calls:
 
 <tool_call>
 <name>exact_tool_name</name>
-<arguments>{{"param_name": "param_value"}}</arguments>
+<arguments>{{"param1": "value1", "param2": "value2"}}</arguments>
 </tool_call>
 
-IMPORTANT NOTES:
-- Use {{}} for empty parameters if tool needs no arguments
-- Always wait for tool results before proceeding
-- Extract IDs carefully from previous results
-- Never make assumptions about workspace/space/folder structure
+For tools with no parameters, use empty dict: {{"}}
 
-AVAILABLE WORKFLOW COMMANDS:
-When user requests a report, identify the workflow type and execute steps sequentially:
+REPORT TYPE RECOGNITION:
+========================
 
-1. "space time report" → Execute space_time_report workflow
-2. "folder team report" → Execute folder_team_time_report workflow  
-3. "team member report" → Execute team_member_time_report workflow
-4. "weekly report" → Execute weekly_report_all workflow
+When user asks for reports, recognize these patterns:
 
-WORKFLOW EXECUTION RULES:
-- Execute ONE step at a time
-- Wait for confirmation before next step
-- Extract required IDs from previous step results
-- If a step fails, report the error and STOP
+1. TIME REPORTS (Keywords: "time", "hours", "tracking", "worked", "spent")
+   → Use: get_time_tracking_report or get_project_time_tracking
+   → group_by options: "assignee", "status", "task"
 
-EXAMPLE CORRECT WORKFLOW:
-User: "Generate space time report"
+2. TEAM REPORTS (Keywords: "team", "workload", "members", "assignees")
+   → Use: get_workload or get_project_team_workload
 
-Step 1: Get workspaces
+3. WEEKLY DIGEST (Keywords: "weekly", "digest", "summary", "this week")
+   → Use: get_project_weekly_digest
+
+4. HEALTH SCORE (Keywords: "health", "score", "status", "overview")
+   → Use: get_project_health_score or get_project_status
+
+5. PROGRESS REPORTS (Keywords: "progress", "completed", "since", "done")
+   → Use: get_progress_since
+
+6. STANDUP (Keywords: "standup", "daily", "today", "yesterday")
+   → Use: get_project_daily_standup
+
+7. BLOCKERS (Keywords: "blocked", "blockers", "stuck", "waiting")
+   → Use: get_project_blockers
+
+8. AT-RISK (Keywords: "risk", "overdue", "late", "due")
+   → Use: get_project_at_risk or get_overdue_tasks
+
+ENTITY RESOLUTION LOGIC:
+========================
+
+When user provides an entity name (without explicit ID):
+1. Check if it's a mapped project name
+2. Check if it's a space name
+3. Check if it's a folder name
+4. Check if it's a list name
+5. If not found, use discover_hierarchy to search
+
+For project-based tools (get_project_time_tracking, etc.):
+- First check list_mapped_projects
+- If not mapped, ask user if they want to map it
+- For space/folder: use map_project first, then use project tools
+
+COMPLETE TOOL REFERENCE (54 Tools):
+====================================
+
+WORKSPACE & STRUCTURE (9 tools):
+---------------------------------
+
+1. get_workspaces - List all workspaces
+   Parameters: None
+   Usage: First call to initialize workspace context
+
+2. get_spaces - List all spaces in workspace
+   Parameters: workspace_id (string, required)
+   Usage: Get all spaces after workspace initialization
+
+3. get_space - Get specific space details
+   Parameters: space_id (string, required)
+   Returns: Space details with settings
+
+4. get_folders - List folders in a space
+   Parameters: space_id (string, required)
+   Returns: All folders with IDs and names
+
+5. get_folder - Get folder details with lists
+   Parameters: folder_id (string, required)
+   Returns: Folder info and contained lists
+
+6. get_lists - List all lists in a folder
+   Parameters: folder_id (string, required)
+   Returns: Lists with task counts
+
+7. get_folderless_lists - Get lists not in folders
+   Parameters: space_id (string, required)
+   Returns: Lists directly in space (not in folders)
+
+8. get_list - Get specific list details
+   Parameters: list_id (string, required)
+   Returns: List metadata, statuses, task count
+
+9. invalidate_cache - Clear cached data
+   Parameters: type (optional) - 'all', 'workspaces', 'spaces', 'folders', 'lists', 'tasks'
+   Usage: Use when data seems stale
+
+TASK MANAGEMENT (9 tools):
+---------------------------
+
+10. get_tasks - List tasks with filters
+    Parameters: list_id (required), include_closed, statuses, assignees, page
+    Returns: Filtered task list
+
+11. get_task - Get full task details
+    Parameters: task_id (required)
+    Returns: Complete task info including time tracking
+
+12. create_task - Create new task
+    Parameters: list_id (required), name (required), description, status, priority, assignees, due_date, tags
+    Returns: Created task ID and URL
+
+13. update_task - Update existing task
+    Parameters: task_id (required), name, description, status, priority, due_date, add_assignees, remove_assignees
+    Returns: Update confirmation
+
+14. search_tasks - Search by name in project
+    Parameters: project (required), query (required), include_closed
+    Returns: Matching tasks
+
+15. get_project_tasks - Get all tasks in project
+    Parameters: project (required), include_closed, statuses
+    Returns: All project tasks
+
+16. get_list_progress - Progress summary for list
+    Parameters: list_id (required)
+    Returns: Completion rate, status breakdown, velocity
+
+17. get_workload - Workload by assignee
+    Parameters: list_id (required)
+    Returns: Task distribution per team member
+
+18. get_overdue_tasks - Find overdue tasks
+    Parameters: list_id (required)
+    Returns: Overdue tasks with days overdue
+
+PM ANALYTICS (8 tools):
+------------------------
+
+19. get_progress_since - Tasks completed since date
+    Parameters: project OR list_id, since_date (required), include_status_changes
+    Returns: Completed tasks and status changes
+
+20. get_time_tracking_report - Time vs estimate analysis
+    Parameters: project OR list_id, group_by (optional: 'assignee', 'task', 'status')
+    Returns: Time tracked vs estimated, grouped
+
+21. get_inactive_assignees - Find inactive team members
+    Parameters: project OR list_id, inactive_days (default: 3)
+    Returns: Members with no recent activity
+
+22. get_untracked_tasks - Tasks with no time logged
+    Parameters: project OR list_id, status_filter (optional: 'all', 'in_progress', 'closed')
+    Returns: Tasks missing time entries
+
+23. get_stale_tasks - Tasks not updated recently
+    Parameters: project OR list_id, stale_days (default: 7)
+    Returns: Tasks with no recent updates
+
+24. get_estimation_accuracy - Estimate vs actual analysis
+    Parameters: project OR list_id
+    Returns: Accuracy metrics and recommendations
+
+25. get_at_risk_tasks - Overdue or at-risk tasks
+    Parameters: project OR list_id, risk_days (default: 3)
+    Returns: Tasks categorized by urgency
+
+26. get_status_summary - Quick status rollup
+    Parameters: project OR list_id
+    Returns: Status breakdown for stakeholders
+
+PROJECT CONFIGURATION (7 tools):
+---------------------------------
+
+27. discover_projects - Scan workspace for projects
+    Parameters: workspace_id (required), project_level (optional: 'space', 'folder', 'list')
+    Returns: Discovered entities that can be tracked
+
+28. add_project - Add project to tracking
+    Parameters: name (required), type (required), id (required), workspace_id (required)
+    Returns: Project added confirmation
+
+29. list_projects - List tracked projects
+    Parameters: None
+    Returns: All tracked projects with IDs
+
+30. remove_project - Remove from tracking
+    Parameters: project_name (required)
+    Returns: Removal confirmation
+
+31. refresh_projects - Refresh all project data
+    Parameters: None
+    Returns: Refresh summary
+
+32. get_project_status - Comprehensive project status
+    Parameters: project_name (required)
+    Returns: Status with metrics and health
+
+33. get_all_projects_status - Summary for all projects
+    Parameters: None
+    Returns: Status table for all projects
+
+PROJECT INTELLIGENCE (7 tools):
+--------------------------------
+
+34. get_project_health_score - 0-100 health score
+    Parameters: project_name (required)
+    Returns: Score with component breakdown
+
+35. get_project_daily_standup - Daily standup report
+    Parameters: project_name (required)
+    Returns: Yesterday's work, today's plan, blockers
+
+36. get_project_time_tracking - Time report for project
+    Parameters: project_name (required), group_by (optional: 'assignee', 'list', 'status')
+    Returns: Time tracking grouped by dimension
+
+37. get_project_blockers - Find blocked/stale tasks
+    Parameters: project_name (required), stale_days (default: 5)
+    Returns: Blockers categorized by type
+
+38. get_project_at_risk - Overdue/due-soon tasks
+    Parameters: project_name (required), risk_days (default: 3)
+    Returns: At-risk tasks by urgency
+
+39. get_project_weekly_digest - Weekly stakeholder digest
+    Parameters: project_name (required)
+    Returns: Executive summary with key metrics
+
+40. get_project_team_workload - Team workload distribution
+    Parameters: project_name (required)
+    Returns: Workload per team member
+
+SYNC & MAPPING (10 tools):
+---------------------------
+
+41. discover_hierarchy - Full workspace hierarchy
+    Parameters: workspace_id (optional), show_archived (optional)
+    Returns: Complete hierarchy tree
+
+42. map_project - Map entity as project
+    Parameters: id (required), type (required: 'space'/'folder'/'list'), alias (optional)
+    Returns: Mapping confirmation with structure
+
+43. list_mapped_projects - Show mapped projects
+    Parameters: None
+    Returns: All mapped projects with structure
+
+44. get_project - Get mapped project details
+    Parameters: alias (required)
+    Returns: Project details and structure
+
+45. refresh_project - Refresh project structure
+    Parameters: alias (required)
+    Returns: Before/after comparison
+
+46. unmap_project - Remove project mapping
+    Parameters: alias (required)
+    Returns: Unmapped confirmation
+
+47. get_sync_status - Sync and cache status
+    Parameters: None
+    Returns: Status summary
+
+48. list_spaces - Spaces with mapping status
+    Parameters: workspace_id (optional)
+    Returns: Spaces showing which are mapped
+
+49. clear_sync - Clear all mappings
+    Parameters: confirm (required: must be true)
+    Returns: Cleared confirmation
+
+50. prune_cache - Remove expired cache
+    Parameters: None
+    Returns: Pruning summary
+
+COMMON WORKFLOWS:
+=================
+
+WORKFLOW 1: Initialize Workspace (DO THIS FIRST)
+-------------------------------------------------
+1. Call get_workspaces to get workspace_id
+2. Call get_spaces with workspace_id to cache all spaces
+3. Optionally call discover_hierarchy for full structure
+
+WORKFLOW 2: Time Report for Space
+----------------------------------
+User says: "Show me time report for AI space"
+1. Resolve "AI" to space_id using cached context
+2. Check if "AI" is already mapped: call list_mapped_projects
+3. If not mapped: call map_project with space_id, type="space", alias="AI"
+4. Call get_project_time_tracking with project_name="AI", group_by="assignee"
+5. Format and present results
+
+WORKFLOW 3: Team Member Report
+-------------------------------
+User says: "Show workload for John"
+1. Call list_mapped_projects to get all projects
+2. For each project, call get_project_team_workload
+3. Filter results for "John" and aggregate
+4. Present formatted summary
+
+WORKFLOW 4: Weekly Digest
+--------------------------
+User says: "Give me weekly report for Luminique"
+1. Resolve "Luminique" to entity type and ID
+2. If not mapped, map it first
+3. Call get_project_weekly_digest with project_name
+4. Present digest in readable format
+
+ANSWER FORMATTING RULES:
+=========================
+
+1. ALWAYS provide final answers in natural language
+2. Include relevant metrics and numbers from tool results
+3. Format tables nicely for readability
+4. Highlight key insights and actionable items
+5. If multiple steps are needed, explain what you're doing
+6. Never just echo tool names - always interpret results
+
+EXAMPLE GOOD RESPONSE:
+User: "Show time report for AI space"
+
 <tool_call>
-<name>get_workspaces</name>
+<name>list_mapped_projects</name>
 <arguments>{{}}</arguments>
 </tool_call>
 
-[Wait for result, extract workspace_id]
+[After getting results]
+I can see "AI" is already mapped as a space project. Let me get the time tracking report.
 
-Step 2: Get spaces
 <tool_call>
-<name>get_spaces</name>
-<arguments>{{"workspace_id": "extracted_id_here"}}</arguments>
+<name>get_project_time_tracking</name>
+<arguments>{{"project_name": "AI", "group_by": "assignee"}}</arguments>
 </tool_call>
 
-[Continue step by step...]
+[After getting results]
+Here's the time tracking report for AI space:
 
-TOP 20 MOST USEFUL TOOLS FOR REPORTS:
+**Team Member Time Summary:**
 
-1. get_workspaces - Get all workspaces (NO parameters)
-2. get_spaces - Get spaces (workspace_id required)
-3. get_folders - Get folders in space (space_id required)
-4. get_folderless_lists - Get lists not in folders (space_id required)
-5. list_mapped_projects - List all mapped projects (NO parameters)
-6. map_project - Map space/folder/list as project (id, type required)
-7. get_project_time_tracking - Time report for project (project_name, group_by)
-8. get_time_tracking_report - Time report (project OR list_id, group_by)
-9. get_project_weekly_digest - Weekly digest (project_name required)
-10. get_workload - Workload by assignee (list_id required)
-11. get_tasks - Get tasks from list (list_id required)
-12. get_project_tasks - Get tasks from project (project required)
-13. get_project_team_workload - Team workload (project_name required)
-14. get_project_health_score - Health score (project_name required)
-15. discover_hierarchy - Full workspace hierarchy (workspace_id optional)
-16. get_sync_status - Check sync status (NO parameters)
-17. refresh_project - Refresh project data (alias required)
-18. get_progress_since - Progress since date (project/list_id, since_date)
-19. get_project_daily_standup - Daily standup (project_name required)
-20. get_project_blockers - Find blockers (project_name required)
+1. John Doe:
+   - Time Tracked: 24h 30m
+   - Time Estimated: 20h 0m
+   - Tasks: 15
+   - Efficiency: 122% (over-estimated)
+
+2. Jane Smith:
+   - Time Tracked: 18h 15m
+   - Time Estimated: 25h 0m
+   - Tasks: 12
+   - Efficiency: 73% (under-estimated)
+
+**Key Insights:**
+- Total team time: 42h 45m
+- Overall efficiency: 94%
+- Recommendation: Review estimation practices
+
+ERROR HANDLING:
+===============
+
+If a tool fails:
+1. Clearly state what went wrong
+2. Suggest alternative approaches
+3. Ask user for clarification if needed
+
+Example:
+"I couldn't find a project named 'Marketing'. Here are the available mapped projects:
+- AI (space)
+- Luminique (folder)
+- linkutm (space)
+
+Did you mean one of these, or would you like me to search for it using discover_hierarchy?"
 
 REMEMBER:
-- Start with get_workspaces to get workspace_id
-- Then get_spaces to list all spaces
-- Map entities before using project-specific tools
-- Use exact IDs from tool responses
-- Never guess or invent IDs
+=========
+- Start EVERY session by getting workspace context
+- Cache entity names and IDs for quick resolution
+- Use mapped projects when available for better performance
+- Always provide complete, formatted answers
+- Be helpful and proactive in suggesting next steps
 """
 
 
 # ============================================================================
-# HELPER FUNCTIONS
+# RESULT FORMATTING
 # ============================================================================
 
 
-class ConversationLogger:
-    """Track API usage."""
+def format_tool_result(tool_name, result_data, verbose=False):
+    """Format tool results for display and LLM context"""
 
-    def __init__(self):
-        self.request_count = 0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
+    try:
+        if isinstance(result_data, str):
+            try:
+                data = json.loads(result_data)
+            except Exception:
+                data = result_data
+        else:
+            data = result_data
 
-    def log(self, response):
-        """Log token usage."""
-        self.request_count += 1
-        if hasattr(response, "usage") and response.usage:
-            usage = response.usage
-            input_tokens = getattr(usage, "prompt_tokens", 0)
-            output_tokens = getattr(usage, "completion_tokens", 0)
-            self.total_input_tokens += input_tokens
-            self.total_output_tokens += output_tokens
-            print(
-                f"[API Call #{self.request_count}] Tokens: {input_tokens} in, {output_tokens} out"
-            )
+        # Format based on tool type
+        if tool_name == "get_workspaces":
+            if isinstance(data, list):
+                formatted = "📋 WORKSPACES:\n"
+                for ws in data:
+                    formatted += f"  • {ws.get('name')} (ID: {ws.get('workspace_id', ws.get('id'))})\n"
+                return formatted, data
 
-    def summary(self):
-        """Print summary."""
-        print("\n" + "=" * 60)
-        print(f"Session Summary: {self.request_count} API calls")
-        print(f"Total Tokens: {self.total_input_tokens + self.total_output_tokens:,}")
-        print("=" * 60)
+        elif tool_name == "get_spaces":
+            if isinstance(data, list):
+                formatted = "🗂️  SPACES:\n"
+                for space in data:
+                    formatted += (
+                        f"  • {space.get('name')} (ID: {space.get('space_id')})\n"
+                    )
+                return formatted, data
+
+        elif tool_name == "get_folders":
+            if isinstance(data, list):
+                formatted = "📁 FOLDERS:\n"
+                for folder in data:
+                    list_count = folder.get("list_count", 0)
+                    formatted += f"  • {folder.get('name')} ({list_count} lists, ID: {folder.get('folder_id')})\n"
+                return formatted, data
+
+        elif tool_name in ["get_lists", "get_folderless_lists"]:
+            if isinstance(data, list):
+                formatted = "📝 LISTS:\n"
+                for lst in data:
+                    task_count = lst.get("task_count", 0)
+                    formatted += f"  • {lst.get('name')} ({task_count} tasks, ID: {lst.get('list_id')})\n"
+                return formatted, data
+
+        elif tool_name in ["get_project_time_tracking", "get_time_tracking_report"]:
+            if isinstance(data, dict) and "report" in data:
+                formatted = "⏱️  TIME TRACKING REPORT:\n\n"
+                for member, stats in data["report"].items():
+                    formatted += f"👤 {member}:\n"
+                    formatted += f"   Tracked: {stats.get('human_tracked', stats.get('human_time', 'N/A'))}\n"
+                    formatted += f"   Estimated: {stats.get('human_est', 'N/A')}\n"
+                    formatted += f"   Tasks: {stats.get('tasks', 'N/A')}\n\n"
+                return formatted, data
+
+        elif tool_name == "get_project_weekly_digest":
+            if isinstance(data, dict):
+                formatted = "📊 WEEKLY DIGEST:\n\n"
+                formatted += f"Summary: {data.get('summary', 'N/A')}\n\n"
+                if "key_metrics" in data:
+                    formatted += "Key Metrics:\n"
+                    for k, v in data["key_metrics"].items():
+                        formatted += f"  • {k}: {v}\n"
+                return formatted, data
+
+        elif tool_name == "list_mapped_projects" or tool_name == "list_projects":
+            if isinstance(data, list):
+                formatted = "🗺️  MAPPED PROJECTS:\n"
+                for proj in data:
+                    proj_name = proj.get("alias", proj.get("name", "Unknown"))
+                    proj_type = proj.get("type", proj.get("clickup_type", "N/A"))
+                    formatted += f"  • {proj_name} (Type: {proj_type})\n"
+                return formatted, data
+
+        elif tool_name == "discover_hierarchy":
+            if isinstance(data, dict) and "hierarchy" in data.get("data", data):
+                hierarchy = data.get("data", data).get("hierarchy", [])
+                formatted = "🌳 WORKSPACE HIERARCHY:\n\n"
+                for space in hierarchy:
+                    formatted += f"📦 {space.get('name')}\n"
+                    for folder in space.get("folders", []):
+                        formatted += f"  📁 {folder.get('name')}\n"
+                        for lst in folder.get("lists", []):
+                            formatted += f"    📝 {lst.get('name')}\n"
+                    for lst in space.get("folderless_lists", []):
+                        formatted += f"  📝 {lst.get('name')} (no folder)\n"
+                return formatted, data
+
+        elif tool_name == "get_project_health_score":
+            if isinstance(data, dict):
+                formatted = f"💊 HEALTH SCORE: {data.get('score', 'N/A')}/100\n"
+                formatted += f"Grade: {data.get('grade', 'N/A')}\n\n"
+                if "breakdown" in data:
+                    formatted += "Component Breakdown:\n"
+                    for k, v in data["breakdown"].items():
+                        formatted += f"  • {k}: {v}%\n"
+                if "recommendations" in data:
+                    formatted += "\nRecommendations:\n"
+                    for rec in data["recommendations"]:
+                        formatted += f"  • {rec}\n"
+                return formatted, data
+
+        # Default formatting
+        if verbose:
+            formatted = json.dumps(data, indent=2)
+        else:
+            formatted = json.dumps(data, indent=2)[:800] + "..."
+        return formatted, data
+
+    except Exception:
+        return str(data)[:500], data
 
 
 def parse_tool_calls(text):
-    """Parse XML-style tool calls from model response."""
+    """Parse XML-style tool calls from model response"""
     tool_calls = []
     pattern = r"<tool_call>\s*<name>([^<]+)</name>\s*<arguments>(.*?)</arguments>\s*</tool_call>"
     matches = re.finditer(pattern, text, re.DOTALL | re.IGNORECASE)
@@ -292,99 +628,54 @@ def parse_tool_calls(text):
             else:
                 arguments = {}
         except json.JSONDecodeError:
-            print(f"Warning: Failed to parse arguments for {tool_name}: {args_str}")
+            print(f"⚠️  Warning: Failed to parse arguments for {tool_name}: {args_str}")
             arguments = {}
 
-        tool_calls.append(
-            {"name": tool_name, "arguments": arguments, "raw": match.group(0)}
-        )
+        tool_calls.append({"name": tool_name, "arguments": arguments})
 
     return tool_calls
 
 
-def format_result_for_display(tool_name, result_data):
-    """Format tool results in readable format."""
-    try:
-        if isinstance(result_data, str):
-            try:
-                data = json.loads(result_data)
-            except Exception:
-                return result_data
-        else:
-            data = result_data
-
-        # Format based on tool type
-        if tool_name == "get_workspaces":
-            if isinstance(data, list) and len(data) > 0:
-                output = "WORKSPACES:\n"
-                for ws in data:
-                    output += f"  • {ws.get('name', 'Unknown')} (ID: {ws.get('workspace_id', ws.get('id', 'N/A'))})\n"
-                return output
-
-        elif tool_name == "get_spaces":
-            if isinstance(data, list):
-                output = "SPACES:\n"
-                for i, space in enumerate(data, 1):
-                    output += f"  {i}. {space.get('name', 'Unknown')} (ID: {space.get('space_id', 'N/A')})\n"
-                return output
-
-        elif tool_name == "get_folders":
-            if isinstance(data, list):
-                output = "FOLDERS:\n"
-                for folder in data:
-                    output += f"  • {folder.get('name', 'Unknown')} (ID: {folder.get('folder_id', 'N/A')})\n"
-                return output
-
-        elif tool_name in ["get_project_time_tracking", "get_time_tracking_report"]:
-            if isinstance(data, dict) and "report" in data:
-                output = "TIME TRACKING REPORT:\n"
-                for member, stats in data["report"].items():
-                    output += f"\n  {member}:\n"
-                    output += f"    Tracked: {stats.get('human_tracked', stats.get('time_tracked', 'N/A'))}\n"
-                    output += f"    Estimated: {stats.get('human_est', stats.get('time_estimate', 'N/A'))}\n"
-                    output += f"    Tasks: {stats.get('tasks', 'N/A')}\n"
-                return output
-
-        elif tool_name == "get_project_weekly_digest":
-            if isinstance(data, dict):
-                output = "WEEKLY DIGEST:\n"
-                output += f"  Summary: {data.get('summary', 'N/A')}\n"
-                if "key_metrics" in data:
-                    output += "\n  Key Metrics:\n"
-                    for k, v in data["key_metrics"].items():
-                        output += f"    {k}: {v}\n"
-                return output
-
-        elif tool_name == "list_mapped_projects":
-            if isinstance(data, list):
-                output = "MAPPED PROJECTS:\n"
-                for proj in data:
-                    output += f"  • {proj.get('alias', proj.get('name', 'Unknown'))} "
-                    output += (
-                        f"(Type: {proj.get('type', proj.get('clickup_type', 'N/A'))})\n"
-                    )
-                return output
-
-        # Default JSON formatting
-        return json.dumps(data, indent=2)[:1000]
-
-    except Exception:
-        return str(data)[:500]
+# ============================================================================
+# SESSION TRACKER
+# ============================================================================
 
 
-def display_workflow_menu():
-    """Display available workflows to user"""
-    print("\n" + "=" * 70)
-    print("AVAILABLE REPORT WORKFLOWS:")
-    print("=" * 70)
-    for key, workflow in REPORT_WORKFLOWS.items():
-        print(f"\n  Command: '{key}'")
-        print(f"  Name: {workflow['name']}")
-        print(f"  Description: {workflow['description']}")
-        print(f"  Steps: {len(workflow['steps'])}")
-    print("\n" + "=" * 70)
-    print("\nType a workflow command or ask a question. Type 'menu' to see this again.")
-    print("Type 'quit' to exit.\n")
+class SessionTracker:
+    """Track API usage and metrics"""
+
+    def __init__(self):
+        self.request_count = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.tool_calls_made = 0
+
+    def log_api_call(self, response):
+        """Log API call"""
+        self.request_count += 1
+        if hasattr(response, "usage") and response.usage:
+            usage = response.usage
+            input_tokens = getattr(usage, "prompt_tokens", 0)
+            output_tokens = getattr(usage, "completion_tokens", 0)
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+
+    def log_tool_call(self):
+        """Log tool call"""
+        self.tool_calls_made += 1
+
+    def summary(self):
+        """Print summary"""
+        print("\n" + "=" * 70)
+        print("SESSION SUMMARY")
+        print("=" * 70)
+        print(f"API Calls: {self.request_count}")
+        print(f"Tool Calls: {self.tool_calls_made}")
+        print(
+            f"Total Tokens: {self.total_input_tokens + self.total_output_tokens:,} "
+            f"({self.total_input_tokens:,} in, {self.total_output_tokens:,} out)"
+        )
+        print("=" * 70)
 
 
 # ============================================================================
@@ -392,30 +683,95 @@ def display_workflow_menu():
 # ============================================================================
 
 
+async def initialize_workspace(session, workspace_context):
+    """Initialize workspace context automatically"""
+    try:
+        print("\n🔄 Initializing workspace context...")
+
+        # Get workspaces
+        workspaces_result = await session.call_tool("get_workspaces", {})
+        workspaces_data = json.loads(workspaces_result.content[0].text)
+
+        if not workspaces_data:
+            print("❌ No workspaces found")
+            return False
+
+        # Use first workspace
+        workspace = workspaces_data[0]
+        workspace_id = workspace.get("workspace_id", workspace.get("id"))
+        workspace_name = workspace.get("name")
+
+        workspace_context.set_workspace(workspace_id, workspace_name)
+
+        # Load spaces
+        spaces_result = await session.call_tool(
+            "get_spaces", {"workspace_id": workspace_id}
+        )
+        spaces_data = json.loads(spaces_result.content[0].text)
+
+        for space in spaces_data:
+            workspace_context.add_space(space["name"], space["space_id"])
+
+        print(f"✓ Loaded {len(spaces_data)} spaces")
+
+        # Load mapped projects
+        try:
+            projects_result = await session.call_tool("list_mapped_projects", {})
+            projects_data = json.loads(projects_result.content[0].text)
+
+            for proj in projects_data:
+                proj_name = proj.get("alias", proj.get("name"))
+                proj_type = proj.get("type", proj.get("clickup_type"))
+                proj_id = proj.get("clickup_id", proj.get("id"))
+                workspace_context.add_mapped_project(proj_name, proj_type, proj_id)
+
+            print(f"✓ Loaded {len(projects_data)} mapped projects")
+        except Exception:
+            pass  # Mapped projects might not exist yet
+
+        workspace_context.hierarchy_loaded = True
+        print("✅ Workspace context initialized!\n")
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to initialize workspace: {e}")
+        return False
+
+
 async def run_mcp_client():
-    """Main client function with structured workflows"""
+    """Main client with comprehensive tool support"""
 
     async with sse_client(MCP_SERVER_URL) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            # List available tools
+            # List tools
             tools_result = await session.list_tools()
             tools = tools_result.tools
 
             print("\n" + "=" * 70)
-            print("ClickUp MCP Client - STRUCTURED REPORT GENERATION")
+            print("ClickUp MCP Client - PRODUCTION VERSION")
             print("=" * 70)
-            print(f"Connected to MCP server: {len(tools)} tools available")
-            print(f"LM Studio model: {LM_STUDIO_MODEL}")
+            print(f"✓ Connected to MCP server: {len(tools)} tools available")
+            print(f"✓ LM Studio model: {LM_STUDIO_MODEL}")
+            print("=" * 70)
 
-            # Display workflow menu
-            display_workflow_menu()
+            # Initialize workspace context
+            workspace_context = WorkspaceContext()
+            tracker = SessionTracker()
+
+            # Auto-initialize workspace
+            await initialize_workspace(session, workspace_context)
 
             # Create system prompt
-            system_prompt = create_structured_system_prompt(tools)
+            system_prompt = create_comprehensive_system_prompt(workspace_context)
             conversation_history = [{"role": "system", "content": system_prompt}]
-            logger = ConversationLogger()
+
+            print("\n💡 Ready! Ask me anything about your ClickUp data.")
+            print(
+                "   Examples: 'Show time report for AI space', 'Team workload for Luminique', 'Weekly digest'\n"
+            )
+            print("Type 'quit' to exit, 'context' to see workspace state\n")
 
             # Interactive loop
             while True:
@@ -426,19 +782,23 @@ async def run_mcp_client():
                         continue
 
                     if user_input.lower() in ["quit", "exit", "q"]:
-                        logger.summary()
-                        print("\nGoodbye!\n")
+                        tracker.summary()
+                        print("\n👋 Goodbye!\n")
                         break
 
-                    if user_input.lower() == "menu":
-                        display_workflow_menu()
+                    if user_input.lower() == "context":
+                        summary = workspace_context.get_summary()
+                        print("\n📊 WORKSPACE CONTEXT:")
+                        for key, value in summary.items():
+                            print(f"   {key}: {value}")
+                        print()
                         continue
 
                     # Add user message
                     conversation_history.append({"role": "user", "content": user_input})
 
-                    # Multi-turn loop
-                    max_iterations = 15  # Increased for complex workflows
+                    # Multi-turn agentic loop
+                    max_iterations = 20
                     iteration = 0
 
                     while iteration < max_iterations:
@@ -448,12 +808,12 @@ async def run_mcp_client():
                         response = client.chat.completions.create(
                             model=LM_STUDIO_MODEL,
                             messages=conversation_history,
-                            temperature=0.1,  # Very low for deterministic responses
-                            max_tokens=2000,
+                            temperature=0.2,
+                            max_tokens=2048,
                         )
 
                         if iteration == 1:
-                            logger.log(response)
+                            tracker.log_api_call(response)
 
                         message = response.choices[0].message
                         assistant_response = message.content or ""
@@ -462,28 +822,29 @@ async def run_mcp_client():
                         tool_calls = parse_tool_calls(assistant_response)
 
                         if not tool_calls:
-                            # No tool calls - final answer
-                            print(f"\nAssistant: {assistant_response}\n")
+                            # Final answer - display it
+                            print(f"\n🤖 Assistant:\n{assistant_response}\n")
                             conversation_history.append(
                                 {"role": "assistant", "content": assistant_response}
                             )
                             break
 
                         # Execute tool calls
-                        print(
-                            f"\n[Step {iteration}: Detected {len(tool_calls)} tool call(s)]"
-                        )
+                        if iteration == 1:
+                            print(f"\n🔧 Processing {len(tool_calls)} tool call(s)...")
 
                         tool_results = []
                         for tc in tool_calls:
                             tool_name = tc["name"]
                             tool_args = tc["arguments"]
 
-                            print(f"  → {tool_name}({json.dumps(tool_args)})")
+                            tracker.log_tool_call()
+                            print(f"   → {tool_name}(...)")
 
                             try:
                                 result = await session.call_tool(tool_name, tool_args)
 
+                                # Extract result
                                 if (
                                     isinstance(result.content, list)
                                     and len(result.content) > 0
@@ -491,88 +852,99 @@ async def run_mcp_client():
                                     if hasattr(result.content[0], "text"):
                                         raw_result = result.content[0].text
                                     else:
-                                        raw_result = json.dumps(
-                                            result.content, indent=2
-                                        )
+                                        raw_result = json.dumps(result.content)
                                 else:
                                     raw_result = str(result.content)
 
-                                display_result = format_result_for_display(
+                                # Format for display and LLM
+                                display_text, parsed_data = format_tool_result(
                                     tool_name, raw_result
                                 )
-                                print("    ✓ Success\n")
 
                                 tool_results.append(
                                     {
                                         "tool": tool_name,
                                         "result": raw_result,
-                                        "display": display_result,
+                                        "display": display_text,
+                                        "parsed": parsed_data,
                                         "success": True,
                                     }
                                 )
 
+                                # Update context if needed
+                                if tool_name == "map_project" and isinstance(
+                                    parsed_data, dict
+                                ):
+                                    alias = parsed_data.get("alias")
+                                    entity_type = parsed_data.get("clickup_type")
+                                    entity_id = parsed_data.get("clickup_id")
+                                    if alias and entity_type and entity_id:
+                                        workspace_context.add_mapped_project(
+                                            alias, entity_type, entity_id
+                                        )
+
                             except Exception as e:
                                 error_msg = f"Error: {str(e)}"
-                                print(f"    ✗ {error_msg}\n")
+                                print(f"      ✗ {error_msg}")
                                 tool_results.append(
                                     {
                                         "tool": tool_name,
                                         "result": error_msg,
                                         "display": error_msg,
+                                        "parsed": None,
                                         "success": False,
                                     }
                                 )
 
-                        # Display results
-                        print("\n" + "=" * 60)
-                        for tr in tool_results:
-                            print(tr["display"])
-                        print("=" * 60 + "\n")
-
-                        # Add to conversation history
+                        # Add assistant response to history
                         conversation_history.append(
                             {"role": "assistant", "content": assistant_response}
                         )
 
-                        # Format results for model
-                        results_message = "TOOL EXECUTION RESULTS:\n\n"
+                        # Build results message for LLM
+                        results_message = "TOOL RESULTS:\n\n"
                         for tr in tool_results:
                             status = "✓ SUCCESS" if tr["success"] else "✗ FAILED"
-                            results_message += f"Tool: {tr['tool']} ({status})\n"
-                            results_message += f"Result: {tr['result']}\n\n"
+                            results_message += (
+                                f"{tr['tool']} ({status}):\n{tr['result']}\n\n"
+                            )
 
-                        # Check if workflow is complete
+                        # Check if all succeeded
                         all_success = all(tr["success"] for tr in tool_results)
 
                         if all_success:
-                            results_message += "\nAll tools executed successfully. Continue to next step or provide final summary if workflow complete."
+                            results_message += "\nAll tools executed successfully. Now provide the final formatted answer to the user based on these results. Do NOT just list the data - interpret it and present insights in a clear, readable format."
                         else:
-                            results_message += "\nERROR: Some tools failed. Stop workflow and report error to user."
+                            results_message += (
+                                "\nSome tools failed. Report the error to the user."
+                            )
 
                         conversation_history.append(
                             {"role": "user", "content": results_message}
                         )
 
-                        print()  # Blank line
-
                     if iteration >= max_iterations:
                         print(
-                            "[Warning: Max iterations reached - workflow may be incomplete]\n"
+                            "\n⚠️  Max iterations reached - response may be incomplete\n"
                         )
 
                 except KeyboardInterrupt:
-                    logger.summary()
-                    print("\n\nGoodbye!\n")
+                    tracker.summary()
+                    print("\n\n👋 Goodbye!\n")
                     break
                 except Exception as e:
-                    print(f"\nError: {str(e)}\n")
+                    print(f"\n❌ Error: {str(e)}\n")
                     import traceback
 
                     traceback.print_exc()
 
 
 if __name__ == "__main__":
-    print("\nStarting Structured ClickUp Report Generator...")
-    print("Ensure LM Studio is running with gemma-3-4b loaded!")
-    print("Ensure MCP server is running on port 8001\n")
-    asyncio.run(run_mcp_client())
+    print("\n🚀 Starting ClickUp MCP Client...")
+    print("📋 Ensure LM Studio is running with gemma-3-4b loaded")
+    print("📋 Ensure MCP server is running on port 8001\n")
+
+    try:
+        asyncio.run(run_mcp_client())
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye!\n")
