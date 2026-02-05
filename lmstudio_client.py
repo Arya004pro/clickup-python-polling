@@ -44,32 +44,79 @@ client = OpenAI(
 
 
 class WorkspaceContext:
-    """Maintains workspace state"""
+    """Maintains workspace state and provides intelligent entity resolution"""
 
     def __init__(self):
         self.workspace_id = None
         self.workspace_name = None
-        self.spaces = {}  # {space_name_lower: {id, name, status_count}}
-        self.hierarchy_cache = None
+        self.spaces = {}  # {space_name: space_id}
+        self.folders = {}  # {folder_name: (folder_id, space_id)}
+        self.lists = {}  # {list_name: (list_id, parent_type, parent_id)}
+        self.mapped_projects = {}  # {project_name: {type, id}}
+        self.hierarchy_loaded = False
 
     def set_workspace(self, workspace_id, workspace_name):
+        """Set current workspace"""
         self.workspace_id = workspace_id
         self.workspace_name = workspace_name
+        print(f"✓ Workspace set: {workspace_name} (ID: {workspace_id})")
 
-    def add_space(self, space_data):
-        """Add space to cache"""
-        name_lower = space_data.get("name", "").lower()
-        self.spaces[name_lower] = {
-            "id": space_data.get("space_id"),
-            "name": space_data.get("name"),
-            "status_count": space_data.get("status_count", 0),
+    def add_space(self, space_name, space_id):
+        """Add space to context"""
+        self.spaces[space_name.lower()] = space_id
+
+    def add_folder(self, folder_name, folder_id, space_id):
+        """Add folder to context"""
+        self.folders[folder_name.lower()] = (folder_id, space_id)
+
+    def add_list(self, list_name, list_id, parent_type, parent_id):
+        """Add list to context"""
+        self.lists[list_name.lower()] = (list_id, parent_type, parent_id)
+
+    def add_mapped_project(self, project_name, entity_type, entity_id):
+        """Add mapped project to context"""
+        self.mapped_projects[project_name.lower()] = {
+            "type": entity_type,
+            "id": entity_id,
         }
 
-    def get_space_id(self, space_name):
-        """Get space ID from name"""
-        name_lower = space_name.lower().strip()
-        space = self.spaces.get(name_lower)
-        return space["id"] if space else None
+    def resolve_entity(self, name):
+        """
+        Intelligently resolve entity name to ID and type
+        Returns: (entity_type, entity_id) or (None, None)
+        """
+        name_lower = name.lower().strip()
+
+        # Check mapped projects first (highest priority)
+        if name_lower in self.mapped_projects:
+            proj = self.mapped_projects[name_lower]
+            return (proj["type"], proj["id"])
+
+        # Check spaces
+        if name_lower in self.spaces:
+            return ("space", self.spaces[name_lower])
+
+        # Check folders
+        if name_lower in self.folders:
+            folder_id, _ = self.folders[name_lower]
+            return ("folder", folder_id)
+
+        # Check lists
+        if name_lower in self.lists:
+            list_id, _, _ = self.lists[name_lower]
+            return ("list", list_id)
+
+        return (None, None)
+
+    def get_summary(self):
+        """Get context summary"""
+        return {
+            "workspace": self.workspace_name,
+            "spaces_count": len(self.spaces),
+            "folders_count": len(self.folders),
+            "lists_count": len(self.lists),
+            "mapped_projects_count": len(self.mapped_projects),
+        }
 
 
 # ============================================================================
