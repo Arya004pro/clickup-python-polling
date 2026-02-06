@@ -31,9 +31,12 @@ client = OpenAI(base_url=LM_STUDIO_BASE_URL, api_key="lm-studio")
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.disabled = True
+
+# Suppress httpx logging
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
 
 # ============================================================================
@@ -259,21 +262,72 @@ class SessionTracker:
     def __init__(self):
         self.api_calls = 0
         self.tool_calls = 0
+        self.successful_tools = []
         self.failed_tools = []
+        
+        # Token tracking
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_tokens = 0
 
-    def log_api(self, response):
+    def log_api(self, response, iteration=None):
+        """Log API call with token usage details"""
         self.api_calls += 1
+        
+        # Extract token usage from response
+        if hasattr(response, 'usage') and response.usage:
+            input_tokens = getattr(response.usage, 'prompt_tokens', 0)
+            output_tokens = getattr(response.usage, 'completion_tokens', 0)
+            total_tokens = getattr(response.usage, 'total_tokens', 0)
+            
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_tokens += total_tokens
 
-    def log_tool(self, name, success):
+    def log_tool(self, name, args, success, result_summary=""):
+        """Log tool call"""
         self.tool_calls += 1
-        if not success:
+        
+        if success:
+            self.successful_tools.append(name)
+        else:
             self.failed_tools.append(name)
 
+    def get_stats(self):
+        """Get current statistics as a dictionary"""
+        return {
+            'api_calls': self.api_calls,
+            'tool_calls': self.tool_calls,
+            'successful_tools': len(self.successful_tools),
+            'failed_tools': len(self.failed_tools),
+            'total_input_tokens': self.total_input_tokens,
+            'total_output_tokens': self.total_output_tokens,
+            'total_tokens': self.total_tokens
+        }
+
     def summary(self):
-        print("\n" + "=" * 70)
+        """Print clean summary table"""
+        # Count unique tools
+        tool_counts = {}
+        for tool in self.successful_tools:
+            tool_counts[tool] = tool_counts.get(tool, 0) + 1
+        
+        print("\n" + "=" * 60)
         print("SESSION SUMMARY")
-        print(f"API Calls: {self.api_calls} | Tool Calls: {self.tool_calls}")
-        print("=" * 70)
+        print("=" * 60)
+        print(f"{'Metric':<25} {'Count':<15} {'Details'}")
+        print("-" * 60)
+        print(f"{'API Calls':<25} {self.api_calls:<15}")
+        print(f"{'Tool Calls':<25} {self.tool_calls:<15} {len(self.successful_tools)} success, {len(self.failed_tools)} failed")
+        print(f"{'Input Tokens':<25} {self.total_input_tokens:<15,}")
+        print(f"{'Output Tokens':<25} {self.total_output_tokens:<15,}")
+        print(f"{'Total Tokens':<25} {self.total_tokens:<15,}")
+        
+        if self.successful_tools:
+            tools_used = ', '.join([f"{tool}({count})" for tool, count in sorted(tool_counts.items())])
+            print(f"{'Tools Used':<25} {len(tool_counts):<15} {tools_used}")
+        
+        print("=" * 60 + "\n")
 
 
 # ============================================================================
@@ -363,7 +417,7 @@ async def run_client():
             conversation_history = [{"role": "system", "content": system_prompt}]
 
             print("\n💡 Ready! Ask me anything about your ClickUp data.")
-            print("Type 'quit' to exit, 'refresh' to reload data\n")
+            print("Commands: 'quit' to exit | 'refresh' to reload | 'stats' for token usage\n")
 
             while True:
                 try:
@@ -383,6 +437,19 @@ async def run_client():
                         conversation_history = [
                             {"role": "system", "content": system_prompt}
                         ]
+                        continue
+                    
+                    if user_input.lower() == "stats":
+                        stats = tracker.get_stats()
+                        print("\n" + "=" * 60)
+                        print(f"{'Metric':<25} {'Count'}")
+                        print("-" * 60)
+                        print(f"{'API Calls':<25} {stats['api_calls']}")
+                        print(f"{'Tool Calls':<25} {stats['tool_calls']} ({stats['successful_tools']} success, {stats['failed_tools']} failed)")
+                        print(f"{'Input Tokens':<25} {stats['total_input_tokens']:,}")
+                        print(f"{'Output Tokens':<25} {stats['total_output_tokens']:,}")
+                        print(f"{'Total Tokens':<25} {stats['total_tokens']:,}")
+                        print("=" * 60 + "\n")
                         continue
 
                     system_prompt = create_system_prompt(memory, tools_schema_text)
@@ -408,8 +475,8 @@ async def run_client():
                             max_tokens=10000,
                         )
 
-                        if iteration == 1:
-                            tracker.log_api(response)
+                        # Log API call with token usage
+                        tracker.log_api(response, iteration=iteration)
 
                         assistant_response = response.choices[0].message.content or ""
                         tool_calls = parse_tool_calls(assistant_response)
@@ -487,6 +554,10 @@ async def run_client():
                                     {"tool": name, "result": parsed, "success": True}
                                 )
                                 print("      ✓ Success")
+                                
+                                # Log successful tool call
+                                result_summary = str(parsed)[:200] if parsed else ""
+                                tracker.log_tool(name, args, success=True, result_summary=result_summary)
 
                             except Exception as e:
                                 print(f"      ✗ Error: {e}")
@@ -497,6 +568,9 @@ async def run_client():
                                         "success": False,
                                     }
                                 )
+                                
+                                # Log failed tool call
+                                tracker.log_tool(name, args, success=False, result_summary=str(e))
 
                         conversation_history.append(
                             {"role": "assistant", "content": assistant_response}
