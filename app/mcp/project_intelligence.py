@@ -92,7 +92,7 @@ def _api(method, endpoint, params=None):
 
 
 def _get_ids(p_name):
-    # 1. Try to find in tracked projects
+    # 1. Try to find in tracked projects (in-memory)
     p = next((x for x in TRACKED_PROJECTS if x["name"] == p_name), None)
 
     # 2. If tracked, use that structure
@@ -108,7 +108,42 @@ def _get_ids(p_name):
                 ids.extend([lst["id"] for lst in f.get("lists", [])])
         return ids
 
-    # 3. If not tracked, try to resolve name to a List ID dynamically
+    # 3. Check project_map.json mapped projects
+    try:
+        from .sync_mapping import db
+
+        for alias, data in db.projects.items():
+            alias_name = data.get("alias", alias)
+            if alias.lower() == p_name.lower() or alias_name.lower() == p_name.lower():
+                mapped_id = data["clickup_id"]
+                mapped_type = data["clickup_type"]
+
+                if mapped_type == "list":
+                    return [mapped_id]
+                elif mapped_type == "folder":
+                    resp, _ = _api("GET", f"/folder/{mapped_id}/list")
+                    ids = [lst["id"] for lst in (resp or {}).get("lists", [])]
+                    if not ids:
+                        # Fallback: use cached structure
+                        structure = data.get("structure", {})
+                        ids = [
+                            c["id"]
+                            for c in structure.get("children", [])
+                            if c.get("type") == "list"
+                        ]
+                    return ids
+                elif mapped_type == "space":
+                    ids = []
+                    resp, _ = _api("GET", f"/space/{mapped_id}/list")
+                    ids = [lst["id"] for lst in (resp or {}).get("lists", [])]
+                    f_data, _ = _api("GET", f"/space/{mapped_id}/folder")
+                    for f in (f_data or {}).get("folders", []):
+                        ids.extend([lst["id"] for lst in f.get("lists", [])])
+                    return ids
+    except ImportError:
+        pass
+
+    # 4. If not tracked or mapped, try to resolve name to a List ID dynamically
     found_id, _ = _resolve_name_to_list_id(p_name)
     if found_id:
         return [found_id]

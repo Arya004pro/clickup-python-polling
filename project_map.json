@@ -1,32 +1,8 @@
 {
-  "mapped_projects": {
-    "3D Team": {
-      "alias": "3D Team",
-      "clickup_id": "90165683323",
-      "clickup_type": "space",
-      "last_sync": 1770366221.4953177,
-      "structure": {
-        "id": "90165683323",
-        "type": "space",
-        "children": [
-          {
-            "id": "901613173367",
-            "name": "3D Jewellery Website",
-            "type": "list"
-          },
-          {
-            "id": "901612236598",
-            "name": "3D Configurator",
-            "type": "list"
-          }
-        ],
-        "name": "3D Team"
-      }
-    }
-  },
+  "mapped_projects": {},
   "discovery_cache": {
     "hierarchy_3301011_False": {
-      "timestamp": 1770367626.825483,
+      "timestamp": 1770379458.4424295,
       "data": {
         "workspace_id": "3301011",
         "hierarchy": [
@@ -1284,6 +1260,11 @@
                   {
                     "id": "901613240934",
                     "name": "Week 1",
+                    "type": "list"
+                  },
+                  {
+                    "id": "901613405991",
+                    "name": "Week 2",
                     "type": "list"
                   }
                 ]
