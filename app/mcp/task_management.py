@@ -153,7 +153,9 @@ def _fetch_missing_parents(all_tasks: List[Dict]) -> List[Dict]:
     extended_tasks = all_tasks.copy()
 
     for pid in missing_parents:
-        data, err = _api_call("get", f"/task/{pid}")
+        data, err = _api_call(
+            "get", f"/task/{pid}", params={"include_subtasks": "true"}
+        )
         if data and not err:
             if data["id"] not in existing_ids:
                 existing_ids.add(data["id"])
@@ -162,7 +164,11 @@ def _fetch_missing_parents(all_tasks: List[Dict]) -> List[Dict]:
                 # Fetch grandparent if needed (1 level up)
                 grandparent = data.get("parent")
                 if grandparent and grandparent not in existing_ids:
-                    gp_data, gp_err = _api_call("get", f"/task/{grandparent}")
+                    gp_data, gp_err = _api_call(
+                        "get",
+                        f"/task/{grandparent}",
+                        params={"include_subtasks": "true"},
+                    )
                     if gp_data and not gp_err and gp_data["id"] not in existing_ids:
                         existing_ids.add(gp_data["id"])
                         extended_tasks.append(gp_data)
@@ -318,7 +324,10 @@ def register_task_tools(mcp: FastMCP):
             filter_no_time_entries: If True, only return tasks with zero tracked time (time_spent = 0 or None).
         """
         try:
-            params = [("include_closed", str(include_closed).lower())]
+            params = [
+                ("include_closed", str(include_closed).lower()),
+                ("subtasks", "true"),  # Include nested subtasks for proper time rollups
+            ]
             if statuses:
                 params.extend([("statuses[]", s) for s in statuses])
             if assignees:
@@ -396,7 +405,9 @@ def register_task_tools(mcp: FastMCP):
         """
         try:
             # 1. Fetch the requested task
-            task_data, err = _api_call("get", f"/task/{task_id}")
+            task_data, err = _api_call(
+                "get", f"/task/{task_id}", params={"include_subtasks": "true"}
+            )
             if err or not task_data:
                 return {"error": f"Task {task_id} not found"}
 

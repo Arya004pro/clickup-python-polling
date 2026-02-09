@@ -176,7 +176,7 @@ def _fetch_deep(list_ids):
     for pid in {
         t["parent"] for t in tasks if t.get("parent") and t["parent"] not in exist
     }:
-        t, _ = _api("GET", f"/task/{pid}")
+        t, _ = _api("GET", f"/task/{pid}", {"include_subtasks": "true"})
         if t and t["id"] not in exist:
             tasks.append(t)
             exist.add(t["id"])

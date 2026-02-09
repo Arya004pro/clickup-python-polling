@@ -437,3 +437,32 @@ def register_sync_mapping_tools(mcp: FastMCP):
         """Remove expired cache entries."""
         count = db.prune_expired_cache()
         return {"success": True, "removed_entries": count, "message": "Cache pruned."}
+
+    @mcp.tool()
+    def get_environment_context() -> dict:
+        """
+        Bootstrap tool: returns MCP environment state including
+        mapped projects, cache status, and usage guidance.
+        Call this at session start.
+        """
+        projects = [
+            {
+                "alias": alias,
+                "clickup_id": data.get("clickup_id"),
+                "type": data.get("clickup_type"),
+                "last_sync": data.get("last_sync"),
+            }
+            for alias, data in db.projects.items()
+        ]
+
+        return {
+            "mapped_projects_count": len(projects),
+            "mapped_projects": projects,
+            "cached_items": len(db.cache),
+            "storage": DATA_FILE,
+            "server_status": "ready",
+            "usage_guidance": {
+                "mapped_projects": "Use mapped project tools for analytics/reporting.",
+                "raw_clickup": "Use raw fetch tools only for discovery or unmapped entities.",
+            },
+        }
