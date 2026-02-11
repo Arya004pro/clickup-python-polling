@@ -75,6 +75,14 @@ def get_status_category(status_name: str, status_type: str = None) -> str:
     return "other"
 
 
+def _extract_status_name(task: dict) -> str:
+    """Safely extracts status name handling both dict and string formats."""
+    status = task.get("status")
+    if isinstance(status, dict):
+        return status.get("status", "Unknown")
+    return str(status) if status else "Unknown"
+
+
 # --- Helpers ---
 
 
@@ -558,7 +566,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
         blocked = [
             t
             for t in active
-            if "block" in t["status"]["status"].lower()
+            if "block" in _extract_status_name(t).lower()
             or (t.get("priority") or {}).get("orderindex") == "1"
         ]
         due_today = [
@@ -571,7 +579,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
             return [
                 {
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignees": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl
@@ -643,8 +651,8 @@ def register_project_intelligence_tools(mcp: FastMCP):
             )
             == "active"
         ]
-        blocked = [t for t in active if "block" in t["status"]["status"].lower()]
-        waiting = [t for t in active if "wait" in t["status"]["status"].lower()]
+        blocked = [t for t in active if "block" in _extract_status_name(t).lower()]
+        waiting = [t for t in active if "wait" in _extract_status_name(t).lower()]
         stale = [
             t
             for t in active
@@ -656,7 +664,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
                 {
                     "id": t["id"],
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignee": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl
