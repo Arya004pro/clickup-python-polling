@@ -5,7 +5,7 @@ Handles API response polymorphism and status inheritance.
 """
 
 import requests
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
@@ -67,6 +67,198 @@ def get_current_week_dates() -> tuple[str, str]:
     monday = today - timedelta(days=today.weekday())
     sunday = monday + timedelta(days=6)
     return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
+
+
+def get_previous_week_dates() -> Tuple[str, str]:
+    """
+    Get previous week's Monday and Sunday dates.
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Example:
+        get_previous_week_dates() -> ("2024-01-08", "2024-01-14")
+    """
+    today = datetime.now()
+    last_monday = today - timedelta(days=today.weekday() + 7)
+    last_sunday = last_monday + timedelta(days=6)
+    return last_monday.strftime("%Y-%m-%d"), last_sunday.strftime("%Y-%m-%d")
+
+
+def get_week_dates_from_offset(weeks_ago: int = 0) -> Tuple[str, str]:
+    """
+    Get week dates by offset from current week.
+
+    Args:
+        weeks_ago: Number of weeks before current week (0 = current, 1 = last week, etc.)
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Examples:
+        get_week_dates_from_offset(0) -> Current week ("2024-01-15", "2024-01-21")
+        get_week_dates_from_offset(1) -> Last week ("2024-01-08", "2024-01-14")
+        get_week_dates_from_offset(2) -> 2 weeks ago ("2024-01-01", "2024-01-07")
+    """
+    today = datetime.now()
+    target_week_monday = today - timedelta(days=today.weekday() + (weeks_ago * 7))
+    target_week_sunday = target_week_monday + timedelta(days=6)
+    return (
+        target_week_monday.strftime("%Y-%m-%d"),
+        target_week_sunday.strftime("%Y-%m-%d"),
+    )
+
+
+def get_week_dates_from_date(date_str: str) -> Tuple[str, str]:
+    """
+    Get Monday-Sunday for the week containing the given date.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Example:
+        get_week_dates_from_date("2026-01-15") -> ("2026-01-12", "2026-01-18")
+    """
+    target_date = datetime.strptime(date_str, "%Y-%m-%d")
+    monday = target_date - timedelta(days=target_date.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
+
+
+def get_week_dates_from_week_number(year: int, week_number: int) -> Tuple[str, str]:
+    """
+    Get Monday-Sunday for a specific ISO week number.
+
+    Args:
+        year: Year (e.g., 2026)
+        week_number: ISO week number (1-53)
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Example:
+        get_week_dates_from_week_number(2026, 3) -> ("2026-01-12", "2026-01-18")
+
+    Note:
+        ISO week 1 is the week with the first Thursday of the year.
+    """
+    # ISO week 1 is the week with the first Thursday of the year
+    jan_4 = datetime(year, 1, 4)
+    week_1_monday = jan_4 - timedelta(days=jan_4.weekday())
+    target_monday = week_1_monday + timedelta(weeks=week_number - 1)
+    target_sunday = target_monday + timedelta(days=6)
+    return target_monday.strftime("%Y-%m-%d"), target_sunday.strftime("%Y-%m-%d")
+
+
+def parse_week_input(week_input: str) -> Tuple[str, str]:
+    """
+    Smart parser for various week input formats.
+
+    Supported formats:
+    - "current", "this" → Current week
+    - "previous", "last" → Previous week
+    - "N-weeks-ago" → N weeks before current (e.g., "2-weeks-ago")
+    - "YYYY-MM-DD" → Week containing that date
+    - "YYYY-WNN" → ISO week number (e.g., "2026-W03")
+
+    Args:
+        week_input: Week specification string
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Raises:
+        ValueError: If format is not recognized
+
+    Examples:
+        parse_week_input("current") -> ("2026-02-10", "2026-02-16")
+        parse_week_input("previous") -> ("2026-02-03", "2026-02-09")
+        parse_week_input("2-weeks-ago") -> ("2026-01-27", "2026-02-02")
+        parse_week_input("2026-01-15") -> ("2026-01-12", "2026-01-18")
+        parse_week_input("2026-W03") -> ("2026-01-12", "2026-01-18")
+    """
+    week_input = week_input.lower().strip()
+
+    # Current week
+    if week_input in ["current", "this", "this week"]:
+        return get_current_week_dates()
+
+    # Previous week
+    if week_input in ["previous", "last", "last week", "previous week"]:
+        return get_previous_week_dates()
+
+    # N weeks ago format: "2-weeks-ago", "3-weeks-ago"
+    if week_input.endswith("-weeks-ago") or week_input.endswith("-week-ago"):
+        try:
+            weeks_ago = int(week_input.split("-")[0])
+            return get_week_dates_from_offset(weeks_ago)
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid weeks-ago format: {week_input}")
+
+    # ISO week format: "2026-W03", "2026-w03"
+    if "-w" in week_input or "-W" in week_input:
+        try:
+            year_str, week_str = week_input.upper().split("-W")
+            year = int(year_str)
+            week_num = int(week_str)
+            return get_week_dates_from_week_number(year, week_num)
+        except (ValueError, IndexError):
+            raise ValueError(
+                f"Invalid ISO week format: {week_input}. Expected: YYYY-WNN"
+            )
+
+    # Specific date format: "2026-01-15"
+    if len(week_input) == 10 and week_input.count("-") == 2:
+        try:
+            datetime.strptime(week_input, "%Y-%m-%d")
+            return get_week_dates_from_date(week_input)
+        except ValueError:
+            raise ValueError(f"Invalid date format: {week_input}. Expected: YYYY-MM-DD")
+
+    raise ValueError(
+        f"Unrecognized week format: {week_input}. "
+        f"Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'"
+    )
+
+
+def validate_week_dates(week_start: str, week_end: str) -> bool:
+    """
+    Validate that week_start is Monday and week_end is Sunday, exactly 6 days apart.
+
+    Args:
+        week_start: Start date in YYYY-MM-DD format
+        week_end: End date in YYYY-MM-DD format
+
+    Returns:
+        True if valid
+
+    Raises:
+        ValueError: If validation fails
+
+    Example:
+        validate_week_dates("2026-01-12", "2026-01-18") -> True
+        validate_week_dates("2026-01-13", "2026-01-19") -> ValueError (not Monday-Sunday)
+    """
+    start_date = datetime.strptime(week_start, "%Y-%m-%d")
+    end_date = datetime.strptime(week_end, "%Y-%m-%d")
+
+    if start_date.weekday() != 0:  # Monday = 0
+        raise ValueError(
+            f"week_start must be a Monday, got {start_date.strftime('%A')}"
+        )
+
+    if end_date.weekday() != 6:  # Sunday = 6
+        raise ValueError(f"week_end must be a Sunday, got {end_date.strftime('%A')}")
+
+    if (end_date - start_date).days != 6:
+        raise ValueError(
+            f"week_end must be 6 days after week_start, got {(end_date - start_date).days} days"
+        )
+
+    return True
 
 
 def filter_time_entries_by_date_range(

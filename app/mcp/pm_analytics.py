@@ -13,6 +13,13 @@ import requests
 import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
+from app.mcp.status_helpers import (
+    get_current_week_dates,
+    date_range_to_timestamps,
+    filter_time_entries_by_date_range,
+    parse_week_input,  # ← ADD THIS
+    validate_week_dates,  # ← ADD THIS (optional, for validation)
+)
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
 try:
@@ -105,94 +112,6 @@ def date_to_timestamp_ms(date_str: str) -> int:
     """
     dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
-
-
-def date_range_to_timestamps(start_date: str, end_date: str) -> tuple[int, int]:
-    """
-    Convert date range to timestamp range in milliseconds.
-    Start time is 00:00:00, end time is 23:59:59.999 of the end date.
-
-    Args:
-        start_date: Start date in YYYY-MM-DD format
-        end_date: End date in YYYY-MM-DD format
-
-    Returns:
-        Tuple of (start_timestamp_ms, end_timestamp_ms)
-
-    Example:
-        date_range_to_timestamps("2024-01-15", "2024-01-21")
-        -> (1705276800000, 1705881599999)
-    """
-    start_ms = date_to_timestamp_ms(start_date)
-    # Add 1 day minus 1 millisecond to include the entire end date
-    end_ms = date_to_timestamp_ms(end_date) + (86400000 - 1)
-    return start_ms, end_ms
-
-
-def get_current_week_dates() -> tuple[str, str]:
-    """
-    Get current week's Monday and Sunday dates.
-
-    Returns:
-        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
-
-    Example:
-        get_current_week_dates() -> ("2024-01-15", "2024-01-21")
-    """
-    today = datetime.now()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
-    return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
-
-
-def filter_time_entries_by_date_range(
-    time_entries: List[Dict], start_ms: int, end_ms: int
-) -> tuple[int, List[Dict]]:
-    """
-    Filter time entry intervals by date range and calculate total time.
-
-    Args:
-        time_entries: List of time entry objects with 'intervals' field
-        start_ms: Start timestamp in milliseconds (inclusive)
-        end_ms: End timestamp in milliseconds (inclusive)
-
-    Returns:
-        Tuple of (total_time_ms, filtered_intervals)
-
-    Example:
-        entries = [{
-            "intervals": [
-                {"start": 1705276800000, "end": 1705280400000, "time": 3600000}
-            ]
-        }]
-        filter_time_entries_by_date_range(entries, start_ms, end_ms)
-        -> (3600000, [{...}])
-    """
-    total_ms = 0
-    filtered_intervals = []
-
-    for entry in time_entries:
-        for interval in entry.get("intervals", []):
-            interval_start = interval.get("start")
-            duration = interval.get("time")
-
-            if not interval_start:
-                continue
-
-            # Convert to int (API may return as string)
-            try:
-                interval_start = int(interval_start)
-            except (ValueError, TypeError):
-                continue
-
-            # Check if interval overlaps with date range
-            # Interval is included if it started within the range
-            if start_ms <= interval_start <= end_ms:
-                if duration:
-                    total_ms += int(duration)
-                filtered_intervals.append(interval)
-
-    return total_ms, filtered_intervals
 
 
 def _api_call(method: str, endpoint: str, params: Optional[Dict] = None):
@@ -1254,6 +1173,9 @@ def register_pm_analytics_tools(mcp: FastMCP):
         project: Optional[str] = None,
         space_name: Optional[str] = None,
         list_id: Optional[str] = None,
+        week_selector: Optional[
+            str
+        ] = None,  # e.g., "current_week", "last_week", or custom "YYYY-MM-DD to YYYY-MM-DD"
         week_start: Optional[str] = None,  # YYYY-MM-DD format
         week_end: Optional[str] = None,  # YYYY-MM-DD format
     ) -> dict:
@@ -1268,8 +1190,21 @@ def register_pm_analytics_tools(mcp: FastMCP):
             project: Project name (for team_member type)
             space_name: Space name (for space/space_folder_team types)
             list_id: Direct list ID
-            week_start: Week start date (YYYY-MM-DD), defaults to current week Monday
-            week_end: Week end date (YYYY-MM-DD), defaults to current week Sunday
+            week_selector: Smart week selector - "current", "previous", "N-weeks-ago", "YYYY-MM-DD", "YYYY-WNN"
+            week_start: Week start date (YYYY-MM-DD), explicit override
+            week_end: Week end date (YYYY-MM-DD), explicit override
+
+        Week Selector Examples:
+            - "current" or "this" → Current week (Monday-Sunday)
+            - "previous" or "last" → Previous week
+            - "2-weeks-ago" → 2 weeks before current week
+            - "2026-01-15" → Week containing January 15, 2026
+            - "2026-W03" → ISO week 3 of 2026
+
+        Priority:
+            1. If week_start AND week_end provided → use those dates
+            2. Else if week_selector provided → parse and calculate dates
+            3. Else → default to current week
 
         Returns:
             Weekly report with time tracked ONLY from time entries logged within the date range
@@ -1277,9 +1212,42 @@ def register_pm_analytics_tools(mcp: FastMCP):
         try:
             from app.clickup import fetch_all_time_entries_batch
 
-            # Calculate week boundaries if not provided
-            if not week_start or not week_end:
+            # Calculate week boundaries with priority logic
+            if week_start and week_end:
+                # Priority 1: Explicit dates provided - validate and use them
+                try:
+                    validate_week_dates(week_start, week_end)
+                    print(f"[DEBUG] Using explicit dates: {week_start} to {week_end}")
+                except ValueError as e:
+                    return {
+                        "error": f"Invalid week dates: {str(e)}",
+                        "hint": "week_start must be Monday, week_end must be Sunday, 6 days apart",
+                    }
+            elif week_selector:
+                # Priority 2: Use smart week selector
+                try:
+                    week_start, week_end = parse_week_input(week_selector)
+                    print(
+                        f"[DEBUG] Parsed '{week_selector}' → {week_start} to {week_end}"
+                    )
+                except ValueError as e:
+                    return {
+                        "error": f"Invalid week_selector: {str(e)}",
+                        "hint": "Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'",
+                        "examples": [
+                            "current",
+                            "previous",
+                            "2-weeks-ago",
+                            "2026-01-15",
+                            "2026-W03",
+                        ],
+                    }
+            else:
+                # Priority 3: Default to current week
                 week_start, week_end = get_current_week_dates()
+                print(
+                    f"[DEBUG] Using default (current week): {week_start} to {week_end}"
+                )
 
             # Convert to milliseconds
             start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
