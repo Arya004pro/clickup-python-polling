@@ -4,6 +4,12 @@ from fastmcp import FastMCP
 from app.clickup import _get, BASE_URL
 from app.config import CLICKUP_TEAM_ID
 import json  # ← added for pretty printing
+from .status_helpers import (
+    get_effective_statuses,
+    extract_statuses_from_response,
+    get_workspace_members,
+    resolve_multiple_assignees,
+)
 
 
 def register_workspace_tools(mcp: FastMCP):
@@ -178,7 +184,10 @@ def register_workspace_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     def format_space_details(space: dict) -> dict:
-        """Consistent formatting helper"""
+        """Consistent formatting helper with safe status extraction"""
+        # Extract statuses safely from potentially wrapped response
+        statuses = extract_statuses_from_response(space)
+
         return {
             "space_id": space["id"],
             "name": space["name"],
@@ -187,8 +196,8 @@ def register_workspace_tools(mcp: FastMCP):
             "team_id": space.get("team_id"),
             "archived": space.get("archived", False),
             "multiple_assignees": space.get("multiple_assignees_enabled", False),
-            "statuses": space.get("statuses", []),
-            "status_count": len(space.get("statuses", [])),
+            "statuses": statuses,
+            "status_count": len(statuses),
             "features": space.get("features", {}),
             "permissions": space.get("permissions", {}),
         }
@@ -340,14 +349,20 @@ def register_workspace_tools(mcp: FastMCP):
         }
 
         for lst in folder.get("lists", []):
+            list_id = lst["id"]
+
+            # Get effective statuses (handles inheritance)
+            effective_statuses = get_effective_statuses(list_id)
+
             result["lists"].append(
                 {
-                    "list_id": lst["id"],
+                    "list_id": list_id,
                     "name": lst["name"],
                     "orderindex": lst.get("orderindex"),
                     "task_count": lst.get("task_count", 0),
-                    "status_count": len(lst.get("statuses", [])),
-                    "statuses": lst.get("statuses", []),
+                    "status_count": effective_statuses.get("status_count", 0),
+                    "statuses": effective_statuses.get("statuses", []),
+                    "status_source": effective_statuses.get("source", "unknown"),
                 }
             )
 
@@ -431,17 +446,23 @@ def register_workspace_tools(mcp: FastMCP):
     def build_lists_result(
         lists: list, folder_id: str = None, space_id: str = None
     ) -> list[dict]:
-        """Format list data consistently"""
+        """Format list data consistently with effective status resolution"""
         result = []
         for lst in lists:
+            list_id = lst["id"]
+
+            # Get effective statuses (handles inheritance from space)
+            effective_statuses = get_effective_statuses(list_id)
+
             result.append(
                 {
-                    "list_id": lst["id"],
+                    "list_id": list_id,
                     "name": lst["name"],
                     "orderindex": lst.get("orderindex"),
                     "task_count": lst.get("task_count", 0),
-                    "status_count": len(lst.get("statuses", [])),
-                    "statuses": lst.get("statuses", []),
+                    "status_count": effective_statuses.get("status_count", 0),
+                    "statuses": effective_statuses.get("statuses", []),
+                    "status_source": effective_statuses.get("source", "unknown"),
                     "folder_id": folder_id,
                     "space_id": space_id or lst.get("space", {}).get("id"),
                 }
@@ -472,14 +493,20 @@ def register_workspace_tools(mcp: FastMCP):
 
             result = []
             for lst in lists:
+                list_id = lst["id"]
+
+                # Get effective statuses (handles inheritance)
+                effective_statuses = get_effective_statuses(list_id)
+
                 result.append(
                     {
-                        "list_id": lst["id"],
+                        "list_id": list_id,
                         "name": lst["name"],
                         "orderindex": lst.get("orderindex"),
                         "task_count": lst.get("task_count", 0),
-                        "status_count": len(lst.get("statuses", [])),
-                        "statuses": lst.get("statuses", []),  # full statuses if needed
+                        "status_count": effective_statuses.get("status_count", 0),
+                        "statuses": effective_statuses.get("statuses", []),
+                        "status_source": effective_statuses.get("source", "unknown"),
                     }
                 )
 
@@ -594,9 +621,14 @@ def register_workspace_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     def build_list_result(lst: dict) -> dict:
-        """Format list data consistently"""
+        """Format list data consistently with effective status resolution"""
+        list_id = lst["id"]
+
+        # Get effective statuses (handles inheritance)
+        effective_statuses = get_effective_statuses(list_id)
+
         res = {
-            "list_id": lst["id"],
+            "list_id": list_id,
             "name": lst["name"],
             "orderindex": lst.get("orderindex"),
             "content": lst.get("content"),
@@ -605,8 +637,9 @@ def register_workspace_tools(mcp: FastMCP):
             "folder_name": lst.get("folder", {}).get("name"),
             "space_id": lst.get("space", {}).get("id"),
             "space_name": lst.get("space", {}).get("name"),
-            "statuses": lst.get("statuses", []),
-            "status_count": len(lst.get("statuses", [])),
+            "statuses": effective_statuses.get("statuses", []),
+            "status_count": effective_statuses.get("status_count", 0),
+            "status_source": effective_statuses.get("source", "unknown"),
             "priority_enabled": lst.get("priority_enabled", False),
             "custom_fields_enabled": lst.get("custom_fields_enabled", False),
             "multiple_assignees_flag": lst.get("multiple_assignees", None),
@@ -739,8 +772,64 @@ def register_workspace_tools(mcp: FastMCP):
             return {
                 "status": "success",
                 "cleared": cleared,
-                "message": f"Cache cleared for: {', '.join(cleared)}",
+                "message": f"Successfully cleared {len(cleared)} cache(s)",
             }
-
         except Exception as e:
             return {"status": "error", "message": f"Failed to clear cache: {str(e)}"}
+
+    @mcp.tool
+    def get_team_members(workspace_id: str = None):
+        """
+        Get all members/assignees from a workspace.
+        Returns member details including IDs, usernames, emails, and roles.
+
+        Args:
+            workspace_id: The workspace/team ID (optional, uses default if not provided)
+
+        Returns:
+            List of team members with their user IDs, usernames, emails, and roles.
+        """
+        try:
+            result = get_workspace_members(workspace_id)
+            if "error" in result:
+                return result
+
+            return {
+                "workspace_id": result["workspace_id"],
+                "workspace_name": result["workspace_name"],
+                "total_members": result["member_count"],
+                "members": result["members"],
+            }
+        except Exception as e:
+            return {"error": f"Failed to fetch team members: {str(e)}"}
+
+    @mcp.tool
+    def resolve_assignees(assignee_names: list[str], workspace_id: str = None):
+        """
+        Resolve assignee names/usernames to their user IDs.
+        Use this before calling tools that require assignee IDs.
+
+        Args:
+            assignee_names: List of usernames or emails to resolve (e.g., ["Henish Patel", "user@example.com"])
+            workspace_id: Optional workspace ID to search in
+
+        Returns:
+            Dictionary with resolved IDs and any names that couldn't be found.
+
+        Example:
+            Input: ["Henish Patel", "John Doe"]
+            Output: {
+                "resolved": [{"name": "Henish Patel", "id": 12345678}],
+                "resolved_ids": [12345678],
+                "not_found": ["John Doe"],
+                "success": false
+            }
+        """
+        try:
+            if not assignee_names:
+                return {"error": "No assignee names provided"}
+
+            result = resolve_multiple_assignees(assignee_names, workspace_id)
+            return result
+        except Exception as e:
+            return {"error": f"Failed to resolve assignees: {str(e)}"}

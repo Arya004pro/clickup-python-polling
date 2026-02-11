@@ -11,8 +11,15 @@ Features:
 from fastmcp import FastMCP
 import requests
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
+from app.mcp.status_helpers import (
+    get_current_week_dates,
+    date_range_to_timestamps,
+    filter_time_entries_by_date_range,
+    parse_week_input,  # ← ADD THIS
+    validate_week_dates,  # ← ADD THIS (optional, for validation)
+)
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
 try:
@@ -84,6 +91,27 @@ def get_status_category(status_name: str, status_type: str = None) -> str:
 
 def _headers() -> Dict[str, str]:
     return {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+
+
+# --- Date/Timestamp Helpers ---
+
+
+def date_to_timestamp_ms(date_str: str) -> int:
+    """
+    Convert YYYY-MM-DD date string to Unix timestamp in milliseconds.
+    Time is set to 00:00:00 UTC.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format
+
+    Returns:
+        Unix timestamp in milliseconds
+
+    Example:
+        date_to_timestamp_ms("2024-01-15") -> 1705276800000
+    """
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
 
 
 def _api_call(method: str, endpoint: str, params: Optional[Dict] = None):
@@ -211,77 +239,6 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
                     return folder_lists
 
     print(f"[DEBUG] No matches found for '{project}'")
-    return []
-    if list_id:
-        return [list_id]
-    if not project:
-        return []
-
-    # 1. Check project_map.json FIRST (handles folder/space mapped projects)
-    try:
-        from .sync_mapping import db
-
-        proj_lower = project.lower().strip()
-        for alias, data in db.projects.items():
-            alias_name = data.get("alias", alias)
-            if alias.lower() == proj_lower or alias_name.lower() == proj_lower:
-                mapped_id = data["clickup_id"]
-                mapped_type = data["clickup_type"]
-
-                if mapped_type == "list":
-                    return [mapped_id]
-                elif mapped_type == "folder":
-                    # Get all lists in this folder from API
-                    resp, _ = _api_call("GET", f"/folder/{mapped_id}/list")
-                    if resp and resp.get("lists"):
-                        return [lst["id"] for lst in resp["lists"]]
-                    # Fallback: use cached structure from mapping
-                    structure = data.get("structure", {})
-                    return [
-                        c["id"]
-                        for c in structure.get("children", [])
-                        if c.get("type") == "list"
-                    ]
-                elif mapped_type == "space":
-                    ids = []
-                    resp, _ = _api_call("GET", f"/space/{mapped_id}/list")
-                    if resp:
-                        ids.extend([lst["id"] for lst in resp.get("lists", [])])
-                    resp2, _ = _api_call("GET", f"/space/{mapped_id}/folder")
-                    if resp2:
-                        for f in resp2.get("folders", []):
-                            ids.extend([lst["id"] for lst in f.get("lists", [])])
-                    return ids
-    except ImportError:
-        pass  # sync_mapping not available, fall through to API search
-
-    # 2. Fall back to live API search by name
-    team_id = _get_team_id()
-    spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
-    if not spaces_data:
-        return []
-
-    proj_lower = project.lower().strip()
-    target_lists = []
-
-    for space in spaces_data.get("spaces", []):
-        if space["name"].lower() == proj_lower:
-            # Space match - get all lists in space
-            s_lists, _ = _api_call("GET", f"/space/{space['id']}/list")
-            if s_lists:
-                target_lists.extend([lst["id"] for lst in s_lists.get("lists", [])])
-            s_folders, _ = _api_call("GET", f"/space/{space['id']}/folder")
-            if s_folders:
-                for f in s_folders.get("folders", []):
-                    target_lists.extend([lst["id"] for lst in f.get("lists", [])])
-            return target_lists
-
-        # Folder match check
-        f_data, _ = _api_call("GET", f"/space/{space['id']}/folder")
-        if f_data:
-            for f in f_data.get("folders", []):
-                if f["name"].lower() == proj_lower:
-                    return [lst["id"] for lst in f.get("lists", [])]
     return []
 
 
@@ -1216,54 +1173,94 @@ def register_pm_analytics_tools(mcp: FastMCP):
         project: Optional[str] = None,
         space_name: Optional[str] = None,
         list_id: Optional[str] = None,
+        week_selector: Optional[
+            str
+        ] = None,  # e.g., "current_week", "last_week", or custom "YYYY-MM-DD to YYYY-MM-DD"
         week_start: Optional[str] = None,  # YYYY-MM-DD format
         week_end: Optional[str] = None,  # YYYY-MM-DD format
     ) -> dict:
         """
-        Weekly time tracking report wrapper.
+        Weekly time tracking report based on ACTUAL time entry intervals.
+
+        IMPORTANT: This filters by when time was LOGGED (time entry intervals),
+        not when tasks were modified (date_updated).
 
         Args:
             report_type: "team_member", "space", or "space_folder_team"
             project: Project name (for team_member type)
             space_name: Space name (for space/space_folder_team types)
             list_id: Direct list ID
-            week_start: Week start date (YYYY-MM-DD), defaults to current week Monday
-            week_end: Week end date (YYYY-MM-DD), defaults to current week Sunday
+            week_selector: Smart week selector - "current", "previous", "N-weeks-ago", "YYYY-MM-DD", "YYYY-WNN"
+            week_start: Week start date (YYYY-MM-DD), explicit override
+            week_end: Week end date (YYYY-MM-DD), explicit override
+
+        Week Selector Examples:
+            - "current" or "this" → Current week (Monday-Sunday)
+            - "previous" or "last" → Previous week
+            - "2-weeks-ago" → 2 weeks before current week
+            - "2026-01-15" → Week containing January 15, 2026
+            - "2026-W03" → ISO week 3 of 2026
+
+        Priority:
+            1. If week_start AND week_end provided → use those dates
+            2. Else if week_selector provided → parse and calculate dates
+            3. Else → default to current week
 
         Returns:
-            Weekly filtered time report based on date_updated
+            Weekly report with time tracked ONLY from time entries logged within the date range
         """
         try:
-            from datetime import datetime, timedelta
+            from app.clickup import fetch_all_time_entries_batch
 
-            # Calculate week boundaries if not provided
-            if not week_start:
-                today = datetime.now()
-                monday = today - timedelta(days=today.weekday())
-                week_start = monday.strftime("%Y-%m-%d")
-
-            if not week_end:
-                week_start_dt = datetime.strptime(week_start, "%Y-%m-%d")
-                sunday = week_start_dt + timedelta(days=6)
-                week_end = sunday.strftime("%Y-%m-%d")
+            # Calculate week boundaries with priority logic
+            if week_start and week_end:
+                # Priority 1: Explicit dates provided - validate and use them
+                try:
+                    validate_week_dates(week_start, week_end)
+                    print(f"[DEBUG] Using explicit dates: {week_start} to {week_end}")
+                except ValueError as e:
+                    return {
+                        "error": f"Invalid week dates: {str(e)}",
+                        "hint": "week_start must be Monday, week_end must be Sunday, 6 days apart",
+                    }
+            elif week_selector:
+                # Priority 2: Use smart week selector
+                try:
+                    week_start, week_end = parse_week_input(week_selector)
+                    print(
+                        f"[DEBUG] Parsed '{week_selector}' → {week_start} to {week_end}"
+                    )
+                except ValueError as e:
+                    return {
+                        "error": f"Invalid week_selector: {str(e)}",
+                        "hint": "Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'",
+                        "examples": [
+                            "current",
+                            "previous",
+                            "2-weeks-ago",
+                            "2026-01-15",
+                            "2026-W03",
+                        ],
+                    }
+            else:
+                # Priority 3: Default to current week
+                week_start, week_end = get_current_week_dates()
+                print(
+                    f"[DEBUG] Using default (current week): {week_start} to {week_end}"
+                )
 
             # Convert to milliseconds
-            week_start_ms = int(
-                datetime.strptime(week_start, "%Y-%m-%d").timestamp() * 1000
-            )
-            week_end_ms = int(
-                datetime.strptime(week_end, "%Y-%m-%d").timestamp() * 1000
-            )
-            week_end_ms += 86400000  # Add 1 day to include end date
+            start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
 
             print(f"[DEBUG] Weekly report: {week_start} to {week_end}")
+            print(f"[DEBUG] Timestamp range: {start_ms} to {end_ms}")
 
             # Resolve context based on report type
             if report_type == "space":
                 if not space_name:
                     return {"error": "space_name required for space report"}
 
-                # Get space report with date filter
+                # Get space report with ALL tasks (we'll filter time entries, not tasks)
                 team_id = _get_team_id()
                 spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
                 if not spaces_data:
@@ -1288,47 +1285,58 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     for folder in resp2.get("folders", []):
                         list_ids.extend([lst["id"] for lst in folder.get("lists", [])])
 
-                # Fetch tasks with date filter
-                all_tasks = _fetch_all_tasks(
-                    list_ids, {"date_updated_gt": week_start_ms}, include_archived=True
-                )
+                # Fetch ALL tasks (we need them to get their time entries)
+                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
 
-                # Filter by end date
-                all_tasks = [
-                    t for t in all_tasks if int(t.get("date_updated", 0)) <= week_end_ms
-                ]
+                print(f"[DEBUG] Found {len(all_tasks)} total tasks in space")
 
-                print(f"[DEBUG] Found {len(all_tasks)} tasks in date range")
+                # Fetch time entries for all tasks
+                task_ids = [t["id"] for t in all_tasks]
+                time_entries_map = fetch_all_time_entries_batch(task_ids)
 
-                # Calculate metrics
-                metrics = _calculate_task_metrics(all_tasks)
-
-                # Build report
+                # Build report by filtering time entries within date range
                 report = {}
-                for t in all_tasks:
-                    m = metrics.get(t["id"], {})
-                    val_t = m.get("tracked_direct", 0)
-                    val_e = m.get("est_direct", 0)
+                tasks_with_time_in_range = 0
 
-                    if val_t == 0 and val_e == 0:
+                for t in all_tasks:
+                    task_id = t["id"]
+                    time_entries = time_entries_map.get(task_id, [])
+
+                    if not time_entries:
                         continue
 
+                    # Filter time entries by date range
+                    time_in_range, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            time_entries, start_ms, end_ms
+                        )
+                    )
+
+                    if time_in_range == 0:
+                        continue
+
+                    tasks_with_time_in_range += 1
+
+                    # Split time among assignees
                     assignees = [u["username"] for u in t.get("assignees", [])] or [
                         "Unassigned"
                     ]
+                    time_per_assignee = time_in_range // len(assignees)
+
                     for member in assignees:
                         r = report.setdefault(
-                            member, {"tasks": 0, "time_tracked": 0, "time_estimate": 0}
+                            member, {"tasks": 0, "time_tracked": 0, "intervals": []}
                         )
                         r["tasks"] += 1
-                        r["time_tracked"] += val_t // len(assignees)
-                        r["time_estimate"] += val_e // len(assignees)
+                        r["time_tracked"] += time_per_assignee
+                        r["intervals"].extend(filtered_intervals)
 
                 formatted = {
                     member: {
-                        **data,
+                        "tasks": data["tasks"],
+                        "time_tracked": data["time_tracked"],
                         "human_tracked": _format_duration(data["time_tracked"]),
-                        "human_est": _format_duration(data["time_estimate"]),
+                        "intervals_count": len(data["intervals"]),
                     }
                     for member, data in report.items()
                 }
@@ -1339,7 +1347,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "week_start": week_start,
                     "week_end": week_end,
                     "report": formatted,
-                    "total_tasks": len(all_tasks),
+                    "total_tasks_in_space": len(all_tasks),
+                    "tasks_with_time_in_range": tasks_with_time_in_range,
                 }
 
             elif report_type == "team_member":
@@ -1350,45 +1359,58 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not list_ids:
                     return {"error": "No context found"}
 
-                # Fetch tasks with date filter
-                all_tasks = _fetch_all_tasks(
-                    list_ids, {"date_updated_gt": week_start_ms}, include_archived=True
-                )
+                # Fetch ALL tasks (we need them to get their time entries)
+                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
 
-                # Filter by end date
-                all_tasks = [
-                    t for t in all_tasks if int(t.get("date_updated", 0)) <= week_end_ms
-                ]
+                print(f"[DEBUG] Found {len(all_tasks)} total tasks")
 
-                print(f"[DEBUG] Found {len(all_tasks)} tasks in date range")
+                # Fetch time entries for all tasks
+                task_ids = [t["id"] for t in all_tasks]
+                time_entries_map = fetch_all_time_entries_batch(task_ids)
 
-                metrics = _calculate_task_metrics(all_tasks)
-
+                # Build report by filtering time entries within date range
                 report = {}
-                for t in all_tasks:
-                    m = metrics.get(t["id"], {})
-                    val_t = m.get("tracked_direct", 0)
-                    val_e = m.get("est_direct", 0)
+                tasks_with_time_in_range = 0
 
-                    if val_t == 0 and val_e == 0:
+                for t in all_tasks:
+                    task_id = t["id"]
+                    time_entries = time_entries_map.get(task_id, [])
+
+                    if not time_entries:
                         continue
 
+                    # Filter time entries by date range
+                    time_in_range, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            time_entries, start_ms, end_ms
+                        )
+                    )
+
+                    if time_in_range == 0:
+                        continue
+
+                    tasks_with_time_in_range += 1
+
+                    # Split time among assignees
                     assignees = [u["username"] for u in t.get("assignees", [])] or [
                         "Unassigned"
                     ]
+                    time_per_assignee = time_in_range // len(assignees)
+
                     for member in assignees:
                         r = report.setdefault(
-                            member, {"tasks": 0, "time_tracked": 0, "time_estimate": 0}
+                            member, {"tasks": 0, "time_tracked": 0, "intervals": []}
                         )
                         r["tasks"] += 1
-                        r["time_tracked"] += val_t // len(assignees)
-                        r["time_estimate"] += val_e // len(assignees)
+                        r["time_tracked"] += time_per_assignee
+                        r["intervals"].extend(filtered_intervals)
 
                 formatted = {
                     member: {
-                        **data,
+                        "tasks": data["tasks"],
+                        "time_tracked": data["time_tracked"],
                         "human_tracked": _format_duration(data["time_tracked"]),
-                        "human_est": _format_duration(data["time_estimate"]),
+                        "intervals_count": len(data["intervals"]),
                     }
                     for member, data in report.items()
                 }
@@ -1400,6 +1422,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "week_end": week_end,
                     "report": formatted,
                     "total_tasks": len(all_tasks),
+                    "tasks_with_time_in_range": tasks_with_time_in_range,
                 }
 
             else:

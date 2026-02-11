@@ -9,6 +9,12 @@ import time
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 from .project_configuration import TRACKED_PROJECTS
+from .status_helpers import (
+    extract_status_name,
+    get_effective_statuses,
+    get_status_category,
+    format_status_for_display,
+)
 
 # --- Status Configuration ---
 STATUS_NAME_OVERRIDES = {
@@ -73,6 +79,14 @@ def get_status_category(status_name: str, status_type: str = None) -> str:
         }
         return type_map.get(status_type.lower(), "other")
     return "other"
+
+
+def _extract_status_name(task: dict) -> str:
+    """Safely extracts status name handling both dict and string formats."""
+    status = task.get("status")
+    if isinstance(status, dict):
+        return status.get("status", "Unknown")
+    return str(status) if status else "Unknown"
 
 
 # --- Helpers ---
@@ -272,20 +286,8 @@ def _resolve_name_to_list_id(name: str):
     return None, None
 
 
-def _extract_statuses(data_obj):
-    """Safe extractor for status lists from various object types."""
-    if not data_obj:
-        return []
-    # Try direct list
-    if "statuses" in data_obj:
-        return data_obj["statuses"]
-    # Try wrapped list
-    if "list" in data_obj and "statuses" in data_obj["list"]:
-        return data_obj["list"]["statuses"]
-    # Try wrapped space
-    if "space" in data_obj and "statuses" in data_obj["space"]:
-        return data_obj["space"]["statuses"]
-    return []
+# Use extract_statuses_from_response from status_helpers module
+# Removed local implementation in favor of shared helper
 
 
 # --- Tools ---
@@ -331,56 +333,22 @@ def register_project_intelligence_tools(mcp: FastMCP):
         """
         Fetches the Effective Statuses for a list.
         If the list inherits statuses (returns empty), it automatically fetches from the Parent Space.
+        Uses the centralized get_effective_statuses helper.
         """
-        # 1. Fetch List
-        data, code = _api("GET", f"/list/{list_id}")
-        if not data:
-            return {"error": f"Failed to fetch list {list_id}", "status_code": code}
+        # Use the helper function which handles all the inheritance logic
+        result = get_effective_statuses(list_id)
 
-        # Handle wrapped vs unwrapped response
-        list_obj = data.get("list", data)
-        list_name = list_obj.get("name")
-        statuses = list_obj.get("statuses", [])
-        source = "list_settings"
+        # Check for errors
+        if "error" in result:
+            return result
 
-        # 2. Inheritance Check (If list has no custom statuses)
-        if not statuses:
-            space_obj = list_obj.get("space", {})
-            space_id = space_obj.get("id")
-
-            # If space info is missing in list response, we must fetch it manually
-            if not space_id:
-                # Try finding space via folder if it exists
-                folder_id = list_obj.get("folder", {}).get("id")
-                if folder_id:
-                    f_data, _ = _api("GET", f"/folder/{folder_id}")
-                    f_obj = f_data.get("folder", f_data) if f_data else {}
-                    space_id = f_obj.get("space", {}).get("id")
-
-            # 3. Fetch Space Statuses (The Definition Source)
-            if space_id:
-                s_data, s_code = _api("GET", f"/space/{space_id}")
-                if s_data:
-                    space_obj_full = s_data.get("space", s_data)
-                    statuses = space_obj_full.get("statuses", [])
-                    source = f"inherited_from_space_{space_id}"
-
-        # 4. Format
-        formatted = []
-        for s in statuses:
-            formatted.append(
-                {
-                    "status": s.get("status"),
-                    "type": s.get("type"),
-                    "color": s.get("color"),
-                    "category": get_status_category(s.get("status"), s.get("type")),
-                }
-            )
+        # Format statuses with categories
+        formatted = [format_status_for_display(s) for s in result.get("statuses", [])]
 
         return {
             "list_id": list_id,
-            "list_name": list_name,
-            "definition_source": source,
+            "list_name": result.get("list_name"),
+            "definition_source": result.get("source"),
             "status_count": len(formatted),
             "statuses": formatted,
         }
@@ -558,7 +526,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
         blocked = [
             t
             for t in active
-            if "block" in t["status"]["status"].lower()
+            if "block" in _extract_status_name(t).lower()
             or (t.get("priority") or {}).get("orderindex") == "1"
         ]
         due_today = [
@@ -571,7 +539,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
             return [
                 {
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignees": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl
@@ -643,8 +611,8 @@ def register_project_intelligence_tools(mcp: FastMCP):
             )
             == "active"
         ]
-        blocked = [t for t in active if "block" in t["status"]["status"].lower()]
-        waiting = [t for t in active if "wait" in t["status"]["status"].lower()]
+        blocked = [t for t in active if "block" in _extract_status_name(t).lower()]
+        waiting = [t for t in active if "wait" in _extract_status_name(t).lower()]
         stale = [
             t
             for t in active
@@ -656,7 +624,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
                 {
                     "id": t["id"],
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignee": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl
