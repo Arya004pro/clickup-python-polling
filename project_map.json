@@ -4,7 +4,7 @@
       "alias": "AI Projects",
       "clickup_id": "90165507588",
       "clickup_type": "space",
-      "last_sync": 1770637981.0585437,
+      "last_sync": 1770797995.1724079,
       "structure": {
         "id": "90165507588",
         "type": "space",
@@ -22,7 +22,7 @@
       "alias": "AI",
       "clickup_id": "90161321203",
       "clickup_type": "space",
-      "last_sync": 1770638031.6260986,
+      "last_sync": 1770798047.9125552,
       "structure": {
         "id": "90161321203",
         "type": "space",
@@ -521,7 +521,7 @@
       "alias": "JewelleryOS",
       "clickup_id": "90165613766",
       "clickup_type": "space",
-      "last_sync": 1770638112.1621916,
+      "last_sync": 1770798158.0284543,
       "structure": {
         "id": "90165613766",
         "type": "space",
@@ -563,6 +563,11 @@
               {
                 "id": "901613241286",
                 "name": "Testing",
+                "type": "list"
+              },
+              {
+                "id": "901613465754",
+                "name": "Bugs - Mehul",
                 "type": "list"
               }
             ],
@@ -679,7 +684,7 @@
       "alias": "Avinashi Chat",
       "clickup_id": "90165717669",
       "clickup_type": "space",
-      "last_sync": 1770638157.1123087,
+      "last_sync": 1770798210.82932,
       "structure": {
         "id": "90165717669",
         "type": "space",
@@ -736,7 +741,7 @@
       "alias": "linkutm",
       "clickup_id": "90165243069",
       "clickup_type": "space",
-      "last_sync": 1770638194.549349,
+      "last_sync": 1770798258.050698,
       "structure": {
         "id": "90165243069",
         "type": "space",
@@ -768,7 +773,7 @@
                 "type": "list"
               }
             ],
-            "name": "Website"
+            "name": "linkutm Website"
           },
           {
             "id": "90166891480",
@@ -835,7 +840,7 @@
       "alias": "AIX",
       "clickup_id": "90165253762",
       "clickup_type": "space",
-      "last_sync": 1770638272.9999871,
+      "last_sync": 1770798349.0991225,
       "structure": {
         "id": "90165253762",
         "type": "space",
@@ -1139,7 +1144,7 @@
       "alias": "MindTech",
       "clickup_id": "90165634163",
       "clickup_type": "space",
-      "last_sync": 1770638336.1801715,
+      "last_sync": 1770798450.7544017,
       "structure": {
         "id": "90165634163",
         "type": "space",
@@ -1192,7 +1197,7 @@
       "alias": "Venture Studio",
       "clickup_id": "90165763632",
       "clickup_type": "space",
-      "last_sync": 1770638377.2332761,
+      "last_sync": 1770798504.144947,
       "structure": {
         "id": "90165763632",
         "type": "space",
@@ -1239,7 +1244,7 @@
       "alias": "Avinashi Leaders",
       "clickup_id": "90165752782",
       "clickup_type": "space",
-      "last_sync": 1770638420.7555792,
+      "last_sync": 1770798542.8053067,
       "structure": {
         "id": "90165752782",
         "type": "space",
@@ -1313,7 +1318,7 @@
       "alias": "BlogManager",
       "clickup_id": "90165866900",
       "clickup_type": "space",
-      "last_sync": 1770638467.1124868,
+      "last_sync": 1770798613.119218,
       "structure": {
         "id": "90165866900",
         "type": "space",
@@ -1338,7 +1343,7 @@
       "alias": "3D Team",
       "clickup_id": "90165683323",
       "clickup_type": "space",
-      "last_sync": 1770638502.876622,
+      "last_sync": 1770798643.7650821,
       "structure": {
         "id": "90165683323",
         "type": "space",
@@ -1361,7 +1366,7 @@
       "alias": "UP-BOCW",
       "clickup_id": "90165885558",
       "clickup_type": "space",
-      "last_sync": 1770638540.1610787,
+      "last_sync": 1770798676.4644172,
       "structure": {
         "id": "90165885558",
         "type": "space",
@@ -1379,7 +1384,7 @@
       "alias": "General Task Management",
       "clickup_id": "90165811501",
       "clickup_type": "space",
-      "last_sync": 1770638578.3520684,
+      "last_sync": 1770798706.4450178,
       "structure": {
         "id": "90165811501",
         "type": "space",
@@ -1397,7 +1402,7 @@
       "alias": "Homepath",
       "clickup_id": "90165934294",
       "clickup_type": "space",
-      "last_sync": 1770638615.1292863,
+      "last_sync": 1770798735.15601,
       "structure": {
         "id": "90165934294",
         "type": "space",
@@ -1409,311 +1414,6 @@
           }
         ],
         "name": "Homepath"
-      }
-    },
-    "WC-Corporate": {
-      "alias": "WC-Corporate",
-      "clickup_id": "90165634091",
-      "clickup_type": "space",
-      "last_sync": 1770638653.6519604,
-      "structure": {
-        "id": "90165634091",
-        "type": "space",
-        "children": [
-          {
-            "id": "90167538703",
-            "type": "folder",
-            "children": [
-              {
-                "id": "901612256455",
-                "name": "Sprint 1 (11/25 - 12/1)",
-                "type": "list"
-              }
-            ],
-            "name": "VFS & Onevasco Sprint"
-          },
-          {
-            "id": "901612146218",
-            "name": "WC-corporate-list",
-            "type": "list"
-          }
-        ],
-        "name": "WC-Corporate"
-      }
-    },
-    "VibeScorer": {
-      "alias": "VibeScorer",
-      "clickup_id": "90165953185",
-      "clickup_type": "space",
-      "last_sync": 1770638694.6448376,
-      "structure": {
-        "id": "90165953185",
-        "type": "space",
-        "children": [
-          {
-            "id": "901613173455",
-            "name": "GTM Team Tasklist",
-            "type": "list"
-          },
-          {
-            "id": "901612778953",
-            "name": "Backlog",
-            "type": "list"
-          },
-          {
-            "id": "901613067515",
-            "name": "R1",
-            "type": "list"
-          }
-        ],
-        "name": "VibeScorer"
-      }
-    },
-    "AI WorksheetPro": {
-      "alias": "AI WorksheetPro",
-      "clickup_id": "90165974124",
-      "clickup_type": "space",
-      "last_sync": 1770638736.2033331,
-      "structure": {
-        "id": "90165974124",
-        "type": "space",
-        "children": [
-          {
-            "id": "901612826385",
-            "name": "List",
-            "type": "list"
-          }
-        ],
-        "name": "AI WorksheetPro"
-      }
-    },
-    "Gold Jewellers": {
-      "alias": "Gold Jewellers",
-      "clickup_id": "90165977016",
-      "clickup_type": "space",
-      "last_sync": 1770638778.0894177,
-      "structure": {
-        "id": "90165977016",
-        "type": "space",
-        "children": [
-          {
-            "id": "901612832514",
-            "name": "Gold Jewellers",
-            "type": "list"
-          }
-        ],
-        "name": "Gold Jewellers"
-      }
-    },
-    "Nidan.ai": {
-      "alias": "Nidan.ai",
-      "clickup_id": "90165717312",
-      "clickup_type": "space",
-      "last_sync": 1770638818.5983558,
-      "structure": {
-        "id": "90165717312",
-        "type": "space",
-        "children": [
-          {
-            "id": "901612299149",
-            "name": "Nidan.ai-list",
-            "type": "list"
-          }
-        ],
-        "name": "Nidan.ai"
-      }
-    },
-    "DevOps & Networking": {
-      "alias": "DevOps & Networking",
-      "clickup_id": "90165941160",
-      "clickup_type": "space",
-      "last_sync": 1770638859.9953065,
-      "structure": {
-        "id": "90165941160",
-        "type": "space",
-        "children": [
-          {
-            "id": "901612755596",
-            "name": "DevOps & Networking",
-            "type": "list"
-          }
-        ],
-        "name": "DevOps & Networking"
-      }
-    },
-    "Luminique": {
-      "alias": "Luminique",
-      "clickup_id": "90167907863",
-      "clickup_type": "folder",
-      "last_sync": 1770639036.8482256,
-      "structure": {
-        "id": "90167907863",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901612742608",
-            "name": "List",
-            "type": "list"
-          },
-          {
-            "id": "901613177446",
-            "name": "Store Front",
-            "type": "list"
-          },
-          {
-            "id": "901613241141",
-            "name": "Research",
-            "type": "list"
-          },
-          {
-            "id": "901613241313",
-            "name": "Backlog",
-            "type": "list"
-          },
-          {
-            "id": "901613241170",
-            "name": "In Queue",
-            "type": "list"
-          },
-          {
-            "id": "901613241189",
-            "name": "Development",
-            "type": "list"
-          },
-          {
-            "id": "901613241286",
-            "name": "Testing",
-            "type": "list"
-          }
-        ],
-        "name": "Luminique"
-      }
-    },
-    "MYOJ": {
-      "alias": "MYOJ",
-      "clickup_id": "90167917115",
-      "clickup_type": "folder",
-      "last_sync": 1770639081.2480342,
-      "structure": {
-        "id": "90167917115",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901612754980",
-            "name": "List",
-            "type": "list"
-          },
-          {
-            "id": "901613241336",
-            "name": "Research",
-            "type": "list"
-          },
-          {
-            "id": "901613241350",
-            "name": "Backlog",
-            "type": "list"
-          },
-          {
-            "id": "901613241370",
-            "name": "In Queue",
-            "type": "list"
-          },
-          {
-            "id": "901613241381",
-            "name": "Development",
-            "type": "list"
-          },
-          {
-            "id": "901613241394",
-            "name": "Testing",
-            "type": "list"
-          }
-        ],
-        "name": "MYOJ"
-      }
-    },
-    "Aarshhmi": {
-      "alias": "Aarshhmi",
-      "clickup_id": "90168131464",
-      "clickup_type": "folder",
-      "last_sync": 1770639126.82137,
-      "structure": {
-        "id": "90168131464",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901613050493",
-            "name": "List",
-            "type": "list"
-          }
-        ],
-        "name": "Aarshhmi"
-      }
-    },
-    "Scrap": {
-      "alias": "Scrap",
-      "clickup_id": "90168266809",
-      "clickup_type": "folder",
-      "last_sync": 1770639168.0151103,
-      "structure": {
-        "id": "90168266809",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901612488442",
-            "name": "queue",
-            "type": "list"
-          },
-          {
-            "id": "901613162207",
-            "name": "Explore the flow of Jewellery website",
-            "type": "list"
-          },
-          {
-            "id": "901612488457",
-            "name": "backlog list",
-            "type": "list"
-          },
-          {
-            "id": "901612488452",
-            "name": "R1 - Reach PIM",
-            "type": "list"
-          },
-          {
-            "id": "901612488478",
-            "name": "scope",
-            "type": "list"
-          },
-          {
-            "id": "901612488612",
-            "name": "design",
-            "type": "list"
-          },
-          {
-            "id": "901612860872",
-            "name": "List",
-            "type": "list"
-          }
-        ],
-        "name": "Scrap "
-      }
-    },
-    "Indian Demo": {
-      "alias": "Indian Demo",
-      "clickup_id": "90168359093",
-      "clickup_type": "folder",
-      "last_sync": 1770639213.5070899,
-      "structure": {
-        "id": "90168359093",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901613335816",
-            "name": "List",
-            "type": "list"
-          }
-        ],
-        "name": "Indian Demo"
       }
     }
   },

@@ -318,10 +318,16 @@ def register_task_tools(mcp: FastMCP):
         Args:
             list_id: The ClickUp list ID to fetch tasks from.
             include_closed: Whether to include closed tasks.
-            statuses: Filter by specific status names.
-            assignees: Filter by assignee IDs.
+            statuses: Filter by specific status names (e.g., ["backlog", "in review"]).
+            assignees: Filter by assignee user IDs (e.g., [12345678, 87654321]).
+                      Use resolve_assignees tool first to convert names to IDs.
             page: Specific page number (None = fetch all pages).
             filter_no_time_entries: If True, only return tasks with zero tracked time (time_spent = 0 or None).
+
+        Note:
+            To get assignee IDs from names, use the resolve_assignees tool first:
+            1. Call resolve_assignees(["Henish Patel"]) to get IDs
+            2. Use the returned IDs in this tool's assignees parameter
         """
         try:
             params = [
@@ -501,7 +507,19 @@ def register_task_tools(mcp: FastMCP):
         due_date: str = None,
         tags: list[str] = None,
     ) -> dict:
-        """Create a new task."""
+        """
+        Create a new task.
+
+        Args:
+            list_id: The list to create the task in
+            name: Task name/title
+            description: Task description (optional)
+            status: Task status (optional)
+            priority: Task priority (optional)
+            assignees: List of assignee user IDs (use resolve_assignees to convert names to IDs)
+            due_date: Due date in milliseconds (optional)
+            tags: List of tag names (optional)
+        """
         try:
             payload = {
                 k: v
@@ -541,7 +559,23 @@ def register_task_tools(mcp: FastMCP):
         add_assignees: list[int] = None,
         remove_assignees: list[int] = None,
     ) -> dict:
-        """Update an existing task."""
+        """
+        Update an existing task.
+
+        Args:
+            task_id: The task ID to update
+            name: New task name (optional)
+            description: New task description (optional)
+            status: New status (optional)
+            priority: New priority (optional)
+            due_date: New due date (optional)
+            add_assignees: User IDs to add as assignees (optional)
+                          Use resolve_assignees() tool first to convert names to IDs
+            remove_assignees: User IDs to remove from assignees (optional)
+
+        Note: For assignee IDs, use the workspace_structure.resolve_assignees() tool
+        to convert assignee names to user IDs before calling this function.
+        """
         try:
             payload = {
                 k: v
