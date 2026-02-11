@@ -6,7 +6,117 @@ Handles API response polymorphism and status inheritance.
 
 import requests
 from typing import List, Dict, Optional, Any
+from datetime import datetime, timezone, timedelta
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+
+
+# --- Date/Timestamp Helpers ---
+
+
+def date_to_timestamp_ms(date_str: str) -> int:
+    """
+    Convert YYYY-MM-DD date string to Unix timestamp in milliseconds.
+    Time is set to 00:00:00 UTC.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format
+
+    Returns:
+        Unix timestamp in milliseconds
+
+    Example:
+        date_to_timestamp_ms("2024-01-15") -> 1705276800000
+    """
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def date_range_to_timestamps(start_date: str, end_date: str) -> tuple[int, int]:
+    """
+    Convert date range to timestamp range in milliseconds.
+    Start time is 00:00:00, end time is 23:59:59.999 of the end date.
+
+    Args:
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+
+    Returns:
+        Tuple of (start_timestamp_ms, end_timestamp_ms)
+
+    Example:
+        date_range_to_timestamps("2024-01-15", "2024-01-21")
+        -> (1705276800000, 1705881599999)
+    """
+    start_ms = date_to_timestamp_ms(start_date)
+    # Add 1 day minus 1 millisecond to include the entire end date
+    end_ms = date_to_timestamp_ms(end_date) + (86400000 - 1)
+    return start_ms, end_ms
+
+
+def get_current_week_dates() -> tuple[str, str]:
+    """
+    Get current week's Monday and Sunday dates.
+
+    Returns:
+        Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
+
+    Example:
+        get_current_week_dates() -> ("2024-01-15", "2024-01-21")
+    """
+    today = datetime.now()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
+
+
+def filter_time_entries_by_date_range(
+    time_entries: List[Dict], start_ms: int, end_ms: int
+) -> tuple[int, List[Dict]]:
+    """
+    Filter time entry intervals by date range and calculate total time.
+
+    Args:
+        time_entries: List of time entry objects with 'intervals' field
+        start_ms: Start timestamp in milliseconds (inclusive)
+        end_ms: End timestamp in milliseconds (inclusive)
+
+    Returns:
+        Tuple of (total_time_ms, filtered_intervals)
+
+    Example:
+        entries = [{
+            "intervals": [
+                {"start": 1705276800000, "end": 1705280400000, "time": 3600000}
+            ]
+        }]
+        filter_time_entries_by_date_range(entries, start_ms, end_ms)
+        -> (3600000, [{...}])
+    """
+    total_ms = 0
+    filtered_intervals = []
+
+    for entry in time_entries:
+        for interval in entry.get("intervals", []):
+            interval_start = interval.get("start")
+            duration = interval.get("time")
+
+            if not interval_start:
+                continue
+
+            # Convert to int (API may return as string)
+            try:
+                interval_start = int(interval_start)
+            except (ValueError, TypeError):
+                continue
+
+            # Check if interval overlaps with date range
+            # Interval is included if it started within the range
+            if start_ms <= interval_start <= end_ms:
+                if duration:
+                    total_ms += int(duration)
+                filtered_intervals.append(interval)
+
+    return total_ms, filtered_intervals
 
 
 # --- Status Category Mapping ---
