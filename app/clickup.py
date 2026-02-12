@@ -9,6 +9,9 @@ import time
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
 
 # ------------------------------------------------------------------
@@ -20,9 +23,24 @@ from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
 ENTERPRISE_RATE_LIMIT = 1000  # requests per minute
 
 # ------------------------------------------------------------------
-# Session
+# Session with Optimized Connection Pool
 # ------------------------------------------------------------------
+
+# Configure connection pool to match concurrent workers
+# This prevents "Connection pool is full" warnings
+adapter = HTTPAdapter(
+    pool_connections=250,  # Number of connection pools to cache
+    pool_maxsize=250,  # Max connections per pool (matches max workers)
+    max_retries=Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+    ),
+)
+
 session = requests.Session()
+session.mount("https://", adapter)
+session.mount("http://", adapter)
 session.headers.update(
     {
         "Authorization": CLICKUP_API_TOKEN,
@@ -246,6 +264,8 @@ def fetch_all_time_entries_batch(task_ids):
     - Business Plan (1000 req/min): ~2-3 minutes for 3000 tasks
     - Enterprise Plan (10000 req/min): ~20-30 seconds for 3000 tasks
     """
+    import sys
+
     if not task_ids:
         return {}
 
@@ -263,11 +283,15 @@ def fetch_all_time_entries_batch(task_ids):
     batch_size = max(100, int(total / 20))  # Report 20 times during processing
 
     print(f"\n⏳ Fetching time entries for {total:,} tasks...")
+    sys.stdout.flush()
     print(f"🚀 Enterprise mode: {optimal_workers} concurrent workers")
+    sys.stdout.flush()
     print(
         f"⚡ Rate: {ENTERPRISE_RATE_LIMIT:,} req/min ({rate_limiter.rate_per_second:.1f} req/sec)"
     )
+    sys.stdout.flush()
     print(f"🎯 Target: ~{total / rate_limiter.rate_per_second / 60:.1f} minutes\n")
+    sys.stdout.flush()
 
     def fetch_with_retry(tid):
         """Fetch time entry with minimal retry overhead"""
@@ -320,18 +344,26 @@ def fetch_all_time_entries_batch(task_ids):
                     f"⏱️  ETA: {eta:.0f}s | "
                     f"❌ Errors: {errors}"
                 )
+                sys.stdout.flush()
 
     # Final statistics
     total_time = time.time() - start_time
     stats = rate_limiter.get_stats()
 
     print("\n✅ Time entries complete!")
+    sys.stdout.flush()
     print(f"   📦 Total: {processed:,} tasks")
+    sys.stdout.flush()
     print(f"   ⏱️  Time: {total_time:.1f}s ({total_time / 60:.2f} minutes)")
+    sys.stdout.flush()
     print(f"   ⚡ Speed: {processed / total_time:.1f} tasks/second")
+    sys.stdout.flush()
     print(f"   ❌ Errors: {errors}")
+    sys.stdout.flush()
     print(f"   ⏸️  Total waits: {stats['total_waits']}")
+    sys.stdout.flush()
     print(f"   ⏱️  Total wait time: {stats['total_wait_time']:.1f}s")
+    sys.stdout.flush()
 
     return result
 
@@ -343,6 +375,8 @@ def fetch_assigned_comments_batch(task_ids):
     """
     Enterprise-grade batch processing for comments.
     """
+    import sys
+
     if not task_ids:
         return {}
 
@@ -356,8 +390,11 @@ def fetch_assigned_comments_batch(task_ids):
     batch_size = max(100, int(total / 20))
 
     print(f"\n💬 Fetching comments for {total:,} tasks...")
+    sys.stdout.flush()
     print(f"🚀 Enterprise mode: {optimal_workers} concurrent workers")
+    sys.stdout.flush()
     print(f"🎯 Target: ~{total / rate_limiter.rate_per_second / 60:.1f} minutes\n")
+    sys.stdout.flush()
 
     def fetch_with_retry(tid):
         """Fetch comments with minimal retry overhead"""
@@ -410,17 +447,25 @@ def fetch_assigned_comments_batch(task_ids):
                     f"⏱️  ETA: {eta:.0f}s | "
                     f"❌ Errors: {errors}"
                 )
+                sys.stdout.flush()
 
     total_time = time.time() - start_time
     stats = rate_limiter.get_stats()
 
     print("\n✅ Comments complete!")
+    sys.stdout.flush()
     print(f"   📦 Total: {processed:,} tasks")
+    sys.stdout.flush()
     print(f"   ⏱️  Time: {total_time:.1f}s ({total_time / 60:.2f} minutes)")
+    sys.stdout.flush()
     print(f"   ⚡ Speed: {processed / total_time:.1f} tasks/second")
+    sys.stdout.flush()
     print(f"   ❌ Errors: {errors}")
+    sys.stdout.flush()
     print(f"   ⏸️  Total waits: {stats['total_waits']}")
+    sys.stdout.flush()
     print(f"   ⏱️  Total wait time: {stats['total_wait_time']:.1f}s")
+    sys.stdout.flush()
 
     return result
 

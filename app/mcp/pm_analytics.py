@@ -8,15 +8,18 @@ Features:
 5. Complete Toolset: Includes all analytics, breakdowns, and risk assessments.
 """
 
+from __future__ import annotations
+
 from fastmcp import FastMCP
 import requests
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from app.mcp.status_helpers import (
     get_current_week_dates,
     date_range_to_timestamps,
     filter_time_entries_by_date_range,
+    is_valid_monday_sunday_range,
     parse_week_input,  # ← ADD THIS
     validate_week_dates,  # ← ADD THIS (optional, for validation)
 )
@@ -383,6 +386,11 @@ def _extract_status_name(task: Dict) -> str:
 
 
 def register_pm_analytics_tools(mcp: FastMCP):
+    import uuid
+    import threading
+
+    # In-memory job store for async report requests
+    JOBS: Dict[str, Dict] = {}
 
     @mcp.tool()
     def get_progress_since(
@@ -1175,12 +1183,19 @@ def register_pm_analytics_tools(mcp: FastMCP):
         list_id: Optional[str] = None,
         week_selector: Optional[
             str
-        ] = None,  # e.g., "current_week", "last_week", or custom "YYYY-MM-DD to YYYY-MM-DD"
+        ] = None,  # e.g., "current_week", "last_week", "2-weeks", "month", or custom "YYYY-MM-DD to YYYY-MM-DD"
         week_start: Optional[str] = None,  # YYYY-MM-DD format
         week_end: Optional[str] = None,  # YYYY-MM-DD format
+        allow_multi_week: bool = False,  # Enable multi-week ranges
+        async_job: bool = False,  # If True, run report in background and return job id
+        job_id: Optional[str] = None,  # Internal use when running as background job
     ) -> dict:
         """
-        Weekly time tracking report based on ACTUAL time entry intervals.
+        Weekly/Multi-week time tracking report based on ACTUAL time entry intervals.
+
+        ⚠️ TIMEOUT PREVENTION: For projects/spaces with 300+ tasks, USE async_job=True
+        to avoid client timeouts. Returns job_id immediately, then poll with
+        get_weekly_time_report_status(job_id) and fetch via get_weekly_time_report_result(job_id).
 
         IMPORTANT: This filters by when time was LOGGED (time entry intervals),
         not when tasks were modified (date_updated).
@@ -1190,16 +1205,26 @@ def register_pm_analytics_tools(mcp: FastMCP):
             project: Project name (for team_member type)
             space_name: Space name (for space/space_folder_team types)
             list_id: Direct list ID
-            week_selector: Smart week selector - "current", "previous", "N-weeks-ago", "YYYY-MM-DD", "YYYY-WNN"
+            week_selector: Smart week selector - supports single or multi-week ranges
             week_start: Week start date (YYYY-MM-DD), explicit override
             week_end: Week end date (YYYY-MM-DD), explicit override
+            allow_multi_week: If True, enables multi-week range parsing
+            async_job: If True, run in background and return job_id (RECOMMENDED for 300+ tasks)
 
         Week Selector Examples:
+            Single Week:
             - "current" or "this" → Current week (Monday-Sunday)
             - "previous" or "last" → Previous week
             - "2-weeks-ago" → 2 weeks before current week
             - "2026-01-15" → Week containing January 15, 2026
             - "2026-W03" → ISO week 3 of 2026
+
+            Multi-Week (requires allow_multi_week=True):
+            - "2-weeks" → 2 weeks starting current Monday
+            - "3-weeks" → 3 weeks starting current Monday
+            - "last-2-weeks" → Last 2 weeks ending last Sunday
+            - "month" or "4-weeks" → 4 weeks (approximately a month)
+            - "last-month" → Last 4 weeks ending last Sunday
 
         Priority:
             1. If week_start AND week_end provided → use those dates
@@ -1207,40 +1232,104 @@ def register_pm_analytics_tools(mcp: FastMCP):
             3. Else → default to current week
 
         Returns:
-            Weekly report with time tracked ONLY from time entries logged within the date range
+            Report with time tracked ONLY from time entries logged within the date range
         """
         try:
+            import sys
             from app.clickup import fetch_all_time_entries_batch
+
+            # Early acknowledgment
+            print("⏳ Processing time report request - this may take 1-3 minutes...")
+            sys.stdout.flush()
+
+            # If async_job requested, enqueue and return a job id immediately
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_weekly_time_report(
+                            report_type=report_type,
+                            project=project,
+                            space_name=space_name,
+                            list_id=list_id,
+                            week_selector=week_selector,
+                            week_start=week_start,
+                            week_end=week_end,
+                            allow_multi_week=allow_multi_week,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Report running in background. Use get_weekly_time_report_status(job_id) to poll.",
+                }
+
+            # If running as background worker, mark running state
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
 
             # Calculate week boundaries with priority logic
             if week_start and week_end:
                 # Priority 1: Explicit dates provided - validate and use them
                 try:
-                    validate_week_dates(week_start, week_end)
+                    validate_week_dates(
+                        week_start, week_end, allow_multi_week=allow_multi_week
+                    )
                     print(f"[DEBUG] Using explicit dates: {week_start} to {week_end}")
+                    sys.stdout.flush()
                 except ValueError as e:
                     return {
                         "error": f"Invalid week dates: {str(e)}",
-                        "hint": "week_start must be Monday, week_end must be Sunday, 6 days apart",
+                        "hint": "week_start must be Monday, week_end must be Sunday"
+                        + (
+                            " (multi-week allowed if allow_multi_week=True)"
+                            if allow_multi_week
+                            else ""
+                        ),
                     }
             elif week_selector:
                 # Priority 2: Use smart week selector
                 try:
-                    week_start, week_end = parse_week_input(week_selector)
+                    week_start, week_end = parse_week_input(
+                        week_selector, allow_multi_week=allow_multi_week
+                    )
                     print(
                         f"[DEBUG] Parsed '{week_selector}' → {week_start} to {week_end}"
                     )
+                    sys.stdout.flush()
                 except ValueError as e:
                     return {
                         "error": f"Invalid week_selector: {str(e)}",
-                        "hint": "Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'",
+                        "hint": "Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'"
+                        + (
+                            " + multi-week: 'N-weeks', 'last-N-weeks', 'month'"
+                            if allow_multi_week
+                            else ""
+                        ),
                         "examples": [
                             "current",
                             "previous",
                             "2-weeks-ago",
                             "2026-01-15",
                             "2026-W03",
-                        ],
+                        ]
+                        + (
+                            ["2-weeks", "last-2-weeks", "month"]
+                            if allow_multi_week
+                            else []
+                        ),
                     }
             else:
                 # Priority 3: Default to current week
@@ -1248,12 +1337,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print(
                     f"[DEBUG] Using default (current week): {week_start} to {week_end}"
                 )
+                sys.stdout.flush()
 
             # Convert to milliseconds
             start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
 
-            print(f"[DEBUG] Weekly report: {week_start} to {week_end}")
+            # Calculate number of weeks in range
+            from datetime import datetime
+
+            start_date = datetime.strptime(week_start, "%Y-%m-%d")
+            end_date = datetime.strptime(week_end, "%Y-%m-%d")
+            num_weeks = ((end_date - start_date).days + 1) // 7
+
+            print(
+                f"[DEBUG] Report period: {week_start} to {week_end} ({num_weeks} week(s))"
+            )
             print(f"[DEBUG] Timestamp range: {start_ms} to {end_ms}")
+            sys.stdout.flush()
 
             # Resolve context based on report type
             if report_type == "space":
@@ -1261,6 +1361,444 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     return {"error": "space_name required for space report"}
 
                 # Get space report with ALL tasks (we'll filter time entries, not tasks)
+                print(f"[PROGRESS] Step 1/5: Resolving space '{space_name}'...")
+                sys.stdout.flush()
+
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                space_id = None
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+                # Get all lists in space
+                print("[PROGRESS] Step 2/5: Fetching space structure...")
+                sys.stdout.flush()
+
+                list_ids = []
+                resp, _ = _api_call("GET", f"/space/{space_id}/list")
+                if resp:
+                    list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
+                resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if resp2:
+                    for folder in resp2.get("folders", []):
+                        list_ids.extend([lst["id"] for lst in folder.get("lists", [])])
+
+                # Fetch ALL tasks (we need them to get their time entries)
+                print(
+                    f"[PROGRESS] Step 3/5: Fetching tasks from {len(list_ids)} lists..."
+                )
+                sys.stdout.flush()
+
+                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
+
+                print(f"[PROGRESS] Found {len(all_tasks)} total tasks in space")
+                sys.stdout.flush()
+
+                # AUTO-ASYNC: Prevent timeout issues on large datasets
+                if len(all_tasks) >= 300 and not job_id:
+                    print(
+                        f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
+                    )
+                    sys.stdout.flush()
+                    # Recursively call with async_job=True
+                    return get_weekly_time_report(
+                        report_type=report_type,
+                        space_name=space_name,
+                        week_selector=week_selector,
+                        week_start=week_start,
+                        week_end=week_end,
+                        allow_multi_week=allow_multi_week,
+                        async_job=True,
+                    )
+
+                # Fetch time entries for all tasks
+                print(
+                    f"[PROGRESS] Step 4/5: Fetching time entries for {len(all_tasks)} tasks..."
+                )
+                print(
+                    "[PROGRESS] This may take a few minutes for large datasets. Please wait..."
+                )
+                sys.stdout.flush()
+
+                task_ids = [t["id"] for t in all_tasks]
+                time_entries_map = fetch_all_time_entries_batch(task_ids)
+
+                print(
+                    "[PROGRESS] Step 5/5: Processing time entries and building report..."
+                )
+                sys.stdout.flush()
+
+                # Calculate per-task metrics (including est_direct) so we can
+                # attribute estimates to members for tasks that have time in range
+                metrics = _calculate_task_metrics(all_tasks)
+
+                # Build report by filtering time entries within date range
+                report = {}
+                tasks_with_time_in_range = 0
+
+                for t in all_tasks:
+                    task_id = t["id"]
+                    time_entries = time_entries_map.get(task_id, [])
+
+                    if not time_entries:
+                        continue
+
+                    # Filter time entries by date range
+                    time_in_range, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            time_entries, start_ms, end_ms
+                        )
+                    )
+
+                    if time_in_range == 0:
+                        continue
+
+                    tasks_with_time_in_range += 1
+
+                    # Split time among assignees and also add estimated time
+                    assignees = [u["username"] for u in t.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    time_per_assignee = time_in_range // len(assignees)
+
+                    # Pull task-level direct estimate (0 if absent)
+                    est_direct = metrics.get(task_id, {}).get("est_direct", 0)
+                    est_per_assignee = est_direct // len(assignees) if est_direct else 0
+
+                    for member in assignees:
+                        r = report.setdefault(
+                            member,
+                            {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals": [],
+                            },
+                        )
+                        r["tasks"] += 1
+                        r["time_tracked"] += time_per_assignee
+                        r["time_estimate"] += est_per_assignee
+                        r["intervals"].extend(filtered_intervals)
+
+                formatted = {
+                    member: {
+                        "tasks": data["tasks"],
+                        "time_tracked": data["time_tracked"],
+                        "human_tracked": _format_duration(data["time_tracked"]),
+                        "time_estimate": data.get("time_estimate", 0),
+                        "human_est": _format_duration(data.get("time_estimate", 0)),
+                        "intervals_count": len(data["intervals"]),
+                    }
+                    for member, data in report.items()
+                }
+
+                return {
+                    "report_type": "space_weekly",
+                    "space_name": space_name,
+                    "week_start": week_start,
+                    "week_end": week_end,
+                    "num_weeks": num_weeks,
+                    "period_description": f"{num_weeks} week(s) from {week_start} to {week_end}",
+                    "report": formatted,
+                    "total_tasks_in_space": len(all_tasks),
+                    "tasks_with_time_in_range": tasks_with_time_in_range,
+                }
+
+            elif report_type == "team_member":
+                if not project and not list_id:
+                    return {"error": "Provide project or list_id"}
+
+                print("[PROGRESS] Step 1/5: Resolving project/list...")
+                sys.stdout.flush()
+
+                list_ids = _resolve_to_list_ids(project, list_id)
+                if not list_ids:
+                    return {"error": "No context found"}
+
+                # Fetch ALL tasks (we need them to get their time entries)
+                print(
+                    f"[PROGRESS] Step 2/5: Fetching tasks from {len(list_ids)} lists..."
+                )
+                sys.stdout.flush()
+
+                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
+
+                print(f"[PROGRESS] Found {len(all_tasks)} total tasks")
+                sys.stdout.flush()
+
+                # AUTO-ASYNC: Prevent timeout issues on large datasets
+                if len(all_tasks) >= 300 and not job_id:
+                    print(
+                        f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
+                    )
+                    sys.stdout.flush()
+                    # Recursively call with async_job=True
+                    return get_weekly_time_report(
+                        report_type=report_type,
+                        project=project,
+                        list_id=list_id,
+                        week_selector=week_selector,
+                        week_start=week_start,
+                        week_end=week_end,
+                        allow_multi_week=allow_multi_week,
+                        async_job=True,
+                    )
+
+                # Fetch time entries for all tasks
+                print(
+                    f"[PROGRESS] Step 3/5: Fetching time entries for {len(all_tasks)} tasks..."
+                )
+                print(
+                    "[PROGRESS] This may take a few minutes for large datasets. Please wait..."
+                )
+                sys.stdout.flush()
+
+                task_ids = [t["id"] for t in all_tasks]
+                time_entries_map = fetch_all_time_entries_batch(task_ids)
+
+                print("[PROGRESS] Step 4/5: Processing time entries...")
+                sys.stdout.flush()
+
+                # Calculate per-task metrics (including est_direct) so we can
+                # attribute estimates to members for tasks that have time in range
+                metrics = _calculate_task_metrics(all_tasks)
+
+                # Build report by filtering time entries within date range
+                report = {}
+                tasks_with_time_in_range = 0
+
+                for t in all_tasks:
+                    task_id = t["id"]
+                    time_entries = time_entries_map.get(task_id, [])
+
+                    if not time_entries:
+                        continue
+
+                    # Filter time entries by date range
+                    time_in_range, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            time_entries, start_ms, end_ms
+                        )
+                    )
+
+                    if time_in_range == 0:
+                        continue
+
+                    tasks_with_time_in_range += 1
+
+                    # Split time among assignees and also add estimated time
+                    assignees = [u["username"] for u in t.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    time_per_assignee = time_in_range // len(assignees)
+
+                    # Pull task-level direct estimate (0 if absent)
+                    est_direct = metrics.get(task_id, {}).get("est_direct", 0)
+                    est_per_assignee = est_direct // len(assignees) if est_direct else 0
+
+                    for member in assignees:
+                        r = report.setdefault(
+                            member,
+                            {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals": [],
+                            },
+                        )
+                        r["tasks"] += 1
+                        r["time_tracked"] += time_per_assignee
+                        r["time_estimate"] += est_per_assignee
+                        r["intervals"].extend(filtered_intervals)
+
+                formatted = {
+                    member: {
+                        "tasks": data["tasks"],
+                        "time_tracked": data["time_tracked"],
+                        "human_tracked": _format_duration(data["time_tracked"]),
+                        "time_estimate": data.get("time_estimate", 0),
+                        "human_est": _format_duration(data.get("time_estimate", 0)),
+                        "intervals_count": len(data["intervals"]),
+                    }
+                    for member, data in report.items()
+                }
+
+                print("[PROGRESS] Step 5/5: Report complete!")
+                sys.stdout.flush()
+
+                return {
+                    "report_type": "team_member_weekly",
+                    "project": project or "Direct list",
+                    "week_start": week_start,
+                    "week_end": week_end,
+                    "num_weeks": num_weeks,
+                    "period_description": f"{num_weeks} week(s) from {week_start} to {week_end}",
+                    "report": formatted,
+                    "total_tasks": len(all_tasks),
+                    "tasks_with_time_in_range": tasks_with_time_in_range,
+                }
+
+            else:
+                return {"error": f"Invalid report_type: {report_type}"}
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_weekly_time_report: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_weekly_time_report_status(job_id: str) -> dict:
+        """Return status for an async weekly report job."""
+        j = JOBS.get(job_id)
+        if not j:
+            return {"error": "job_id not found"}
+        return {"job_id": job_id, "status": j.get("status"), "error": j.get("error")}
+
+    @mcp.tool()
+    def get_weekly_time_report_result(job_id: str) -> dict:
+        """Return result for finished async weekly report job."""
+        j = JOBS.get(job_id)
+        if not j:
+            return {"error": "job_id not found"}
+        if j.get("status") != "finished":
+            return {"status": j.get("status"), "message": "Result not ready"}
+        return {"status": "finished", "result": j.get("result")}
+
+    @mcp.tool()
+    def get_space_weekly_report(
+        space_name: str,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+        allow_multi_week: bool = False,
+        async_job: bool = False,
+    ) -> dict:
+        """Space-level weekly time report with automatic async support for large spaces.
+
+        ⚠️ RECOMMENDED: Use async_job=True for spaces with 300+ tasks to avoid timeouts.
+
+        Args:
+            space_name: Name of the ClickUp space
+            week_selector: "current", "previous", "N-weeks-ago", "YYYY-MM-DD", "YYYY-WNN"
+            week_start: Explicit week start (YYYY-MM-DD), Monday required
+            week_end: Explicit week end (YYYY-MM-DD), Sunday required
+            allow_multi_week: Enable multi-week ranges (2-weeks, last-2-weeks, month)
+            async_job: Run in background, returns job_id (use for 300+ tasks)
+
+        Returns (sync mode):
+            {
+                "report_type": "space_weekly",
+                "space_name": "...",
+                "week_start": "2026-02-09",
+                "week_end": "2026-02-15",
+                "report": {
+                    "Team Member": {
+                        "tasks": 12,
+                        "time_tracked": 71880000,
+                        "human_tracked": "19h 58m",
+                        ...
+                    }
+                }
+            }
+
+        Returns (async mode):
+            {
+                "job_id": "abc-123-...",
+                "status": "started",
+                "message": "Report running in background..."
+            }
+
+        Usage (async):
+            1. Start: get_space_weekly_report(..., async_job=True) → get job_id
+            2. Poll: get_weekly_time_report_status(job_id) until status="finished"
+            3. Fetch: get_weekly_time_report_result(job_id) → get report
+
+        Feature Parity with Folder Reports:
+            ✓ Same week selection logic (current, previous, custom dates)
+            ✓ Same time filtering (by time entry intervals)
+            ✓ Same team member grouping
+            ✓ Same human-readable format (Xh Ym)
+            ✓ Async job support (background processing)
+        """
+        return get_weekly_time_report(
+            report_type="space",
+            space_name=space_name,
+            week_selector=week_selector,
+            week_start=week_start,
+            week_end=week_end,
+            allow_multi_week=allow_multi_week,
+            async_job=async_job,
+        )
+
+    @mcp.tool()
+    def get_weekly_time_report_detailed(
+        report_type: str = "team_member",
+        project: Optional[str] = None,
+        space_name: Optional[str] = None,
+        list_id: Optional[str] = None,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+        timezone_offset: str = "+05:30",  # IST by default
+        group_by_date: bool = True,  # Group intervals by date for cleaner output
+    ) -> dict:
+
+        try:
+            from app.clickup import fetch_all_time_entries_batch
+            from app.mcp.status_helpers import (
+                format_time_entry_interval,
+                format_duration_simple,
+                group_intervals_by_date,
+            )
+
+            # ================================================================
+            # STEP 1: Calculate week boundaries (same as original)
+            # ================================================================
+            if week_start and week_end:
+                is_valid, error_msg = is_valid_monday_sunday_range(week_start, week_end)
+                if not is_valid:
+                    return {"error": f"Invalid week dates: {error_msg}"}
+            elif week_selector:
+                try:
+                    week_start, week_end = parse_week_input(week_selector)
+                except ValueError as e:
+                    return {"error": f"Invalid week_selector: {str(e)}"}
+            else:
+                week_start, week_end = get_current_week_dates()
+
+            start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
+
+            print(
+                f"[DEBUG] Detailed report: {week_start} to {week_end} ({timezone_offset})"
+            )
+
+            # ================================================================
+            # STEP 2: Resolve lists based on report type
+            # ================================================================
+            if report_type == "team_member":
+                if not project and not list_id:
+                    return {
+                        "error": "Provide project or list_id for team_member report"
+                    }
+                list_ids = _resolve_to_list_ids(project, list_id)
+                if not list_ids:
+                    return {"error": "No lists found for project/list_id"}
+
+            elif report_type == "space":
+                if not space_name:
+                    return {"error": "space_name required for space report"}
+
+                # Get space lists
                 team_id = _get_team_id()
                 spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
                 if not spaces_data:
@@ -1280,160 +1818,243 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 resp, _ = _api_call("GET", f"/space/{space_id}/list")
                 if resp:
                     list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
+
                 resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
                 if resp2:
                     for folder in resp2.get("folders", []):
                         list_ids.extend([lst["id"] for lst in folder.get("lists", [])])
 
-                # Fetch ALL tasks (we need them to get their time entries)
-                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
-
-                print(f"[DEBUG] Found {len(all_tasks)} total tasks in space")
-
-                # Fetch time entries for all tasks
-                task_ids = [t["id"] for t in all_tasks]
-                time_entries_map = fetch_all_time_entries_batch(task_ids)
-
-                # Build report by filtering time entries within date range
-                report = {}
-                tasks_with_time_in_range = 0
-
-                for t in all_tasks:
-                    task_id = t["id"]
-                    time_entries = time_entries_map.get(task_id, [])
-
-                    if not time_entries:
-                        continue
-
-                    # Filter time entries by date range
-                    time_in_range, filtered_intervals = (
-                        filter_time_entries_by_date_range(
-                            time_entries, start_ms, end_ms
-                        )
-                    )
-
-                    if time_in_range == 0:
-                        continue
-
-                    tasks_with_time_in_range += 1
-
-                    # Split time among assignees
-                    assignees = [u["username"] for u in t.get("assignees", [])] or [
-                        "Unassigned"
-                    ]
-                    time_per_assignee = time_in_range // len(assignees)
-
-                    for member in assignees:
-                        r = report.setdefault(
-                            member, {"tasks": 0, "time_tracked": 0, "intervals": []}
-                        )
-                        r["tasks"] += 1
-                        r["time_tracked"] += time_per_assignee
-                        r["intervals"].extend(filtered_intervals)
-
-                formatted = {
-                    member: {
-                        "tasks": data["tasks"],
-                        "time_tracked": data["time_tracked"],
-                        "human_tracked": _format_duration(data["time_tracked"]),
-                        "intervals_count": len(data["intervals"]),
-                    }
-                    for member, data in report.items()
-                }
-
-                return {
-                    "report_type": "space_weekly",
-                    "space_name": space_name,
-                    "week_start": week_start,
-                    "week_end": week_end,
-                    "report": formatted,
-                    "total_tasks_in_space": len(all_tasks),
-                    "tasks_with_time_in_range": tasks_with_time_in_range,
-                }
-
-            elif report_type == "team_member":
-                if not project and not list_id:
-                    return {"error": "Provide project or list_id"}
-
-                list_ids = _resolve_to_list_ids(project, list_id)
                 if not list_ids:
-                    return {"error": "No context found"}
-
-                # Fetch ALL tasks (we need them to get their time entries)
-                all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
-
-                print(f"[DEBUG] Found {len(all_tasks)} total tasks")
-
-                # Fetch time entries for all tasks
-                task_ids = [t["id"] for t in all_tasks]
-                time_entries_map = fetch_all_time_entries_batch(task_ids)
-
-                # Build report by filtering time entries within date range
-                report = {}
-                tasks_with_time_in_range = 0
-
-                for t in all_tasks:
-                    task_id = t["id"]
-                    time_entries = time_entries_map.get(task_id, [])
-
-                    if not time_entries:
-                        continue
-
-                    # Filter time entries by date range
-                    time_in_range, filtered_intervals = (
-                        filter_time_entries_by_date_range(
-                            time_entries, start_ms, end_ms
-                        )
-                    )
-
-                    if time_in_range == 0:
-                        continue
-
-                    tasks_with_time_in_range += 1
-
-                    # Split time among assignees
-                    assignees = [u["username"] for u in t.get("assignees", [])] or [
-                        "Unassigned"
-                    ]
-                    time_per_assignee = time_in_range // len(assignees)
-
-                    for member in assignees:
-                        r = report.setdefault(
-                            member, {"tasks": 0, "time_tracked": 0, "intervals": []}
-                        )
-                        r["tasks"] += 1
-                        r["time_tracked"] += time_per_assignee
-                        r["intervals"].extend(filtered_intervals)
-
-                formatted = {
-                    member: {
-                        "tasks": data["tasks"],
-                        "time_tracked": data["time_tracked"],
-                        "human_tracked": _format_duration(data["time_tracked"]),
-                        "intervals_count": len(data["intervals"]),
-                    }
-                    for member, data in report.items()
+                    return {"error": f"No lists found in space '{space_name}'"}
+            else:
+                return {
+                    "error": f"Invalid report_type: '{report_type}'. Use 'team_member' or 'space'"
                 }
 
+            # ================================================================
+            # STEP 3: Fetch all tasks and their time entries
+            # ================================================================
+            all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
+            print(f"[DEBUG] Found {len(all_tasks)} total tasks")
+
+            if not all_tasks:
                 return {
-                    "report_type": "team_member_weekly",
-                    "project": project or "Direct list",
                     "week_start": week_start,
                     "week_end": week_end,
-                    "report": formatted,
-                    "total_tasks": len(all_tasks),
-                    "tasks_with_time_in_range": tasks_with_time_in_range,
+                    "report": {},
+                    "message": "No tasks found",
                 }
 
-            else:
-                return {"error": f"Invalid report_type: {report_type}"}
+            task_ids = [t["id"] for t in all_tasks]
+            time_entries_map = fetch_all_time_entries_batch(task_ids)
+
+            # ================================================================
+            # STEP 4: Build detailed report by person
+            # ================================================================
+            report = {}
+
+            for task in all_tasks:
+                task_id = task["id"]
+                task_name = task.get("name", "Unnamed Task")
+                task_url = task.get("url", f"https://app.clickup.com/t/{task_id}")
+                task_status = task.get("status", {})
+                status_name = (
+                    task_status.get("status", "Unknown")
+                    if isinstance(task_status, dict)
+                    else "Unknown"
+                )
+
+                time_entries = time_entries_map.get(task_id, [])
+                if not time_entries:
+                    continue
+
+                # Filter and format intervals for this task
+                task_intervals_in_range = []
+                task_time_in_range = 0
+
+                for entry in time_entries:
+                    for interval in entry.get("intervals", []):
+                        interval_start = interval.get("start")
+                        if not interval_start:
+                            continue
+
+                        try:
+                            interval_start = int(interval_start)
+                        except (ValueError, TypeError):
+                            continue
+
+                        # Check if interval is within date range
+                        if start_ms <= interval_start <= end_ms:
+                            duration = interval.get("time", 0)
+                            task_time_in_range += int(duration)
+
+                            # Format the interval with timestamps
+                            formatted_interval = format_time_entry_interval(
+                                interval, timezone_offset
+                            )
+                            task_intervals_in_range.append(formatted_interval)
+
+                if task_time_in_range == 0:
+                    continue  # Skip tasks with no time in this date range
+
+                # Assign to team members
+                assignees = [u["username"] for u in task.get("assignees", [])] or [
+                    "Unassigned"
+                ]
+
+                for member in assignees:
+                    # Initialize member in report if not exists
+                    if member not in report:
+                        report[member] = {
+                            "summary": {
+                                "total_time_tracked_ms": 0,
+                                "total_tasks": 0,
+                                "total_intervals": 0,
+                            },
+                            "tasks": [],
+                        }
+
+                    # Group intervals by date if requested
+                    if group_by_date and task_intervals_in_range:
+                        intervals_by_date = group_intervals_by_date(
+                            task_intervals_in_range
+                        )
+                    else:
+                        intervals_by_date = None
+
+                    # Add task to member's report
+                    task_entry = {
+                        "task_id": task_id,
+                        "task_name": task_name,
+                        "task_url": task_url,
+                        "task_status": status_name,
+                        "time_on_task_ms": task_time_in_range,
+                        "time_on_task": format_duration_simple(task_time_in_range),
+                        "intervals_count": len(task_intervals_in_range),
+                    }
+
+                    # Add grouped or raw intervals
+                    if intervals_by_date:
+                        task_entry["by_date"] = intervals_by_date
+                    else:
+                        task_entry["time_entries"] = task_intervals_in_range
+
+                    report[member]["tasks"].append(task_entry)
+
+                    # Update summary
+                    report[member]["summary"]["total_time_tracked_ms"] += (
+                        task_time_in_range
+                    )
+                    report[member]["summary"]["total_tasks"] += 1
+                    report[member]["summary"]["total_intervals"] += len(
+                        task_intervals_in_range
+                    )
+
+            # ================================================================
+            # STEP 5: Format summaries and sort tasks
+            # ================================================================
+            for member, data in report.items():
+                # Add human-readable total
+                data["summary"]["total_time_tracked"] = format_duration_simple(
+                    data["summary"]["total_time_tracked_ms"]
+                )
+
+                # Sort tasks by time tracked (most time first)
+                data["tasks"].sort(key=lambda x: x["time_on_task_ms"], reverse=True)
+
+            return {
+                "report_type": f"{report_type}_detailed",
+                "week_start": week_start,
+                "week_end": week_end,
+                "timezone": timezone_offset,
+                "report": report,
+                "total_people": len(report),
+                "note": "Time entries are filtered by when they were logged, not when tasks were updated",
+            }
 
         except Exception as e:
             import traceback
 
-            print(f"[DEBUG] Error in get_weekly_time_report: {e}")
+            print(f"[DEBUG] Error in get_weekly_time_report_detailed: {e}")
             print(traceback.format_exc())
-            return {"error": str(e)}
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+    # ============================================================================
+    # CONVENIENCE WRAPPER: Get task list for a specific person
+    # ============================================================================
+
+    @mcp.tool()
+    def get_person_tasks_with_time(
+        person_name: str,
+        project: Optional[str] = None,
+        space_name: Optional[str] = None,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+    ) -> dict:
+        """
+        Get all tasks a specific person worked on with timestamps.
+
+        This is a convenience wrapper around get_weekly_time_report_detailed
+        that filters to show only one person's tasks.
+
+        Args:
+            person_name: Name of the team member (e.g., "Henish Patel")
+            project: Project name
+            space_name: Space name
+            week_selector: Week selector ("previous", "2-weeks-ago", etc.)
+            week_start: Week start date (YYYY-MM-DD)
+            week_end: Week end date (YYYY-MM-DD)
+
+        Returns:
+            Filtered report showing only the specified person's tasks
+
+        Example:
+            get_person_tasks_with_time(
+                person_name="Henish Patel",
+                project="Luminique",
+                week_selector="previous"
+            )
+        """
+        # Determine report type
+        if project:
+            report_type = "team_member"
+        elif space_name:
+            report_type = "space"
+        else:
+            return {"error": "Provide either project or space_name"}
+
+        # Get detailed report
+        full_report = get_weekly_time_report_detailed(
+            report_type=report_type,
+            project=project,
+            space_name=space_name,
+            week_selector=week_selector,
+            week_start=week_start,
+            week_end=week_end,
+        )
+
+        if "error" in full_report:
+            return full_report
+
+        # Filter to person
+        person_data = full_report.get("report", {}).get(person_name)
+
+        if not person_data:
+            available_people = list(full_report.get("report", {}).keys())
+            return {
+                "error": f"Person '{person_name}' not found in report",
+                "available_people": available_people,
+                "hint": "Check the spelling or try one of the available names",
+            }
+
+        return {
+            "person_name": person_name,
+            "week_start": full_report["week_start"],
+            "week_end": full_report["week_end"],
+            "summary": person_data["summary"],
+            "tasks": person_data["tasks"],
+        }
 
     @mcp.tool()
     def get_task_status_distribution(

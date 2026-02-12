@@ -1,3 +1,7 @@
+# Small startup delay to avoid race with external validators
+import time
+import uvicorn
+
 from fastmcp import FastMCP
 # from app.logging_config import logger  #optional - your existing logger
 
@@ -23,9 +27,25 @@ register_project_intelligence_tools(mcp)
 register_sync_mapping_tools(mcp)
 
 if __name__ == "__main__":
-    print("Starting ClickUp MCP Server...")
-    mcp.run(
-        transport="sse",  # SSE transport for MCP client compatibility
+    import uvicorn
+
+    print("Starting ClickUp MCP Server in 2s to allow initialization...")
+    time.sleep(2)
+
+    # Create the ASGI app with custom timeout settings
+    app = mcp._get_server_app(transport="sse")
+
+    # Run with uvicorn directly to control timeout settings
+    config = uvicorn.Config(
+        app,
         host="0.0.0.0",
         port=8001,
+        timeout_keep_alive=300,  # 5 minutes keep-alive
+        timeout_graceful_shutdown=30,
+        log_level="info",
     )
+
+    server = uvicorn.Server(config)
+    print("🚀 MCP Server ready on http://0.0.0.0:8001")
+    print("⏱️  Timeout: 5 minutes for long-running operations")
+    server.run()

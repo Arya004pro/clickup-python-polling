@@ -31,6 +31,32 @@ def date_to_timestamp_ms(date_str: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def get_day_of_week_name(date_str: str) -> str:
+    """Get the day of week name for a given date."""
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    return date_obj.strftime("%A")
+
+
+def is_valid_monday_sunday_range(week_start: str, week_end: str) -> Tuple[bool, str]:
+    """Check if a date range is a valid Monday-Sunday week."""
+    try:
+        start_date = datetime.strptime(week_start, "%Y-%m-%d")
+        end_date = datetime.strptime(week_end, "%Y-%m-%d")
+
+        if start_date.weekday() != 0:
+            return False, f"week_start must be Monday, got {start_date.strftime('%A')}"
+
+        if end_date.weekday() != 6:
+            return False, f"week_end must be Sunday, got {end_date.strftime('%A')}"
+
+        if (end_date - start_date).days != 6:
+            return False, f"Invalid range: {(end_date - start_date).days} days apart"
+
+        return True, ""
+    except ValueError as e:
+        return False, f"Invalid date format: {str(e)}"
+
+
 def date_range_to_timestamps(start_date: str, end_date: str) -> tuple[int, int]:
     """
     Convert date range to timestamp range in milliseconds.
@@ -63,7 +89,8 @@ def get_current_week_dates() -> tuple[str, str]:
     Example:
         get_current_week_dates() -> ("2024-01-15", "2024-01-21")
     """
-    today = datetime.now()
+    # Use UTC to match date_to_timestamp_ms behavior
+    today = datetime.now(timezone.utc)  # ✓ Now uses UTC
     monday = today - timedelta(days=today.weekday())
     sunday = monday + timedelta(days=6)
     return monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")
@@ -79,7 +106,8 @@ def get_previous_week_dates() -> Tuple[str, str]:
     Example:
         get_previous_week_dates() -> ("2024-01-08", "2024-01-14")
     """
-    today = datetime.now()
+    # Use UTC to match date_to_timestamp_ms behavior
+    today = datetime.now(timezone.utc)  # ✓ Now uses UTC
     last_monday = today - timedelta(days=today.weekday() + 7)
     last_sunday = last_monday + timedelta(days=6)
     return last_monday.strftime("%Y-%m-%d"), last_sunday.strftime("%Y-%m-%d")
@@ -100,7 +128,8 @@ def get_week_dates_from_offset(weeks_ago: int = 0) -> Tuple[str, str]:
         get_week_dates_from_offset(1) -> Last week ("2024-01-08", "2024-01-14")
         get_week_dates_from_offset(2) -> 2 weeks ago ("2024-01-01", "2024-01-07")
     """
-    today = datetime.now()
+    # Use UTC to match date_to_timestamp_ms behavior
+    today = datetime.now(timezone.utc)  # ✓ Now uses UTC
     target_week_monday = today - timedelta(days=today.weekday() + (weeks_ago * 7))
     target_week_sunday = target_week_monday + timedelta(days=6)
     return (
@@ -153,7 +182,9 @@ def get_week_dates_from_week_number(year: int, week_number: int) -> Tuple[str, s
     return target_monday.strftime("%Y-%m-%d"), target_sunday.strftime("%Y-%m-%d")
 
 
-def parse_week_input(week_input: str) -> Tuple[str, str]:
+def parse_week_input(
+    week_input: str, allow_multi_week: bool = False
+) -> Tuple[str, str]:
     """
     Smart parser for various week input formats.
 
@@ -163,9 +194,13 @@ def parse_week_input(week_input: str) -> Tuple[str, str]:
     - "N-weeks-ago" → N weeks before current (e.g., "2-weeks-ago")
     - "YYYY-MM-DD" → Week containing that date
     - "YYYY-WNN" → ISO week number (e.g., "2026-W03")
+    - "N-weeks" → N weeks starting current Monday (if allow_multi_week=True)
+    - "last-N-weeks" → Last N weeks ending last Sunday (if allow_multi_week=True)
+    - "month" → 4 weeks (if allow_multi_week=True)
 
     Args:
         week_input: Week specification string
+        allow_multi_week: If True, allows multi-week range inputs
 
     Returns:
         Tuple of (monday_date, sunday_date) in YYYY-MM-DD format
@@ -179,8 +214,29 @@ def parse_week_input(week_input: str) -> Tuple[str, str]:
         parse_week_input("2-weeks-ago") -> ("2026-01-27", "2026-02-02")
         parse_week_input("2026-01-15") -> ("2026-01-12", "2026-01-18")
         parse_week_input("2026-W03") -> ("2026-01-12", "2026-01-18")
+        parse_week_input("3-weeks", allow_multi_week=True) -> 3 weeks from Monday
+        parse_week_input("month", allow_multi_week=True) -> 4 weeks from Monday
     """
     week_input = week_input.lower().strip()
+
+    # Try multi-week formats first if enabled
+    if allow_multi_week:
+        # Check for multi-week patterns
+        multi_week_patterns = [
+            "month",
+            "last-month",
+            "this-month",
+            "previous-month",
+            "-weeks",
+            "last-",
+            "-weeks-current",
+            "-weeks-previous",
+        ]
+        if any(pattern in week_input for pattern in multi_week_patterns):
+            try:
+                return parse_multi_week_input(week_input)
+            except ValueError:
+                pass  # Fall through to single week parsing
 
     # Current week
     if week_input in ["current", "this", "this week"]:
@@ -214,51 +270,189 @@ def parse_week_input(week_input: str) -> Tuple[str, str]:
     if len(week_input) == 10 and week_input.count("-") == 2:
         try:
             datetime.strptime(week_input, "%Y-%m-%d")
-            return get_week_dates_from_date(week_input)
+            monday, sunday = get_week_dates_from_date(week_input)
+            print(f"[DEBUG] Parsed '{week_input}' to week: {monday} - {sunday}")
+            import sys
+
+            sys.stdout.flush()
+            return monday, sunday
         except ValueError:
             raise ValueError(f"Invalid date format: {week_input}. Expected: YYYY-MM-DD")
 
-    raise ValueError(
+    error_msg = (
         f"Unrecognized week format: {week_input}. "
         f"Supported: 'current', 'previous', 'N-weeks-ago', 'YYYY-MM-DD', 'YYYY-WNN'"
     )
+    if allow_multi_week:
+        error_msg += ", 'N-weeks', 'last-N-weeks', 'month', 'last-month'"
+
+    raise ValueError(error_msg)
 
 
-def validate_week_dates(week_start: str, week_end: str) -> bool:
+def validate_week_dates(
+    week_start: str, week_end: str, allow_multi_week: bool = False
+) -> bool:
     """
-    Validate that week_start is Monday and week_end is Sunday, exactly 6 days apart.
+    Validate week date range.
 
     Args:
         week_start: Start date in YYYY-MM-DD format
         week_end: End date in YYYY-MM-DD format
+        allow_multi_week: If True, allows ranges spanning multiple weeks (must still be Monday-Sunday)
 
     Returns:
         True if valid
 
     Raises:
-        ValueError: If validation fails
-
-    Example:
-        validate_week_dates("2026-01-12", "2026-01-18") -> True
-        validate_week_dates("2026-01-13", "2026-01-19") -> ValueError (not Monday-Sunday)
+        ValueError: If dates are invalid
     """
     start_date = datetime.strptime(week_start, "%Y-%m-%d")
     end_date = datetime.strptime(week_end, "%Y-%m-%d")
 
-    if start_date.weekday() != 0:  # Monday = 0
+    # Get day names for better error messages
+    start_day = start_date.strftime("%A")
+    end_day = end_date.strftime("%A")
+
+    if start_date.weekday() != 0:
         raise ValueError(
-            f"week_start must be a Monday, got {start_date.strftime('%A')}"
+            f"week_start must be a Monday, got {start_day}. Date provided: {week_start}"
         )
 
-    if end_date.weekday() != 6:  # Sunday = 6
-        raise ValueError(f"week_end must be a Sunday, got {end_date.strftime('%A')}")
-
-    if (end_date - start_date).days != 6:
+    if end_date.weekday() != 6:
         raise ValueError(
-            f"week_end must be 6 days after week_start, got {(end_date - start_date).days} days"
+            f"week_end must be a Sunday, got {end_day}. Date provided: {week_end}"
         )
+
+    days_diff = (end_date - start_date).days
+
+    if allow_multi_week:
+        # For multi-week, check that it's a multiple of 7 days (full weeks)
+        if (days_diff + 1) % 7 != 0:
+            raise ValueError(
+                f"Multi-week range must span complete weeks (multiples of 7 days), got {days_diff + 1} days"
+            )
+        if days_diff < 6:
+            raise ValueError(f"Date range too short, got {days_diff + 1} days")
+    else:
+        # Single week validation
+        if days_diff != 6:
+            raise ValueError(
+                f"week_end must be 6 days after week_start, got {days_diff} days"
+            )
 
     return True
+
+
+def get_multi_week_range(
+    num_weeks: int, week_selector: str = "current"
+) -> Tuple[str, str]:
+    """
+    Get a date range spanning multiple weeks.
+
+    Args:
+        num_weeks: Number of weeks to include (1-8)
+        week_selector: Starting point - "current", "previous", or "N-weeks-ago"
+
+    Returns:
+        Tuple of (start_monday, end_sunday) spanning num_weeks
+
+    Examples:
+        get_multi_week_range(2, "current") -> Current week + next week
+        get_multi_week_range(3, "previous") -> Last 3 weeks
+        get_multi_week_range(4, "current") -> Current + next 3 weeks (month)
+    """
+    if num_weeks < 1 or num_weeks > 8:
+        raise ValueError("num_weeks must be between 1 and 8")
+
+    # Get the base week
+    if week_selector in ["current", "this"]:
+        start_monday, _ = get_current_week_dates()
+    elif week_selector in ["previous", "last"]:
+        start_monday, _ = get_previous_week_dates()
+    elif week_selector.endswith("-weeks-ago") or week_selector.endswith("-week-ago"):
+        weeks_ago = int(week_selector.split("-")[0])
+        start_monday, _ = get_week_dates_from_offset(weeks_ago)
+    else:
+        # Try to parse as date
+        start_monday, _ = parse_week_input(week_selector)
+
+    # Calculate end date by adding (num_weeks - 1) * 7 days, then adding 6 more for Sunday
+    start_date = datetime.strptime(start_monday, "%Y-%m-%d")
+    end_date = start_date + timedelta(days=(num_weeks * 7) - 1)
+
+    return start_monday, end_date.strftime("%Y-%m-%d")
+
+
+def parse_multi_week_input(week_input: str) -> Tuple[str, str]:
+    """
+    Parse multi-week input formats.
+
+    Supported formats:
+    - "2-weeks" or "2-weeks-current" → Current week + next week (2 weeks total)
+    - "3-weeks-previous" → Last 3 weeks ending last Sunday
+    - "4-weeks" or "month" → 4 weeks starting from current week
+    - "last-2-weeks" → Last 2 weeks ending last Sunday
+    - "last-month" → Last 4 weeks ending last Sunday
+
+    Args:
+        week_input: Multi-week specification string
+
+    Returns:
+        Tuple of (monday_start, sunday_end) spanning the period
+
+    Examples:
+        parse_multi_week_input("2-weeks") -> 2 weeks starting this Monday
+        parse_multi_week_input("last-2-weeks") -> Previous 2 weeks ending last Sunday
+        parse_multi_week_input("month") -> 4 weeks starting this Monday
+    """
+    week_input = week_input.lower().strip()
+
+    # "month" or "4-weeks" starting current week
+    if week_input in ["month", "this-month"]:
+        return get_multi_week_range(4, "current")
+
+    # "last-month" - 4 weeks ending last Sunday
+    if week_input in ["last-month", "previous-month"]:
+        # Get 4 weeks starting from 3 weeks ago to include last week
+        start_monday, _ = get_week_dates_from_offset(3)
+        end_monday, end_sunday = get_previous_week_dates()
+        return start_monday, end_sunday
+
+    # "N-weeks" format - N weeks starting current Monday
+    if week_input.endswith("-weeks") or week_input.endswith("-week"):
+        parts = week_input.split("-")
+        try:
+            num_weeks = int(parts[0])
+            return get_multi_week_range(num_weeks, "current")
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid multi-week format: {week_input}")
+
+    # "last-N-weeks" format
+    if week_input.startswith("last-"):
+        parts = week_input[5:].split("-")  # Remove "last-" prefix
+        try:
+            num_weeks = int(parts[0])
+            # Start from (num_weeks - 1) weeks ago and end last Sunday
+            start_monday, _ = get_week_dates_from_offset(num_weeks - 1)
+            _, end_sunday = get_previous_week_dates()
+            return start_monday, end_sunday
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid last-N-weeks format: {week_input}")
+
+    # "N-weeks-current" or "N-weeks-previous"
+    if "-weeks-" in week_input:
+        parts = week_input.split("-")
+        try:
+            num_weeks = int(parts[0])
+            base = parts[2] if len(parts) > 2 else "current"
+            return get_multi_week_range(num_weeks, base)
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid multi-week format: {week_input}")
+
+    raise ValueError(
+        f"Unrecognized multi-week format: {week_input}. "
+        f"Supported: 'N-weeks', 'last-N-weeks', 'month', 'last-month'"
+    )
 
 
 def filter_time_entries_by_date_range(
@@ -290,6 +484,7 @@ def filter_time_entries_by_date_range(
     for entry in time_entries:
         for interval in entry.get("intervals", []):
             interval_start = interval.get("start")
+            interval_end = interval.get("end")
             duration = interval.get("time")
 
             if not interval_start:
@@ -301,12 +496,33 @@ def filter_time_entries_by_date_range(
             except (ValueError, TypeError):
                 continue
 
-            # Check if interval overlaps with date range
-            # Interval is included if it started within the range
-            if start_ms <= interval_start <= end_ms:
-                if duration:
-                    total_ms += int(duration)
-                filtered_intervals.append(interval)
+            # Attempt to obtain interval_end. If missing, try to infer from 'time'.
+            try:
+                interval_end = int(interval_end) if interval_end is not None else None
+            except (ValueError, TypeError):
+                interval_end = None
+
+            if interval_end is None and duration:
+                try:
+                    interval_end = interval_start + int(duration)
+                except (ValueError, TypeError):
+                    interval_end = None
+
+            # If still missing an end, treat as instantaneous (skip)
+            if interval_end is None:
+                continue
+
+            # Compute overlap between [interval_start, interval_end] and [start_ms, end_ms]
+            overlap_start = max(start_ms, interval_start)
+            overlap_end = min(end_ms, interval_end)
+            overlap = max(0, overlap_end - overlap_start)
+
+            if overlap > 0:
+                total_ms += int(overlap)
+                # record the original interval but annotate the effective overlap
+                annotated = dict(interval)
+                annotated["overlap_time"] = int(overlap)
+                filtered_intervals.append(annotated)
 
     return total_ms, filtered_intervals
 
