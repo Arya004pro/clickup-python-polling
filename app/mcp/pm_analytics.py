@@ -2292,121 +2292,114 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            report = {}
-
-            for task in all_tasks:
-                task_id = task["id"]
-
-                # Get time entries for this task
-                task_time_entries = time_entries_map.get(task_id, [])
-
-                # Filter time entries by date range
-                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
-                    task_time_entries, start_ms, end_ms
-                )
-
-                # Skip tasks with no time tracked in this period
-                if total_time_ms == 0:
-                    continue
-
-                # Determine grouping keys
-                if group_by == "assignee":
-                    keys = [u["username"] for u in task.get("assignees", [])] or [
-                        "Unassigned"
-                    ]
-                    # Divide time among assignees
-                    time_per_key = total_time_ms // len(keys)
-                elif group_by == "folder":
-                    list_id = task.get("list", {}).get("id")
-                    folder_name = folder_map.get(list_id, "Folderless")
-                    keys = [folder_name]
-                    time_per_key = total_time_ms
-                else:  # status
-                    status_name = _extract_status_name(task)
-                    keys = [status_name]
-                    time_per_key = total_time_ms
-
-                # Add to report
-                for key in keys:
-                    if key not in report:
-                        report[key] = {
-                            "tasks": 0,
-                            "time_tracked": 0,
-                            "intervals_count": 0,
-                        }
-
-                    report[key]["tasks"] += 1
-                    report[key]["time_tracked"] += time_per_key
-                    report[key]["intervals_count"] += len(filtered_intervals)
-
-            # Format the report with human-readable time
-            formatted = {
-                key: {
-                    **value,
-                    "human_tracked": _format_duration(value["time_tracked"]),
-                    "hours_decimal": _hours_decimal(value["time_tracked"]),
-                }
-                for key, value in report.items()
-            }
-
-            # Calculate totals
-            total_tracked = sum(v["time_tracked"] for v in report.values())
-            total_tasks_with_time = sum(v["tasks"] for v in report.values())
-
-            return {
-                "space_name": space_name,
-                "space_id": space_id,
-                "period_type": period_type,
-                "start_date": start_date,
-                "end_date": end_date,
-                "group_by": group_by,
-                "total_time_tracked": _format_duration(total_tracked),
-                "total_hours_decimal": _hours_decimal(total_tracked),
-                "total_tasks_with_time": total_tasks_with_time,
-                "report": formatted,
-            }
             # Build report grouped by assignee/folder/status, including estimates
+            from app.mcp.status_helpers import (
+                filter_time_entries_by_user_and_date_range,
+            )
+
             report = {}
             metrics = _calculate_task_metrics(all_tasks)
+
             for task in all_tasks:
                 task_id = task["id"]
                 task_time_entries = time_entries_map.get(task_id, [])
-                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
-                    task_time_entries, start_ms, end_ms
-                )
+
                 m = metrics.get(task_id, {})
                 est_total = m.get("est_total", 0)
+
                 if group_by == "assignee":
-                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                    # Get time tracked per user (not split among assignees)
+                    user_time_map = filter_time_entries_by_user_and_date_range(
+                        task_time_entries, start_ms, end_ms
+                    )
+
+                    # Get all assignees for estimate splitting
+                    assignees = task.get("assignees", [])
+                    assignee_usernames = [u["username"] for u in assignees] or [
                         "Unassigned"
                     ]
-                    time_per_key = total_time_ms // len(keys) if keys else 0
-                    est_per_key = est_total // len(keys) if est_total and keys else 0
+                    est_per_assignee = (
+                        est_total // len(assignee_usernames)
+                        if est_total and assignee_usernames
+                        else 0
+                    )
+
+                    # Add tracked time only for users who logged time
+                    for username, time_tracked in user_time_map.items():
+                        if username not in report:
+                            report[username] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[username]["tasks"] += 1
+                        report[username]["time_tracked"] += time_tracked
+                        # Add estimate only if this user is an assignee
+                        if username in assignee_usernames:
+                            report[username]["time_estimate"] += est_per_assignee
+
+                    # For assignees who didn't track time but have estimates
+                    if est_total > 0:
+                        for username in assignee_usernames:
+                            if username not in user_time_map:  # Didn't track time
+                                if username not in report:
+                                    report[username] = {
+                                        "tasks": 0,
+                                        "time_tracked": 0,
+                                        "time_estimate": 0,
+                                        "intervals_count": 0,
+                                    }
+                                report[username]["tasks"] += 1
+                                report[username]["time_estimate"] += est_per_assignee
+
                 elif group_by == "folder":
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
                     list_id = task.get("list", {}).get("id")
                     folder_name = folder_map.get(list_id, "Folderless")
-                    keys = [folder_name]
-                    time_per_key = total_time_ms
-                    est_per_key = est_total
-                else:
+
+                    if total_time_ms > 0 or est_total > 0:
+                        if folder_name not in report:
+                            report[folder_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[folder_name]["tasks"] += 1
+                        report[folder_name]["time_tracked"] += total_time_ms
+                        report[folder_name]["time_estimate"] += est_total
+                        report[folder_name]["intervals_count"] += len(
+                            filtered_intervals
+                        )
+                else:  # status
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
                     status_name = _extract_status_name(task)
-                    keys = [status_name]
-                    time_per_key = total_time_ms
-                    est_per_key = est_total
-                if time_per_key == 0 and est_per_key == 0:
-                    continue
-                for key in keys:
-                    if key not in report:
-                        report[key] = {
-                            "tasks": 0,
-                            "time_tracked": 0,
-                            "time_estimate": 0,
-                            "intervals_count": 0,
-                        }
-                    report[key]["tasks"] += 1
-                    report[key]["time_tracked"] += time_per_key
-                    report[key]["time_estimate"] += est_per_key
-                    report[key]["intervals_count"] += len(filtered_intervals)
+
+                    if total_time_ms > 0 or est_total > 0:
+                        if status_name not in report:
+                            report[status_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[status_name]["tasks"] += 1
+                        report[status_name]["time_tracked"] += total_time_ms
+                        report[status_name]["time_estimate"] += est_total
+                        report[status_name]["intervals_count"] += len(
+                            filtered_intervals
+                        )
+
+            # Format the report with human-readable time
             formatted = {
                 key: {
                     **value,
@@ -2416,9 +2409,11 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 }
                 for key, value in report.items()
             }
+
             total_tracked = sum(v["time_tracked"] for v in report.values())
             total_estimate = sum(v["time_estimate"] for v in report.values())
             total_tasks_with_time = sum(v["tasks"] for v in report.values())
+
             return {
                 "space_name": space_name,
                 "space_id": space_id,
@@ -2633,121 +2628,112 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            report = {}
-
-            for task in all_tasks:
-                task_id = task["id"]
-
-                # Get time entries for this task
-                task_time_entries = time_entries_map.get(task_id, [])
-
-                # Filter time entries by date range
-                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
-                    task_time_entries, start_ms, end_ms
-                )
-
-                # Skip tasks with no time tracked in this period
-                if total_time_ms == 0:
-                    continue
-
-                # Determine grouping keys
-                if group_by == "assignee":
-                    keys = [u["username"] for u in task.get("assignees", [])] or [
-                        "Unassigned"
-                    ]
-                    # Divide time among assignees
-                    time_per_key = total_time_ms // len(keys)
-                elif group_by == "list":
-                    list_id = task.get("list", {}).get("id")
-                    list_name = list_map.get(list_id, "Unknown List")
-                    keys = [list_name]
-                    time_per_key = total_time_ms
-                else:  # status
-                    status_name = _extract_status_name(task)
-                    keys = [status_name]
-                    time_per_key = total_time_ms
-
-                # Add to report
-                for key in keys:
-                    if key not in report:
-                        report[key] = {
-                            "tasks": 0,
-                            "time_tracked": 0,
-                            "intervals_count": 0,
-                        }
-
-                    report[key]["tasks"] += 1
-                    report[key]["time_tracked"] += time_per_key
-                    report[key]["intervals_count"] += len(filtered_intervals)
-
-            # Format the report with human-readable time
-            formatted = {
-                key: {
-                    **value,
-                    "human_tracked": _format_duration(value["time_tracked"]),
-                    "hours_decimal": _hours_decimal(value["time_tracked"]),
-                }
-                for key, value in report.items()
-            }
-
-            # Calculate totals
-            total_tracked = sum(v["time_tracked"] for v in report.values())
-            total_tasks_with_time = sum(v["tasks"] for v in report.values())
-
-            return {
-                "folder_name": folder_name or "Unknown",
-                "folder_id": folder_id,
-                "period_type": period_type,
-                "start_date": start_date,
-                "end_date": end_date,
-                "group_by": group_by,
-                "total_time_tracked": _format_duration(total_tracked),
-                "total_hours_decimal": _hours_decimal(total_tracked),
-                "total_tasks_with_time": total_tasks_with_time,
-                "report": formatted,
-            }
             # Build report grouped by assignee/list/status, including estimates
+            from app.mcp.status_helpers import (
+                filter_time_entries_by_user_and_date_range,
+            )
+
             report = {}
             metrics = _calculate_task_metrics(all_tasks)
+
             for task in all_tasks:
                 task_id = task["id"]
                 task_time_entries = time_entries_map.get(task_id, [])
-                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
-                    task_time_entries, start_ms, end_ms
-                )
+
                 m = metrics.get(task_id, {})
                 est_total = m.get("est_total", 0)
+
                 if group_by == "assignee":
-                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                    # Get time tracked per user (not split among assignees)
+                    user_time_map = filter_time_entries_by_user_and_date_range(
+                        task_time_entries, start_ms, end_ms
+                    )
+
+                    # Get all assignees for estimate splitting
+                    assignees = task.get("assignees", [])
+                    assignee_usernames = [u["username"] for u in assignees] or [
                         "Unassigned"
                     ]
-                    time_per_key = total_time_ms // len(keys) if keys else 0
-                    est_per_key = est_total // len(keys) if est_total and keys else 0
+                    est_per_assignee = (
+                        est_total // len(assignee_usernames)
+                        if est_total and assignee_usernames
+                        else 0
+                    )
+
+                    # Add tracked time only for users who logged time
+                    for username, time_tracked in user_time_map.items():
+                        if username not in report:
+                            report[username] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[username]["tasks"] += 1
+                        report[username]["time_tracked"] += time_tracked
+                        # Add estimate only if this user is an assignee
+                        if username in assignee_usernames:
+                            report[username]["time_estimate"] += est_per_assignee
+
+                    # For assignees who didn't track time but have estimates
+                    if est_total > 0:
+                        for username in assignee_usernames:
+                            if username not in user_time_map:  # Didn't track time
+                                if username not in report:
+                                    report[username] = {
+                                        "tasks": 0,
+                                        "time_tracked": 0,
+                                        "time_estimate": 0,
+                                        "intervals_count": 0,
+                                    }
+                                report[username]["tasks"] += 1
+                                report[username]["time_estimate"] += est_per_assignee
+
                 elif group_by == "list":
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
                     list_id = task.get("list", {}).get("id")
                     list_name = list_map.get(list_id, "Unknown List")
-                    keys = [list_name]
-                    time_per_key = total_time_ms
-                    est_per_key = est_total
-                else:
+
+                    if total_time_ms > 0 or est_total > 0:
+                        if list_name not in report:
+                            report[list_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[list_name]["tasks"] += 1
+                        report[list_name]["time_tracked"] += total_time_ms
+                        report[list_name]["time_estimate"] += est_total
+                        report[list_name]["intervals_count"] += len(filtered_intervals)
+                else:  # status
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
                     status_name = _extract_status_name(task)
-                    keys = [status_name]
-                    time_per_key = total_time_ms
-                    est_per_key = est_total
-                if time_per_key == 0 and est_per_key == 0:
-                    continue
-                for key in keys:
-                    if key not in report:
-                        report[key] = {
-                            "tasks": 0,
-                            "time_tracked": 0,
-                            "time_estimate": 0,
-                            "intervals_count": 0,
-                        }
-                    report[key]["tasks"] += 1
-                    report[key]["time_tracked"] += time_per_key
-                    report[key]["time_estimate"] += est_per_key
-                    report[key]["intervals_count"] += len(filtered_intervals)
+
+                    if total_time_ms > 0 or est_total > 0:
+                        if status_name not in report:
+                            report[status_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[status_name]["tasks"] += 1
+                        report[status_name]["time_tracked"] += total_time_ms
+                        report[status_name]["time_estimate"] += est_total
+                        report[status_name]["intervals_count"] += len(
+                            filtered_intervals
+                        )
+
+            # Format the report with human-readable time
             formatted = {
                 key: {
                     **value,
@@ -2757,9 +2743,11 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 }
                 for key, value in report.items()
             }
+
             total_tracked = sum(v["time_tracked"] for v in report.values())
             total_estimate = sum(v["time_estimate"] for v in report.values())
             total_tasks_with_time = sum(v["tasks"] for v in report.values())
+
             return {
                 "folder_name": folder_name or "Unknown",
                 "folder_id": folder_id,

@@ -527,6 +527,78 @@ def filter_time_entries_by_date_range(
     return total_ms, filtered_intervals
 
 
+def filter_time_entries_by_user_and_date_range(
+    time_entries: List[Dict], start_ms: int, end_ms: int
+) -> Dict[str, int]:
+    """
+    Filter time entries by date range and calculate time tracked per user.
+
+    Args:
+        time_entries: List of time entry objects with 'user' and 'intervals' fields
+        start_ms: Start timestamp in milliseconds (inclusive)
+        end_ms: End timestamp in milliseconds (inclusive)
+
+    Returns:
+        Dict mapping username to total time tracked (in milliseconds)
+
+    Example:
+        entries = [{
+            "user": {"username": "John"},
+            "intervals": [{"start": 1705276800000, "end": 1705280400000, "time": 3600000}]
+        }]
+        filter_time_entries_by_user_and_date_range(entries, start_ms, end_ms)
+        -> {"John": 3600000}
+    """
+    user_time_map = {}
+
+    for entry in time_entries:
+        # Get the user who logged this time entry
+        user = entry.get("user", {})
+        username = user.get("username", "Unassigned")
+
+        for interval in entry.get("intervals", []):
+            interval_start = interval.get("start")
+            interval_end = interval.get("end")
+            duration = interval.get("time")
+
+            if not interval_start:
+                continue
+
+            # Convert to int (API may return as string)
+            try:
+                interval_start = int(interval_start)
+            except (ValueError, TypeError):
+                continue
+
+            # Attempt to obtain interval_end. If missing, try to infer from 'time'.
+            try:
+                interval_end = int(interval_end) if interval_end is not None else None
+            except (ValueError, TypeError):
+                interval_end = None
+
+            if interval_end is None and duration:
+                try:
+                    interval_end = interval_start + int(duration)
+                except (ValueError, TypeError):
+                    interval_end = None
+
+            # If still missing an end, treat as instantaneous (skip)
+            if interval_end is None:
+                continue
+
+            # Compute overlap between [interval_start, interval_end] and [start_ms, end_ms]
+            overlap_start = max(start_ms, interval_start)
+            overlap_end = min(end_ms, interval_end)
+            overlap = max(0, overlap_end - overlap_start)
+
+            if overlap > 0:
+                if username not in user_time_map:
+                    user_time_map[username] = 0
+                user_time_map[username] += int(overlap)
+
+    return user_time_map
+
+
 # --- Status Category Mapping ---
 STATUS_NAME_OVERRIDES = {
     "not_started": [
