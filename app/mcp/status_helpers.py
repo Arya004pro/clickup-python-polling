@@ -1004,3 +1004,221 @@ def resolve_multiple_assignees(
         "not_found": not_found,
         "success": len(not_found) == 0,
     }
+
+
+# --- Extended Date Filter Functions ---
+
+
+def get_today_dates() -> Tuple[str, str]:
+    """
+    Get today's date as both start and end.
+
+    Returns:
+        Tuple of (today, today) in YYYY-MM-DD format
+
+    Example:
+        get_today_dates() -> ("2026-02-13", "2026-02-13")
+    """
+    today = datetime.now(timezone.utc)
+    today_str = today.strftime("%Y-%m-%d")
+    return today_str, today_str
+
+
+def get_yesterday_dates() -> Tuple[str, str]:
+    """
+    Get yesterday's date as both start and end.
+
+    Returns:
+        Tuple of (yesterday, yesterday) in YYYY-MM-DD format
+
+    Example:
+        get_yesterday_dates() -> ("2026-02-12", "2026-02-12")
+    """
+    yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+    return yesterday_str, yesterday_str
+
+
+def get_this_month_dates() -> Tuple[str, str]:
+    """
+    Get the full current month's date range (1st to last day of month).
+
+    Returns:
+        Tuple of (first_day, last_day) in YYYY-MM-DD format
+
+    Example:
+        get_this_month_dates() -> ("2026-02-01", "2026-02-28")
+    """
+    today = datetime.now(timezone.utc)
+    first_day = today.replace(day=1)
+
+    # Get last day of month
+    if today.month == 12:
+        last_day = today.replace(day=31)
+    else:
+        next_month = today.replace(month=today.month + 1, day=1)
+        last_day = next_month - timedelta(days=1)
+
+    return first_day.strftime("%Y-%m-%d"), last_day.strftime("%Y-%m-%d")
+
+
+def get_last_month_dates() -> Tuple[str, str]:
+    """
+    Get the full previous month's date range (1st to last day of previous month).
+
+    Returns:
+        Tuple of (first_day, last_day) in YYYY-MM-DD format
+
+    Example:
+        get_last_month_dates() -> ("2026-01-01", "2026-01-31")
+    """
+    today = datetime.now(timezone.utc)
+    # Get first day of current month, then go back one day
+    first_of_current_month = today.replace(day=1)
+    last_of_previous_month = first_of_current_month - timedelta(days=1)
+    first_of_previous_month = last_of_previous_month.replace(day=1)
+
+    return (
+        first_of_previous_month.strftime("%Y-%m-%d"),
+        last_of_previous_month.strftime("%Y-%m-%d"),
+    )
+
+
+def get_this_year_dates() -> Tuple[str, str]:
+    """
+    Get the full current year's date range (Jan 1 to Dec 31).
+
+    Returns:
+        Tuple of (jan_1, dec_31) in YYYY-MM-DD format
+
+    Example:
+        get_this_year_dates() -> ("2026-01-01", "2026-12-31")
+    """
+    today = datetime.now(timezone.utc)
+    first_day = today.replace(month=1, day=1)
+    last_day = today.replace(month=12, day=31)
+
+    return first_day.strftime("%Y-%m-%d"), last_day.strftime("%Y-%m-%d")
+
+
+def get_last_n_days_dates(n_days: int) -> Tuple[str, str]:
+    """
+    Get date range for the last N days (including today).
+
+    Args:
+        n_days: Number of days to go back (e.g., 30 for last 30 days)
+
+    Returns:
+        Tuple of (start_date, end_date) in YYYY-MM-DD format
+
+    Example:
+        get_last_n_days_dates(30) -> ("2026-01-14", "2026-02-13")
+    """
+    today = datetime.now(timezone.utc)
+    start_date = today - timedelta(days=n_days - 1)
+
+    return start_date.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+def parse_time_period_filter(
+    period_type: str,
+    custom_start: Optional[str] = None,
+    custom_end: Optional[str] = None,
+    rolling_days: Optional[int] = None,
+) -> Tuple[str, str]:
+    """
+    Universal date range parser for all time reporting filters.
+
+    Supported period types:
+    - "today": Today's date
+    - "yesterday": Yesterday's date
+    - "this_week": Current week (Monday-Sunday)
+    - "last_week": Previous week (Monday-Sunday)
+    - "this_month": Current month (1st to last day)
+    - "last_month": Previous month (1st to last day)
+    - "this_year": Current year (Jan 1 to Dec 31)
+    - "last_30_days": Last 30 days including today
+    - "rolling": Rolling period (requires rolling_days parameter)
+    - "custom": Custom date range (requires custom_start and custom_end)
+
+    Args:
+        period_type: Type of period filter (see supported types above)
+        custom_start: Start date for custom range (YYYY-MM-DD format)
+        custom_end: End date for custom range (YYYY-MM-DD format)
+        rolling_days: Number of days for rolling period
+
+    Returns:
+        Tuple of (start_date, end_date) in YYYY-MM-DD format
+
+    Raises:
+        ValueError: If invalid period type or missing required parameters
+
+    Examples:
+        parse_time_period_filter("today") -> ("2026-02-13", "2026-02-13")
+        parse_time_period_filter("this_week") -> ("2026-02-10", "2026-02-16")
+        parse_time_period_filter("last_30_days") -> ("2026-01-14", "2026-02-13")
+        parse_time_period_filter("rolling", rolling_days=7) -> Last 7 days
+        parse_time_period_filter("custom", custom_start="2026-01-01", custom_end="2026-01-31")
+    """
+    period_type = period_type.lower().strip()
+
+    if period_type == "today":
+        return get_today_dates()
+
+    elif period_type == "yesterday":
+        return get_yesterday_dates()
+
+    elif period_type in ["this_week", "current_week"]:
+        return get_current_week_dates()
+
+    elif period_type in ["last_week", "previous_week"]:
+        return get_previous_week_dates()
+
+    elif period_type in ["this_month", "current_month"]:
+        return get_this_month_dates()
+
+    elif period_type in ["last_month", "previous_month"]:
+        return get_last_month_dates()
+
+    elif period_type in ["this_year", "current_year"]:
+        return get_this_year_dates()
+
+    elif period_type == "last_30_days":
+        return get_last_n_days_dates(30)
+
+    elif period_type == "rolling":
+        if rolling_days is None:
+            raise ValueError(
+                "rolling_days parameter is required for rolling period type"
+            )
+        if rolling_days < 1 or rolling_days > 365:
+            raise ValueError("rolling_days must be between 1 and 365")
+        return get_last_n_days_dates(rolling_days)
+
+    elif period_type == "custom":
+        if not custom_start or not custom_end:
+            raise ValueError(
+                "custom_start and custom_end are required for custom period type"
+            )
+
+        # Validate date formats
+        try:
+            datetime.strptime(custom_start, "%Y-%m-%d")
+            datetime.strptime(custom_end, "%Y-%m-%d")
+        except ValueError as e:
+            raise ValueError(f"Invalid date format. Expected YYYY-MM-DD: {str(e)}")
+
+        # Validate that end is not before start
+        start_dt = datetime.strptime(custom_start, "%Y-%m-%d")
+        end_dt = datetime.strptime(custom_end, "%Y-%m-%d")
+        if end_dt < start_dt:
+            raise ValueError("custom_end cannot be before custom_start")
+
+        return custom_start, custom_end
+
+    else:
+        raise ValueError(
+            f"Unsupported period type: {period_type}. "
+            f"Supported: today, yesterday, this_week, last_week, this_month, "
+            f"last_month, this_year, last_30_days, rolling, custom"
+        )

@@ -2121,3 +2121,530 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print(f"[DEBUG] Error in get_task_status_distribution: {e}")
             print(traceback.format_exc())
             return {"error": str(e)}
+
+    @mcp.tool()
+    def get_space_time_report_comprehensive(
+        space_name: Optional[str] = None,
+        space_id: Optional[str] = None,
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        group_by: str = "assignee",
+        include_archived: bool = True,
+    ) -> dict:
+        """
+        Comprehensive time tracking report for a SPACE with all time period filters.
+
+        Supports all standard time reporting periods:
+        - "today": Today's activity
+        - "yesterday": Yesterday's activity
+        - "this_week": Current week (Monday-Sunday)
+        - "last_week": Previous week (Monday-Sunday)
+        - "this_month": Current month (1st to last day)
+        - "last_month": Previous month (1st to last day)
+        - "this_year": Current year (Jan 1 to Dec 31)
+        - "last_30_days": Last 30 days including today
+        - "rolling": Rolling period (requires rolling_days parameter, 1-365)
+        - "custom": Custom date range (requires custom_start and custom_end in YYYY-MM-DD format)
+
+        Args:
+            space_name: Name of the ClickUp space (e.g., "JewelleryOS")
+            space_id: Direct space ID (alternative to space_name)
+            period_type: Time period filter (see supported types above)
+            custom_start: Start date for custom period (YYYY-MM-DD format)
+            custom_end: End date for custom period (YYYY-MM-DD format)
+            rolling_days: Number of days for rolling period (1-365)
+            group_by: Report grouping - "assignee", "folder", or "status"
+            include_archived: Include archived tasks in the report
+
+        Returns:
+            Time tracking report filtered by the specified period with:
+            - Total time tracked (in human-readable format: Xh Ym)
+            - Time estimate
+            - Task counts
+            - Efficiency metrics
+            - Grouped by assignee, folder, or status
+
+        Examples:
+            # Today's activity
+            get_space_time_report_comprehensive(space_name="JewelleryOS", period_type="today")
+
+            # This week's team member breakdown
+            get_space_time_report_comprehensive(
+                space_name="JewelleryOS",
+                period_type="this_week",
+                group_by="assignee"
+            )
+
+            # Last month's folder-wise report
+            get_space_time_report_comprehensive(
+                space_name="JewelleryOS",
+                period_type="last_month",
+                group_by="folder"
+            )
+
+            # Last 7 days rolling
+            get_space_time_report_comprehensive(
+                space_name="JewelleryOS",
+                period_type="rolling",
+                rolling_days=7
+            )
+
+            # Custom date range
+            get_space_time_report_comprehensive(
+                space_name="JewelleryOS",
+                period_type="custom",
+                custom_start="2026-01-01",
+                custom_end="2026-01-31"
+            )
+
+        CRITICAL - Date Logic:
+        - All dates are validated to prevent hallucination
+        - Invalid dates will return an error
+        - Period boundaries are strictly enforced
+        - Uses ACTUAL time entry intervals, not task update dates
+        """
+        try:
+            from app.mcp.status_helpers import parse_time_period_filter
+            from app.clickup import fetch_all_time_entries_batch
+
+            # Validate inputs
+            if not space_id and not space_name:
+                return {"error": "Provide either space_name or space_id"}
+
+            # Parse the time period to get date range
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+
+            # Resolve space ID if needed
+            if not space_id:
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        space_name = space["name"]  # Use exact name from API
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+            # Get all lists in space
+            list_ids = []
+
+            # Folderless lists
+            resp, _ = _api_call("GET", f"/space/{space_id}/list")
+            if resp:
+                list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
+
+            # Lists from folders
+            resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
+            folder_map = {}  # Map list_id to folder_name for grouping
+            if resp2:
+                for folder in resp2.get("folders", []):
+                    folder_name = folder.get("name", "Unknown Folder")
+                    for lst in folder.get("lists", []):
+                        list_ids.append(lst["id"])
+                        folder_map[lst["id"]] = folder_name
+
+            if not list_ids:
+                return {"error": f"No lists found in space '{space_name}'"}
+
+            print(f"[DEBUG] Found {len(list_ids)} lists in space")
+
+            # Fetch all tasks
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            print(f"[DEBUG] Fetched {len(all_tasks)} tasks from space")
+
+            if not all_tasks:
+                return {
+                    "space_name": space_name,
+                    "space_id": space_id,
+                    "period_type": period_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "message": "No tasks found in this space",
+                    "report": {},
+                }
+
+            # Fetch time entries for all tasks
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
+            time_entries_map = fetch_all_time_entries_batch(task_ids)
+
+            # Convert date range to timestamps
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # Build report grouped by assignee/folder/status
+            report = {}
+
+            for task in all_tasks:
+                task_id = task["id"]
+
+                # Get time entries for this task
+                task_time_entries = time_entries_map.get(task_id, [])
+
+                # Filter time entries by date range
+                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
+                    task_time_entries, start_ms, end_ms
+                )
+
+                # Skip tasks with no time tracked in this period
+                if total_time_ms == 0:
+                    continue
+
+                # Determine grouping keys
+                if group_by == "assignee":
+                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    # Divide time among assignees
+                    time_per_key = total_time_ms // len(keys)
+                elif group_by == "folder":
+                    list_id = task.get("list", {}).get("id")
+                    folder_name = folder_map.get(list_id, "Folderless")
+                    keys = [folder_name]
+                    time_per_key = total_time_ms
+                else:  # status
+                    status_name = _extract_status_name(task)
+                    keys = [status_name]
+                    time_per_key = total_time_ms
+
+                # Add to report
+                for key in keys:
+                    if key not in report:
+                        report[key] = {
+                            "tasks": 0,
+                            "time_tracked": 0,
+                            "intervals_count": 0,
+                        }
+
+                    report[key]["tasks"] += 1
+                    report[key]["time_tracked"] += time_per_key
+                    report[key]["intervals_count"] += len(filtered_intervals)
+
+            # Format the report with human-readable time
+            formatted = {
+                key: {
+                    **value,
+                    "human_tracked": _format_duration(value["time_tracked"]),
+                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                }
+                for key, value in report.items()
+            }
+
+            # Calculate totals
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_tasks_with_time = sum(v["tasks"] for v in report.values())
+
+            return {
+                "space_name": space_name,
+                "space_id": space_id,
+                "period_type": period_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_hours_decimal": _hours_decimal(total_tracked),
+                "total_tasks_with_time": total_tasks_with_time,
+                "report": formatted,
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_space_time_report_comprehensive: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_folder_time_report_comprehensive(
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        space_name: Optional[str] = None,
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        group_by: str = "assignee",
+        include_archived: bool = True,
+    ) -> dict:
+        """
+        Comprehensive time tracking report for a FOLDER with all time period filters.
+
+        Supports all standard time reporting periods:
+        - "today": Today's activity
+        - "yesterday": Yesterday's activity
+        - "this_week": Current week (Monday-Sunday)
+        - "last_week": Previous week (Monday-Sunday)
+        - "this_month": Current month (1st to last day)
+        - "last_month": Previous month (1st to last day)
+        - "this_year": Current year (Jan 1 to Dec 31)
+        - "last_30_days": Last 30 days including today
+        - "rolling": Rolling period (requires rolling_days parameter, 1-365)
+        - "custom": Custom date range (requires custom_start and custom_end in YYYY-MM-DD format)
+
+        Args:
+            folder_name: Name of the folder (requires space_name for lookup)
+            folder_id: Direct folder ID (alternative to folder_name)
+            space_name: Space name (required if using folder_name)
+            period_type: Time period filter (see supported types above)
+            custom_start: Start date for custom period (YYYY-MM-DD format)
+            custom_end: End date for custom period (YYYY-MM-DD format)
+            rolling_days: Number of days for rolling period (1-365)
+            group_by: Report grouping - "assignee", "list", or "status"
+            include_archived: Include archived tasks in the report
+
+        Returns:
+            Time tracking report filtered by the specified period with:
+            - Total time tracked (in human-readable format: Xh Ym)
+            - Task counts
+            - Efficiency metrics
+            - Grouped by assignee, list, or status
+
+        Examples:
+            # Today's activity for Luminique folder
+            get_folder_time_report_comprehensive(
+                folder_name="Luminique",
+                space_name="JewelleryOS",
+                period_type="today"
+            )
+
+            # This week's team member breakdown
+            get_folder_time_report_comprehensive(
+                folder_id="90167907863",
+                period_type="this_week",
+                group_by="assignee"
+            )
+
+            # Last month's list-wise report
+            get_folder_time_report_comprehensive(
+                folder_name="Luminique",
+                space_name="JewelleryOS",
+                period_type="last_month",
+                group_by="list"
+            )
+
+            # Last 7 days rolling
+            get_folder_time_report_comprehensive(
+                folder_id="90167907863",
+                period_type="rolling",
+                rolling_days=7
+            )
+
+            # Custom date range
+            get_folder_time_report_comprehensive(
+                folder_name="Luminique",
+                space_name="JewelleryOS",
+                period_type="custom",
+                custom_start="2026-01-01",
+                custom_end="2026-01-31"
+            )
+
+        CRITICAL - Date Logic:
+        - All dates are validated to prevent hallucination
+        - Invalid dates will return an error
+        - Period boundaries are strictly enforced
+        - Uses ACTUAL time entry intervals, not task update dates
+        """
+        try:
+            from app.mcp.status_helpers import parse_time_period_filter
+            from app.clickup import fetch_all_time_entries_batch
+
+            # Validate inputs
+            if not folder_id and not folder_name:
+                return {"error": "Provide either folder_name or folder_id"}
+
+            if folder_name and not space_name:
+                return {"error": "space_name is required when using folder_name"}
+
+            # Parse the time period to get date range
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+
+            # Resolve folder ID if needed
+            if not folder_id:
+                # First get space ID
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                space_id = None
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+                # Get folders in space
+                folders_resp, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if not folders_resp:
+                    return {"error": f"Failed to fetch folders in space '{space_name}'"}
+
+                for folder in folders_resp.get("folders", []):
+                    if folder["name"].lower() == folder_name.lower():
+                        folder_id = folder["id"]
+                        folder_name = folder["name"]  # Use exact name from API
+                        break
+
+                if not folder_id:
+                    return {
+                        "error": f"Folder '{folder_name}' not found in space '{space_name}'"
+                    }
+
+            # Get all lists in folder
+            lists_resp, _ = _api_call("GET", f"/folder/{folder_id}/list")
+            if not lists_resp:
+                return {"error": "Failed to fetch lists in folder"}
+
+            list_ids = []
+            list_map = {}  # Map list_id to list_name for grouping
+            for lst in lists_resp.get("lists", []):
+                list_id = lst["id"]
+                list_ids.append(list_id)
+                list_map[list_id] = lst.get("name", "Unnamed List")
+
+            if not list_ids:
+                return {
+                    "error": f"No lists found in folder '{folder_name or folder_id}'"
+                }
+
+            print(f"[DEBUG] Found {len(list_ids)} lists in folder")
+
+            # Fetch all tasks
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            print(f"[DEBUG] Fetched {len(all_tasks)} tasks from folder")
+
+            if not all_tasks:
+                return {
+                    "folder_name": folder_name or "Unknown",
+                    "folder_id": folder_id,
+                    "period_type": period_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "message": "No tasks found in this folder",
+                    "report": {},
+                }
+
+            # Fetch time entries for all tasks
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
+            time_entries_map = fetch_all_time_entries_batch(task_ids)
+
+            # Convert date range to timestamps
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # Build report grouped by assignee/list/status
+            report = {}
+
+            for task in all_tasks:
+                task_id = task["id"]
+
+                # Get time entries for this task
+                task_time_entries = time_entries_map.get(task_id, [])
+
+                # Filter time entries by date range
+                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
+                    task_time_entries, start_ms, end_ms
+                )
+
+                # Skip tasks with no time tracked in this period
+                if total_time_ms == 0:
+                    continue
+
+                # Determine grouping keys
+                if group_by == "assignee":
+                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    # Divide time among assignees
+                    time_per_key = total_time_ms // len(keys)
+                elif group_by == "list":
+                    list_id = task.get("list", {}).get("id")
+                    list_name = list_map.get(list_id, "Unknown List")
+                    keys = [list_name]
+                    time_per_key = total_time_ms
+                else:  # status
+                    status_name = _extract_status_name(task)
+                    keys = [status_name]
+                    time_per_key = total_time_ms
+
+                # Add to report
+                for key in keys:
+                    if key not in report:
+                        report[key] = {
+                            "tasks": 0,
+                            "time_tracked": 0,
+                            "intervals_count": 0,
+                        }
+
+                    report[key]["tasks"] += 1
+                    report[key]["time_tracked"] += time_per_key
+                    report[key]["intervals_count"] += len(filtered_intervals)
+
+            # Format the report with human-readable time
+            formatted = {
+                key: {
+                    **value,
+                    "human_tracked": _format_duration(value["time_tracked"]),
+                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                }
+                for key, value in report.items()
+            }
+
+            # Calculate totals
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_tasks_with_time = sum(v["tasks"] for v in report.values())
+
+            return {
+                "folder_name": folder_name or "Unknown",
+                "folder_id": folder_id,
+                "period_type": period_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_hours_decimal": _hours_decimal(total_tracked),
+                "total_tasks_with_time": total_tasks_with_time,
+                "report": formatted,
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_folder_time_report_comprehensive: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e)}
