@@ -2292,7 +2292,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            # Build report grouped by assignee/folder/status
             report = {}
 
             for task in all_tasks:
@@ -2362,6 +2361,73 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 "end_date": end_date,
                 "group_by": group_by,
                 "total_time_tracked": _format_duration(total_tracked),
+                "total_hours_decimal": _hours_decimal(total_tracked),
+                "total_tasks_with_time": total_tasks_with_time,
+                "report": formatted,
+            }
+            # Build report grouped by assignee/folder/status, including estimates
+            report = {}
+            metrics = _calculate_task_metrics(all_tasks)
+            for task in all_tasks:
+                task_id = task["id"]
+                task_time_entries = time_entries_map.get(task_id, [])
+                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
+                    task_time_entries, start_ms, end_ms
+                )
+                m = metrics.get(task_id, {})
+                est_total = m.get("est_total", 0)
+                if group_by == "assignee":
+                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    time_per_key = total_time_ms // len(keys) if keys else 0
+                    est_per_key = est_total // len(keys) if est_total and keys else 0
+                elif group_by == "folder":
+                    list_id = task.get("list", {}).get("id")
+                    folder_name = folder_map.get(list_id, "Folderless")
+                    keys = [folder_name]
+                    time_per_key = total_time_ms
+                    est_per_key = est_total
+                else:
+                    status_name = _extract_status_name(task)
+                    keys = [status_name]
+                    time_per_key = total_time_ms
+                    est_per_key = est_total
+                if time_per_key == 0 and est_per_key == 0:
+                    continue
+                for key in keys:
+                    if key not in report:
+                        report[key] = {
+                            "tasks": 0,
+                            "time_tracked": 0,
+                            "time_estimate": 0,
+                            "intervals_count": 0,
+                        }
+                    report[key]["tasks"] += 1
+                    report[key]["time_tracked"] += time_per_key
+                    report[key]["time_estimate"] += est_per_key
+                    report[key]["intervals_count"] += len(filtered_intervals)
+            formatted = {
+                key: {
+                    **value,
+                    "human_tracked": _format_duration(value["time_tracked"]),
+                    "human_estimate": _format_duration(value["time_estimate"]),
+                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                }
+                for key, value in report.items()
+            }
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_estimate = sum(v["time_estimate"] for v in report.values())
+            total_tasks_with_time = sum(v["tasks"] for v in report.values())
+            return {
+                "space_name": space_name,
+                "space_id": space_id,
+                "period_type": period_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_time_estimate": _format_duration(total_estimate),
                 "total_hours_decimal": _hours_decimal(total_tracked),
                 "total_tasks_with_time": total_tasks_with_time,
                 "report": formatted,
@@ -2567,7 +2633,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            # Build report grouped by assignee/list/status
             report = {}
 
             for task in all_tasks:
@@ -2637,6 +2702,73 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 "end_date": end_date,
                 "group_by": group_by,
                 "total_time_tracked": _format_duration(total_tracked),
+                "total_hours_decimal": _hours_decimal(total_tracked),
+                "total_tasks_with_time": total_tasks_with_time,
+                "report": formatted,
+            }
+            # Build report grouped by assignee/list/status, including estimates
+            report = {}
+            metrics = _calculate_task_metrics(all_tasks)
+            for task in all_tasks:
+                task_id = task["id"]
+                task_time_entries = time_entries_map.get(task_id, [])
+                total_time_ms, filtered_intervals = filter_time_entries_by_date_range(
+                    task_time_entries, start_ms, end_ms
+                )
+                m = metrics.get(task_id, {})
+                est_total = m.get("est_total", 0)
+                if group_by == "assignee":
+                    keys = [u["username"] for u in task.get("assignees", [])] or [
+                        "Unassigned"
+                    ]
+                    time_per_key = total_time_ms // len(keys) if keys else 0
+                    est_per_key = est_total // len(keys) if est_total and keys else 0
+                elif group_by == "list":
+                    list_id = task.get("list", {}).get("id")
+                    list_name = list_map.get(list_id, "Unknown List")
+                    keys = [list_name]
+                    time_per_key = total_time_ms
+                    est_per_key = est_total
+                else:
+                    status_name = _extract_status_name(task)
+                    keys = [status_name]
+                    time_per_key = total_time_ms
+                    est_per_key = est_total
+                if time_per_key == 0 and est_per_key == 0:
+                    continue
+                for key in keys:
+                    if key not in report:
+                        report[key] = {
+                            "tasks": 0,
+                            "time_tracked": 0,
+                            "time_estimate": 0,
+                            "intervals_count": 0,
+                        }
+                    report[key]["tasks"] += 1
+                    report[key]["time_tracked"] += time_per_key
+                    report[key]["time_estimate"] += est_per_key
+                    report[key]["intervals_count"] += len(filtered_intervals)
+            formatted = {
+                key: {
+                    **value,
+                    "human_tracked": _format_duration(value["time_tracked"]),
+                    "human_estimate": _format_duration(value["time_estimate"]),
+                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                }
+                for key, value in report.items()
+            }
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_estimate = sum(v["time_estimate"] for v in report.values())
+            total_tasks_with_time = sum(v["tasks"] for v in report.values())
+            return {
+                "folder_name": folder_name or "Unknown",
+                "folder_id": folder_id,
+                "period_type": period_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_time_estimate": _format_duration(total_estimate),
                 "total_hours_decimal": _hours_decimal(total_tracked),
                 "total_tasks_with_time": total_tasks_with_time,
                 "report": formatted,

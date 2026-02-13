@@ -1634,6 +1634,29 @@
         ],
         "name": "Luminique"
       }
+    },
+    "RealEstate_Voice_Agent": {
+      "alias": "RealEstate_Voice_Agent",
+      "clickup_id": "90167641034",
+      "clickup_type": "folder",
+      "last_sync": 1770976284.1947994,
+      "structure": {
+        "id": "90167641034",
+        "type": "folder",
+        "children": [
+          {
+            "id": "901612385620",
+            "name": "Clear this list FAST",
+            "type": "list"
+          },
+          {
+            "id": "901613067292",
+            "name": "R1",
+            "type": "list"
+          }
+        ],
+        "name": "RealEstate Voice Agent"
+      }
     }
   },
   "discovery_cache": {}
