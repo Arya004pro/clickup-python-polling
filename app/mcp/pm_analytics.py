@@ -20,8 +20,8 @@ from app.mcp.status_helpers import (
     date_range_to_timestamps,
     filter_time_entries_by_date_range,
     is_valid_monday_sunday_range,
-    parse_week_input,  # ← ADD THIS
-    validate_week_dates,  # ← ADD THIS (optional, for validation)
+    parse_week_input,
+    validate_week_dates,
 )
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 
@@ -74,10 +74,8 @@ STATUS_OVERRIDE_MAP = {
 def get_status_category(status_name: str, status_type: str = None) -> str:
     if not status_name:
         return "other"
-    # 1. Check Overrides (Project Specific naming conventions)
     if cat := STATUS_OVERRIDE_MAP.get(status_name.upper()):
         return cat
-    # 2. Check ClickUp Internal Type
     if status_type:
         type_map = {
             "open": "not_started",
@@ -150,13 +148,11 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
     if not project:
         return []
 
-    # 1. Check project_map.json FIRST (handles folder/space mapped projects)
     try:
         from .sync_mapping import db
 
         proj_lower = project.lower().strip()
 
-        # Check both alias and name fields
         for alias, data in db.projects.items():
             alias_lower = alias.lower()
             stored_alias = data.get("alias", "").lower()
@@ -171,14 +167,12 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
                     return [mapped_id]
 
                 elif mapped_type == "folder":
-                    # Get all lists in this folder
                     resp, err = _api_call("GET", f"/folder/{mapped_id}/list")
                     if resp and resp.get("lists"):
                         list_ids = [lst["id"] for lst in resp["lists"]]
                         print(f"[DEBUG] Found {len(list_ids)} lists in folder")
                         return list_ids
 
-                    # Fallback: use cached structure from mapping
                     structure = data.get("structure", {})
                     cached_lists = [
                         c["id"]
@@ -191,12 +185,10 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
 
                 elif mapped_type == "space":
                     ids = []
-                    # Get folderless lists
                     resp, _ = _api_call("GET", f"/space/{mapped_id}/list")
                     if resp:
                         ids.extend([lst["id"] for lst in resp.get("lists", [])])
 
-                    # Get lists from folders
                     resp2, _ = _api_call("GET", f"/space/{mapped_id}/folder")
                     if resp2:
                         for f in resp2.get("folders", []):
@@ -208,7 +200,6 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
     except Exception as e:
         print(f"[DEBUG] project_map.json lookup failed: {e}")
 
-    # 2. Fall back to live API search by name
     print(f"[DEBUG] Falling back to API search for: {project}")
     team_id = _get_team_id()
     spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
@@ -220,7 +211,6 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
 
     for space in spaces_data.get("spaces", []):
         if space["name"].lower() == proj_lower:
-            # Space match - get all lists in space
             s_lists, _ = _api_call("GET", f"/space/{space['id']}/list")
             if s_lists:
                 target_lists.extend([lst["id"] for lst in s_lists.get("lists", [])])
@@ -230,7 +220,6 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
                     target_lists.extend([lst["id"] for lst in f.get("lists", [])])
             return target_lists
 
-        # Folder match check
         f_data, _ = _api_call("GET", f"/space/{space['id']}/folder")
         if f_data:
             for f in f_data.get("folders", []):
@@ -261,6 +250,7 @@ def _fetch_all_tasks(
                     **base_params,
                     "page": page,
                     "subtasks": "true",
+                    "include_closed": "true",
                     "archived": str(is_archived).lower(),
                 }
                 data, error = _api_call("GET", f"/list/{list_id}/task", params=params)
@@ -354,13 +344,9 @@ def _ms_to_readable(ms):
 
 def _format_duration(ms):
     if not ms:
-        return "0 min"
+        return "0h 0m"
     mins = int(ms) // 60000
     return f"{mins // 60}h {mins % 60}m"
-
-
-def _hours_decimal(ms):
-    return round(int(ms or 0) / 3600000, 2)
 
 
 def _safe_int_from_dates(task: Dict, fields: List[str]) -> int:
@@ -389,7 +375,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
     import uuid
     import threading
 
-    # In-memory job store for async report requests
     JOBS: Dict[str, Dict] = {}
 
     @mcp.tool()
@@ -423,7 +408,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             )
             completed, status_changes = [], []
 
-            # Detailed Breakdown Counters
             metrics = {
                 "category_counts": {
                     "not_started": 0,
@@ -443,7 +427,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 status_name = _extract_status_name(t)
                 cat = get_status_category(status_name, status_obj.get("type", ""))
 
-                # Check completion
                 if cat in ["done", "closed"]:
                     done_date = (
                         t.get("date_closed")
@@ -460,7 +443,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                             }
                         )
 
-                # Status Changes & Counts
                 if include_status_changes:
                     if (upd := t.get("date_updated")) and int(upd) >= since_ms:
                         status_changes.append(
@@ -471,7 +453,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                             }
                         )
 
-                    # Update metrics
                     metrics["status_name_counts"][status_name] = (
                         metrics["status_name_counts"].get(status_name, 0) + 1
                     )
@@ -527,7 +508,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             if not (list_ids := _resolve_to_list_ids(project, list_id)):
                 return {"error": "No context found."}
 
-            # Fetch ALL tasks (including archived) by default for complete reports
             all_tasks = _fetch_all_tasks(
                 list_ids,
                 {},  # No date filters - get everything
@@ -536,7 +516,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             print(f"[DEBUG] Fetched {len(all_tasks)} total tasks")
 
-            # Apply status filter if provided
             if status_filter:
                 filtered_tasks = []
                 for t in all_tasks:
@@ -551,7 +530,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             for t in all_tasks:
                 m = metrics.get(t["id"], {})
-                # Assignee view = Direct Time. Task view = Total (Rolled up) Time.
                 val_t = (
                     m.get("tracked_direct", 0)
                     if group_by == "assignee"
@@ -589,7 +567,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     r["time_tracked"] += val_t // div
                     r["time_estimate"] += val_e // div
 
-                    # Track status distribution
                     status_name = _extract_status_name(t)
                     r["status_breakdown"][status_name] = (
                         r["status_breakdown"].get(status_name, 0) + 1
@@ -632,7 +609,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             if err:
                 return {"error": err}
 
-            # Fetch context to build the tree
             list_id = task_data["list"]["id"]
             all_list_tasks = _fetch_all_tasks([list_id], {})
             metrics_map = _calculate_task_metrics(all_list_tasks)
@@ -895,19 +871,15 @@ def register_pm_analytics_tools(mcp: FastMCP):
         include_archived: bool = True,
     ) -> dict:
         """
-        Time tracking report for an entire SPACE (all folders and lists).
+        Time tracking report for entire SPACE (all folders and lists).
 
         Args:
-            space_name: Space name (e.g., "JewelleryOS")
+            space_name: Space name
             space_id: Direct space ID
-            group_by: "assignee", "folder", or "status"
+            group_by: assignee, folder, or status
             include_archived: Include archived tasks
-
-        Returns:
-            Comprehensive space-level time report
         """
         try:
-            # Resolve space
             if not space_id and not space_name:
                 return {"error": "Provide either space_name or space_id"}
 
@@ -925,15 +897,12 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_id:
                     return {"error": f"Space '{space_name}' not found"}
 
-            # Get all lists in space
             list_ids = []
 
-            # Folderless lists
             resp, _ = _api_call("GET", f"/space/{space_id}/list")
             if resp:
                 list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
 
-            # Lists from folders
             resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
             if resp2:
                 for folder in resp2.get("folders", []):
@@ -941,7 +910,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             print(f"[DEBUG] Found {len(list_ids)} lists in space")
 
-            # Fetch all tasks
             all_tasks = _fetch_all_tasks(
                 list_ids, {}, include_archived=include_archived
             )
@@ -949,7 +917,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             metrics = _calculate_task_metrics(all_tasks)
 
-            # Build report
             report = {}
             for t in all_tasks:
                 m = metrics.get(t["id"], {})
@@ -967,7 +934,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if val_t == 0 and val_e == 0:
                     continue
 
-                # Determine grouping key
                 if group_by == "assignee":
                     keys = [u["username"] for u in t.get("assignees", [])] or [
                         "Unassigned"
@@ -1021,18 +987,14 @@ def register_pm_analytics_tools(mcp: FastMCP):
         include_archived: bool = True,
     ) -> dict:
         """
-        Hierarchical time report: Space > Folder > Team Member breakdown.
+        Hierarchical time report: Space > Folder > Team Member.
 
         Args:
             space_name: Space name
             space_id: Direct space ID
             include_archived: Include archived tasks
-
-        Returns:
-            Nested report showing folder-level breakdowns with team member details
         """
         try:
-            # Resolve space
             if not space_id and not space_name:
                 return {"error": "Provide either space_name or space_id"}
 
@@ -1051,10 +1013,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_id:
                     return {"error": f"Space '{space_name}' not found"}
 
-            # Get folder structure
             folders_report = []
 
-            # Get folders
             resp, _ = _api_call("GET", f"/space/{space_id}/folder")
             folders = resp.get("folders", []) if resp else []
 
@@ -1066,13 +1026,11 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not list_ids:
                     continue
 
-                # Fetch tasks for this folder
                 folder_tasks = _fetch_all_tasks(
                     list_ids, {}, include_archived=include_archived
                 )
                 metrics = _calculate_task_metrics(folder_tasks)
 
-                # Build team member breakdown
                 team_report = {}
                 for t in folder_tasks:
                     m = metrics.get(t["id"], {})
@@ -1093,7 +1051,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                         r["time_tracked"] += val_t // len(assignees)
                         r["time_estimate"] += val_e // len(assignees)
 
-                # Format team report
                 formatted_team = {
                     member: {
                         **data,
@@ -1112,7 +1069,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     }
                 )
 
-            # Handle folderless lists
             resp, _ = _api_call("GET", f"/space/{space_id}/list")
             folderless_lists = resp.get("lists", []) if resp else []
 
@@ -1191,48 +1147,20 @@ def register_pm_analytics_tools(mcp: FastMCP):
         job_id: Optional[str] = None,  # Internal use when running as background job
     ) -> dict:
         """
-        Weekly/Multi-week time tracking report based on ACTUAL time entry intervals.
-
-        ⚠️ TIMEOUT PREVENTION: For projects/spaces with 300+ tasks, USE async_job=True
-        to avoid client timeouts. Returns job_id immediately, then poll with
-        get_weekly_time_report_status(job_id) and fetch via get_weekly_time_report_result(job_id).
-
-        IMPORTANT: This filters by when time was LOGGED (time entry intervals),
-        not when tasks were modified (date_updated).
+        Weekly/Multi-week time report based on time entry intervals.
 
         Args:
-            report_type: "team_member", "space", or "space_folder_team"
-            project: Project name (for team_member type)
-            space_name: Space name (for space/space_folder_team types)
+            report_type: team_member, space, or space_folder_team
+            project: Project name (for team_member)
+            space_name: Space name (for space types)
             list_id: Direct list ID
-            week_selector: Smart week selector - supports single or multi-week ranges
-            week_start: Week start date (YYYY-MM-DD), explicit override
-            week_end: Week end date (YYYY-MM-DD), explicit override
-            allow_multi_week: If True, enables multi-week range parsing
-            async_job: If True, run in background and return job_id (RECOMMENDED for 300+ tasks)
-
-        Week Selector Examples:
-            Single Week:
-            - "current" or "this" → Current week (Monday-Sunday)
-            - "previous" or "last" → Previous week
-            - "2-weeks-ago" → 2 weeks before current week
-            - "2026-01-15" → Week containing January 15, 2026
-            - "2026-W03" → ISO week 3 of 2026
-
-            Multi-Week (requires allow_multi_week=True):
-            - "2-weeks" → 2 weeks starting current Monday
-            - "3-weeks" → 3 weeks starting current Monday
-            - "last-2-weeks" → Last 2 weeks ending last Sunday
-            - "month" or "4-weeks" → 4 weeks (approximately a month)
-            - "last-month" → Last 4 weeks ending last Sunday
-
-        Priority:
-            1. If week_start AND week_end provided → use those dates
-            2. Else if week_selector provided → parse and calculate dates
-            3. Else → default to current week
+            week_selector: current, previous, N-weeks-ago, YYYY-MM-DD, YYYY-WNN (or multi-week: 2-weeks, last-2-weeks, month)
+            week_start, week_end: YYYY-MM-DD format (explicit dates)
+            allow_multi_week: Enable multi-week ranges
+            async_job: Run in background (recommended for 300+ tasks)
 
         Returns:
-            Report with time tracked ONLY from time entries logged within the date range
+            Report with time tracked from time entries within date range
         """
         try:
             import sys
@@ -1242,7 +1170,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print("⏳ Processing time report request - this may take 1-3 minutes...")
             sys.stdout.flush()
 
-            # If async_job requested, enqueue and return a job id immediately
             if async_job:
                 jid = job_id or str(uuid.uuid4())
                 JOBS[jid] = {"status": "queued", "result": None, "error": None}
@@ -1276,11 +1203,9 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "message": "Report running in background. Use get_weekly_time_report_status(job_id) to poll.",
                 }
 
-            # If running as background worker, mark running state
             if job_id:
                 JOBS.setdefault(job_id, {})["status"] = "running"
 
-            # Calculate week boundaries with priority logic
             if week_start and week_end:
                 # Priority 1: Explicit dates provided - validate and use them
                 try:
@@ -1339,10 +1264,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 )
                 sys.stdout.flush()
 
-            # Convert to milliseconds
             start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
 
-            # Calculate number of weeks in range
             from datetime import datetime
 
             start_date = datetime.strptime(week_start, "%Y-%m-%d")
@@ -1355,7 +1278,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print(f"[DEBUG] Timestamp range: {start_ms} to {end_ms}")
             sys.stdout.flush()
 
-            # Resolve context based on report type
             if report_type == "space":
                 if not space_name:
                     return {"error": "space_name required for space report"}
@@ -1378,7 +1300,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_id:
                     return {"error": f"Space '{space_name}' not found"}
 
-                # Get all lists in space
                 print("[PROGRESS] Step 2/5: Fetching space structure...")
                 sys.stdout.flush()
 
@@ -1391,7 +1312,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     for folder in resp2.get("folders", []):
                         list_ids.extend([lst["id"] for lst in folder.get("lists", [])])
 
-                # Fetch ALL tasks (we need them to get their time entries)
                 print(
                     f"[PROGRESS] Step 3/5: Fetching tasks from {len(list_ids)} lists..."
                 )
@@ -1402,7 +1322,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print(f"[PROGRESS] Found {len(all_tasks)} total tasks in space")
                 sys.stdout.flush()
 
-                # AUTO-ASYNC: Prevent timeout issues on large datasets
                 if len(all_tasks) >= 300 and not job_id:
                     print(
                         f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
@@ -1436,11 +1355,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 )
                 sys.stdout.flush()
 
-                # Calculate per-task metrics (including est_direct) so we can
-                # attribute estimates to members for tasks that have time in range
                 metrics = _calculate_task_metrics(all_tasks)
 
-                # Build report by filtering time entries within date range
                 report = {}
                 tasks_with_time_in_range = 0
 
@@ -1523,7 +1439,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not list_ids:
                     return {"error": "No context found"}
 
-                # Fetch ALL tasks (we need them to get their time entries)
                 print(
                     f"[PROGRESS] Step 2/5: Fetching tasks from {len(list_ids)} lists..."
                 )
@@ -1534,7 +1449,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print(f"[PROGRESS] Found {len(all_tasks)} total tasks")
                 sys.stdout.flush()
 
-                # AUTO-ASYNC: Prevent timeout issues on large datasets
                 if len(all_tasks) >= 300 and not job_id:
                     print(
                         f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
@@ -1567,11 +1481,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print("[PROGRESS] Step 4/5: Processing time entries...")
                 sys.stdout.flush()
 
-                # Calculate per-task metrics (including est_direct) so we can
-                # attribute estimates to members for tasks that have time in range
                 metrics = _calculate_task_metrics(all_tasks)
 
-                # Build report by filtering time entries within date range
                 report = {}
                 tasks_with_time_in_range = 0
 
@@ -1683,52 +1594,17 @@ def register_pm_analytics_tools(mcp: FastMCP):
         allow_multi_week: bool = False,
         async_job: bool = False,
     ) -> dict:
-        """Space-level weekly time report with automatic async support for large spaces.
-
-        ⚠️ RECOMMENDED: Use async_job=True for spaces with 300+ tasks to avoid timeouts.
+        """Space weekly time report with async support.
 
         Args:
-            space_name: Name of the ClickUp space
-            week_selector: "current", "previous", "N-weeks-ago", "YYYY-MM-DD", "YYYY-WNN"
-            week_start: Explicit week start (YYYY-MM-DD), Monday required
-            week_end: Explicit week end (YYYY-MM-DD), Sunday required
-            allow_multi_week: Enable multi-week ranges (2-weeks, last-2-weeks, month)
-            async_job: Run in background, returns job_id (use for 300+ tasks)
+            space_name: ClickUp space name
+            week_selector: current, previous, N-weeks-ago, YYYY-MM-DD, YYYY-WNN
+            week_start, week_end: YYYY-MM-DD format
+            allow_multi_week: Enable multi-week ranges
+            async_job: Run in background (use for 300+ tasks)
 
-        Returns (sync mode):
-            {
-                "report_type": "space_weekly",
-                "space_name": "...",
-                "week_start": "2026-02-09",
-                "week_end": "2026-02-15",
-                "report": {
-                    "Team Member": {
-                        "tasks": 12,
-                        "time_tracked": 71880000,
-                        "human_tracked": "19h 58m",
-                        ...
-                    }
-                }
-            }
-
-        Returns (async mode):
-            {
-                "job_id": "abc-123-...",
-                "status": "started",
-                "message": "Report running in background..."
-            }
-
-        Usage (async):
-            1. Start: get_space_weekly_report(..., async_job=True) → get job_id
-            2. Poll: get_weekly_time_report_status(job_id) until status="finished"
-            3. Fetch: get_weekly_time_report_result(job_id) → get report
-
-        Feature Parity with Folder Reports:
-            ✓ Same week selection logic (current, previous, custom dates)
-            ✓ Same time filtering (by time entry intervals)
-            ✓ Same team member grouping
-            ✓ Same human-readable format (Xh Ym)
-            ✓ Async job support (background processing)
+        Returns:
+            Report dict or job_id if async mode
         """
         return get_weekly_time_report(
             report_type="space",
@@ -1798,7 +1674,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_name:
                     return {"error": "space_name required for space report"}
 
-                # Get space lists
                 team_id = _get_team_id()
                 spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
                 if not spaces_data:
@@ -1813,7 +1688,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_id:
                     return {"error": f"Space '{space_name}' not found"}
 
-                # Get all lists in space
                 list_ids = []
                 resp, _ = _api_call("GET", f"/space/{space_id}/list")
                 if resp:
@@ -1846,6 +1720,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 }
 
             task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
             time_entries_map = fetch_all_time_entries_batch(task_ids)
 
             # ================================================================
@@ -1868,7 +1743,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not time_entries:
                     continue
 
-                # Filter and format intervals for this task
                 task_intervals_in_range = []
                 task_time_in_range = 0
 
@@ -1883,27 +1757,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
                         except (ValueError, TypeError):
                             continue
 
-                        # Check if interval is within date range
                         if start_ms <= interval_start <= end_ms:
                             duration = interval.get("time", 0)
                             task_time_in_range += int(duration)
 
-                            # Format the interval with timestamps
                             formatted_interval = format_time_entry_interval(
                                 interval, timezone_offset
                             )
                             task_intervals_in_range.append(formatted_interval)
 
                 if task_time_in_range == 0:
-                    continue  # Skip tasks with no time in this date range
+                    continue
 
-                # Assign to team members
                 assignees = [u["username"] for u in task.get("assignees", [])] or [
                     "Unassigned"
                 ]
 
                 for member in assignees:
-                    # Initialize member in report if not exists
                     if member not in report:
                         report[member] = {
                             "summary": {
@@ -1914,7 +1784,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                             "tasks": [],
                         }
 
-                    # Group intervals by date if requested
                     if group_by_date and task_intervals_in_range:
                         intervals_by_date = group_intervals_by_date(
                             task_intervals_in_range
@@ -1922,7 +1791,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     else:
                         intervals_by_date = None
 
-                    # Add task to member's report
                     task_entry = {
                         "task_id": task_id,
                         "task_name": task_name,
@@ -1933,7 +1801,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                         "intervals_count": len(task_intervals_in_range),
                     }
 
-                    # Add grouped or raw intervals
                     if intervals_by_date:
                         task_entry["by_date"] = intervals_by_date
                     else:
@@ -1941,7 +1808,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
                     report[member]["tasks"].append(task_entry)
 
-                    # Update summary
                     report[member]["summary"]["total_time_tracked_ms"] += (
                         task_time_in_range
                     )
@@ -1954,12 +1820,10 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # STEP 5: Format summaries and sort tasks
             # ================================================================
             for member, data in report.items():
-                # Add human-readable total
                 data["summary"]["total_time_tracked"] = format_duration_simple(
                     data["summary"]["total_time_tracked_ms"]
                 )
 
-                # Sort tasks by time tracked (most time first)
                 data["tasks"].sort(key=lambda x: x["time_on_task_ms"], reverse=True)
 
             return {
@@ -1993,30 +1857,18 @@ def register_pm_analytics_tools(mcp: FastMCP):
         week_end: Optional[str] = None,
     ) -> dict:
         """
-        Get all tasks a specific person worked on with timestamps.
-
-        This is a convenience wrapper around get_weekly_time_report_detailed
-        that filters to show only one person's tasks.
+        Get tasks a person worked on with timestamps (wrapper for detailed report).
 
         Args:
-            person_name: Name of the team member (e.g., "Henish Patel")
+            person_name: Team member name
             project: Project name
             space_name: Space name
-            week_selector: Week selector ("previous", "2-weeks-ago", etc.)
-            week_start: Week start date (YYYY-MM-DD)
-            week_end: Week end date (YYYY-MM-DD)
+            week_selector: Week selector (previous, 2-weeks-ago, etc.)
+            week_start, week_end: YYYY-MM-DD format
 
         Returns:
-            Filtered report showing only the specified person's tasks
-
-        Example:
-            get_person_tasks_with_time(
-                person_name="Henish Patel",
-                project="Luminique",
-                week_selector="previous"
-            )
+            Filtered report for specified person's tasks
         """
-        # Determine report type
         if project:
             report_type = "team_member"
         elif space_name:
@@ -2024,7 +1876,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
         else:
             return {"error": "Provide either project or space_name"}
 
-        # Get detailed report
         full_report = get_weekly_time_report_detailed(
             report_type=report_type,
             project=project,
@@ -2037,7 +1888,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
         if "error" in full_report:
             return full_report
 
-        # Filter to person
         person_data = full_report.get("report", {}).get(person_name)
 
         if not person_data:
@@ -2063,10 +1913,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
         include_archived: bool = True,
     ) -> dict:
         """
-        Get ACTUAL task status distribution (not just defined statuses).
-
-        This shows how many tasks are actually IN each status, not just
-        which statuses are defined in the list configuration.
+        Get actual task status distribution.
 
         Args:
             project: Project name
@@ -2074,7 +1921,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             include_archived: Include archived tasks
 
         Returns:
-            Actual distribution of tasks across statuses
+            Distribution of tasks across statuses
         """
         try:
             if not (list_ids := _resolve_to_list_ids(project, list_id)):
@@ -2132,84 +1979,77 @@ def register_pm_analytics_tools(mcp: FastMCP):
         rolling_days: Optional[int] = None,
         group_by: str = "assignee",
         include_archived: bool = True,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
     ) -> dict:
         """
-        Comprehensive time tracking report for a SPACE with all time period filters.
-
-        Supports all standard time reporting periods:
-        - "today": Today's activity
-        - "yesterday": Yesterday's activity
-        - "this_week": Current week (Monday-Sunday)
-        - "last_week": Previous week (Monday-Sunday)
-        - "this_month": Current month (1st to last day)
-        - "last_month": Previous month (1st to last day)
-        - "this_year": Current year (Jan 1 to Dec 31)
-        - "last_30_days": Last 30 days including today
-        - "rolling": Rolling period (requires rolling_days parameter, 1-365)
-        - "custom": Custom date range (requires custom_start and custom_end in YYYY-MM-DD format)
+        Time tracking report for a SPACE with period filters.
 
         Args:
             space_name: Name of the ClickUp space (e.g., "JewelleryOS")
-            space_id: Direct space ID (alternative to space_name)
-            period_type: Time period filter (see supported types above)
-            custom_start: Start date for custom period (YYYY-MM-DD format)
-            custom_end: End date for custom period (YYYY-MM-DD format)
-            rolling_days: Number of days for rolling period (1-365)
-            group_by: Report grouping - "assignee", "folder", or "status"
-            include_archived: Include archived tasks in the report
+            space_id: Direct space ID
+            period_type: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_30_days, rolling, custom
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            group_by: assignee, folder, or status
+            include_archived: Include archived tasks
+            async_job: Run in background (auto-triggers at 500+ tasks)
+            job_id: Internal use for background jobs
 
         Returns:
-            Time tracking report filtered by the specified period with:
-            - Total time tracked (in human-readable format: Xh Ym)
-            - Time estimate
-            - Task counts
-            - Efficiency metrics
-            - Grouped by assignee, folder, or status
+            Report with time tracked, estimates, task counts grouped by assignee/folder/status (or job_id if async)
 
-        Examples:
-            # Today's activity
-            get_space_time_report_comprehensive(space_name="JewelleryOS", period_type="today")
-
-            # This week's team member breakdown
-            get_space_time_report_comprehensive(
-                space_name="JewelleryOS",
-                period_type="this_week",
-                group_by="assignee"
-            )
-
-            # Last month's folder-wise report
-            get_space_time_report_comprehensive(
-                space_name="JewelleryOS",
-                period_type="last_month",
-                group_by="folder"
-            )
-
-            # Last 7 days rolling
-            get_space_time_report_comprehensive(
-                space_name="JewelleryOS",
-                period_type="rolling",
-                rolling_days=7
-            )
-
-            # Custom date range
-            get_space_time_report_comprehensive(
-                space_name="JewelleryOS",
-                period_type="custom",
-                custom_start="2026-01-01",
-                custom_end="2026-01-31"
-            )
-
-        CRITICAL - Date Logic:
-        - All dates are validated to prevent hallucination
-        - Invalid dates will return an error
-        - Period boundaries are strictly enforced
-        - Uses ACTUAL time entry intervals, not task update dates
+        Example:
+            get_space_time_report_comprehensive(space_name="JewelleryOS", period_type="this_week", group_by="assignee")
         """
         try:
             from app.mcp.status_helpers import parse_time_period_filter
             from app.clickup import fetch_all_time_entries_batch
+            import sys
+            import threading
+            import uuid
 
-            # Validate inputs
+            print(
+                "⌛ Processing space report - this may take 1-3 minutes for large spaces..."
+            )
+            sys.stdout.flush()
+
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_space_time_report_comprehensive(
+                            space_name=space_name,
+                            space_id=space_id,
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            group_by=group_by,
+                            include_archived=include_archived,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Space report running in background. Use get_weekly_time_report_status(job_id) to check status.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
             if not space_id and not space_name:
                 return {"error": "Provide either space_name or space_id"}
 
@@ -2228,7 +2068,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
             )
 
-            # Resolve space ID if needed
             if not space_id:
                 team_id = _get_team_id()
                 spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
@@ -2284,7 +2123,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "report": {},
                 }
 
-            # Fetch time entries for all tasks
+            if len(all_tasks) >= 500 and not job_id:
+                print(
+                    f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
+                )
+                sys.stdout.flush()
+                return get_space_time_report_comprehensive(
+                    space_name=space_name,
+                    space_id=space_id,
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    group_by=group_by,
+                    include_archived=include_archived,
+                    async_job=True,
+                )
+
             task_ids = [t["id"] for t in all_tasks]
             print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
             time_entries_map = fetch_all_time_entries_batch(task_ids)
@@ -2292,7 +2147,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            # Build report grouped by assignee/folder/status, including estimates
             from app.mcp.status_helpers import (
                 filter_time_entries_by_user_and_date_range,
             )
@@ -2305,53 +2159,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 task_time_entries = time_entries_map.get(task_id, [])
 
                 m = metrics.get(task_id, {})
-                est_total = m.get("est_total", 0)
+                est_direct = m.get("est_direct", 0)
 
                 if group_by == "assignee":
-                    # Get time tracked per user (not split among assignees)
                     user_time_map = filter_time_entries_by_user_and_date_range(
                         task_time_entries, start_ms, end_ms
                     )
 
-                    # Get all assignees for estimate splitting
-                    assignees = task.get("assignees", [])
-                    assignee_usernames = [u["username"] for u in assignees] or [
-                        "Unassigned"
-                    ]
-                    est_per_assignee = (
-                        est_total // len(assignee_usernames)
-                        if est_total and assignee_usernames
-                        else 0
-                    )
-
-                    # Add tracked time only for users who logged time
                     for username, time_tracked in user_time_map.items():
                         if username not in report:
                             report[username] = {
                                 "tasks": 0,
                                 "time_tracked": 0,
                                 "time_estimate": 0,
-                                "intervals_count": 0,
                             }
                         report[username]["tasks"] += 1
                         report[username]["time_tracked"] += time_tracked
-                        # Add estimate only if this user is an assignee
-                        if username in assignee_usernames:
-                            report[username]["time_estimate"] += est_per_assignee
-
-                    # For assignees who didn't track time but have estimates
-                    if est_total > 0:
-                        for username in assignee_usernames:
-                            if username not in user_time_map:  # Didn't track time
-                                if username not in report:
-                                    report[username] = {
-                                        "tasks": 0,
-                                        "time_tracked": 0,
-                                        "time_estimate": 0,
-                                        "intervals_count": 0,
-                                    }
-                                report[username]["tasks"] += 1
-                                report[username]["time_estimate"] += est_per_assignee
+                        report[username]["time_estimate"] += est_direct
 
                 elif group_by == "folder":
                     total_time_ms, filtered_intervals = (
@@ -2362,20 +2186,16 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     list_id = task.get("list", {}).get("id")
                     folder_name = folder_map.get(list_id, "Folderless")
 
-                    if total_time_ms > 0 or est_total > 0:
+                    if total_time_ms > 0:
                         if folder_name not in report:
                             report[folder_name] = {
                                 "tasks": 0,
                                 "time_tracked": 0,
                                 "time_estimate": 0,
-                                "intervals_count": 0,
                             }
                         report[folder_name]["tasks"] += 1
                         report[folder_name]["time_tracked"] += total_time_ms
-                        report[folder_name]["time_estimate"] += est_total
-                        report[folder_name]["intervals_count"] += len(
-                            filtered_intervals
-                        )
+                        report[folder_name]["time_estimate"] += est_direct
                 else:  # status
                     total_time_ms, filtered_intervals = (
                         filter_time_entries_by_date_range(
@@ -2384,7 +2204,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     )
                     status_name = _extract_status_name(task)
 
-                    if total_time_ms > 0 or est_total > 0:
+                    if total_time_ms > 0:
                         if status_name not in report:
                             report[status_name] = {
                                 "tasks": 0,
@@ -2394,37 +2214,31 @@ def register_pm_analytics_tools(mcp: FastMCP):
                             }
                         report[status_name]["tasks"] += 1
                         report[status_name]["time_tracked"] += total_time_ms
-                        report[status_name]["time_estimate"] += est_total
+                        report[status_name]["time_estimate"] += est_direct
                         report[status_name]["intervals_count"] += len(
                             filtered_intervals
                         )
 
-            # Format the report with human-readable time
+            # Format the report with ONLY human-readable values
             formatted = {
                 key: {
-                    **value,
-                    "human_tracked": _format_duration(value["time_tracked"]),
-                    "human_estimate": _format_duration(value["time_estimate"]),
-                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                    "tasks": value["tasks"],
+                    "time_tracked": _format_duration(value["time_tracked"]),
+                    "time_estimate": _format_duration(value["time_estimate"]),
                 }
                 for key, value in report.items()
             }
 
             total_tracked = sum(v["time_tracked"] for v in report.values())
             total_estimate = sum(v["time_estimate"] for v in report.values())
-            total_tasks_with_time = sum(v["tasks"] for v in report.values())
 
             return {
-                "space_name": space_name,
-                "space_id": space_id,
-                "period_type": period_type,
-                "start_date": start_date,
-                "end_date": end_date,
+                "period": f"{start_date} to {end_date}",
+                "space": space_name,
                 "group_by": group_by,
                 "total_time_tracked": _format_duration(total_tracked),
                 "total_time_estimate": _format_duration(total_estimate),
-                "total_hours_decimal": _hours_decimal(total_tracked),
-                "total_tasks_with_time": total_tasks_with_time,
+                "note": "Only includes tasks/subtasks worked on during the date range. Estimates use task-level values to prevent double-counting.",
                 "report": formatted,
             }
 
@@ -2446,97 +2260,85 @@ def register_pm_analytics_tools(mcp: FastMCP):
         rolling_days: Optional[int] = None,
         group_by: str = "assignee",
         include_archived: bool = True,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
     ) -> dict:
         """
-        Comprehensive time tracking report for a FOLDER with all time period filters.
-
-        Supports all standard time reporting periods:
-        - "today": Today's activity
-        - "yesterday": Yesterday's activity
-        - "this_week": Current week (Monday-Sunday)
-        - "last_week": Previous week (Monday-Sunday)
-        - "this_month": Current month (1st to last day)
-        - "last_month": Previous month (1st to last day)
-        - "this_year": Current year (Jan 1 to Dec 31)
-        - "last_30_days": Last 30 days including today
-        - "rolling": Rolling period (requires rolling_days parameter, 1-365)
-        - "custom": Custom date range (requires custom_start and custom_end in YYYY-MM-DD format)
+        Time tracking report for a FOLDER with period filters.
 
         Args:
-            folder_name: Name of the folder (requires space_name for lookup)
-            folder_id: Direct folder ID (alternative to folder_name)
-            space_name: Space name (required if using folder_name)
-            period_type: Time period filter (see supported types above)
-            custom_start: Start date for custom period (YYYY-MM-DD format)
-            custom_end: End date for custom period (YYYY-MM-DD format)
-            rolling_days: Number of days for rolling period (1-365)
-            group_by: Report grouping - "assignee", "list", or "status"
-            include_archived: Include archived tasks in the report
+            folder_name: Folder name (requires space_name)
+            folder_id: Direct folder ID
+            space_name: Space name (required with folder_name)
+            period_type: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_30_days, rolling, custom
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            group_by: assignee, list, or status
+            include_archived: Include archived tasks
+            async_job: Run in background (auto-triggers at 500+ tasks)
+            job_id: Internal use for background jobs
 
         Returns:
-            Time tracking report filtered by the specified period with:
-            - Total time tracked (in human-readable format: Xh Ym)
-            - Task counts
-            - Efficiency metrics
-            - Grouped by assignee, list, or status
+            Report with time tracked, estimates, task counts grouped by assignee/list/status (or job_id if async)
 
-        Examples:
-            # Today's activity for Luminique folder
-            get_folder_time_report_comprehensive(
-                folder_name="Luminique",
-                space_name="JewelleryOS",
-                period_type="today"
-            )
-
-            # This week's team member breakdown
-            get_folder_time_report_comprehensive(
-                folder_id="90167907863",
-                period_type="this_week",
-                group_by="assignee"
-            )
-
-            # Last month's list-wise report
-            get_folder_time_report_comprehensive(
-                folder_name="Luminique",
-                space_name="JewelleryOS",
-                period_type="last_month",
-                group_by="list"
-            )
-
-            # Last 7 days rolling
-            get_folder_time_report_comprehensive(
-                folder_id="90167907863",
-                period_type="rolling",
-                rolling_days=7
-            )
-
-            # Custom date range
-            get_folder_time_report_comprehensive(
-                folder_name="Luminique",
-                space_name="JewelleryOS",
-                period_type="custom",
-                custom_start="2026-01-01",
-                custom_end="2026-01-31"
-            )
-
-        CRITICAL - Date Logic:
-        - All dates are validated to prevent hallucination
-        - Invalid dates will return an error
-        - Period boundaries are strictly enforced
-        - Uses ACTUAL time entry intervals, not task update dates
+        Example:
+            get_folder_time_report_comprehensive(folder_name="Luminique", space_name="JewelleryOS", period_type="this_week")
         """
         try:
             from app.mcp.status_helpers import parse_time_period_filter
             from app.clickup import fetch_all_time_entries_batch
+            import sys
+            import threading
+            import uuid
 
-            # Validate inputs
+            print(
+                "⌛ Processing folder report - this may take 1-3 minutes for large folders..."
+            )
+            sys.stdout.flush()
+
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_folder_time_report_comprehensive(
+                            folder_name=folder_name,
+                            folder_id=folder_id,
+                            space_name=space_name,
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            group_by=group_by,
+                            include_archived=include_archived,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Folder report running in background. Use get_weekly_time_report_status(job_id) to check status.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
             if not folder_id and not folder_name:
                 return {"error": "Provide either folder_name or folder_id"}
 
             if folder_name and not space_name:
                 return {"error": "space_name is required when using folder_name"}
 
-            # Parse the time period to get date range
             try:
                 start_date, end_date = parse_time_period_filter(
                     period_type=period_type,
@@ -2551,9 +2353,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
             )
 
-            # Resolve folder ID if needed
             if not folder_id:
-                # First get space ID
                 team_id = _get_team_id()
                 spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
                 if not spaces_data:
@@ -2568,7 +2368,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 if not space_id:
                     return {"error": f"Space '{space_name}' not found"}
 
-                # Get folders in space
                 folders_resp, _ = _api_call("GET", f"/space/{space_id}/folder")
                 if not folders_resp:
                     return {"error": f"Failed to fetch folders in space '{space_name}'"}
@@ -2584,7 +2383,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
                         "error": f"Folder '{folder_name}' not found in space '{space_name}'"
                     }
 
-            # Get all lists in folder
             lists_resp, _ = _api_call("GET", f"/folder/{folder_id}/list")
             if not lists_resp:
                 return {"error": "Failed to fetch lists in folder"}
@@ -2603,7 +2401,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             print(f"[DEBUG] Found {len(list_ids)} lists in folder")
 
-            # Fetch all tasks
             all_tasks = _fetch_all_tasks(
                 list_ids, {}, include_archived=include_archived
             )
@@ -2620,7 +2417,24 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "report": {},
                 }
 
-            # Fetch time entries for all tasks
+            if len(all_tasks) >= 500 and not job_id:
+                print(
+                    f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
+                )
+                sys.stdout.flush()
+                return get_folder_time_report_comprehensive(
+                    folder_name=folder_name,
+                    folder_id=folder_id,
+                    space_name=space_name,
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    group_by=group_by,
+                    include_archived=include_archived,
+                    async_job=True,
+                )
+
             task_ids = [t["id"] for t in all_tasks]
             print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
             time_entries_map = fetch_all_time_entries_batch(task_ids)
@@ -2628,7 +2442,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            # Build report grouped by assignee/list/status, including estimates
             from app.mcp.status_helpers import (
                 filter_time_entries_by_user_and_date_range,
             )
@@ -2641,53 +2454,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 task_time_entries = time_entries_map.get(task_id, [])
 
                 m = metrics.get(task_id, {})
-                est_total = m.get("est_total", 0)
+                est_direct = m.get("est_direct", 0)
 
                 if group_by == "assignee":
-                    # Get time tracked per user (not split among assignees)
                     user_time_map = filter_time_entries_by_user_and_date_range(
                         task_time_entries, start_ms, end_ms
                     )
 
-                    # Get all assignees for estimate splitting
-                    assignees = task.get("assignees", [])
-                    assignee_usernames = [u["username"] for u in assignees] or [
-                        "Unassigned"
-                    ]
-                    est_per_assignee = (
-                        est_total // len(assignee_usernames)
-                        if est_total and assignee_usernames
-                        else 0
-                    )
-
-                    # Add tracked time only for users who logged time
                     for username, time_tracked in user_time_map.items():
                         if username not in report:
                             report[username] = {
                                 "tasks": 0,
                                 "time_tracked": 0,
                                 "time_estimate": 0,
-                                "intervals_count": 0,
                             }
                         report[username]["tasks"] += 1
                         report[username]["time_tracked"] += time_tracked
-                        # Add estimate only if this user is an assignee
-                        if username in assignee_usernames:
-                            report[username]["time_estimate"] += est_per_assignee
-
-                    # For assignees who didn't track time but have estimates
-                    if est_total > 0:
-                        for username in assignee_usernames:
-                            if username not in user_time_map:  # Didn't track time
-                                if username not in report:
-                                    report[username] = {
-                                        "tasks": 0,
-                                        "time_tracked": 0,
-                                        "time_estimate": 0,
-                                        "intervals_count": 0,
-                                    }
-                                report[username]["tasks"] += 1
-                                report[username]["time_estimate"] += est_per_assignee
+                        report[username]["time_estimate"] += est_direct
 
                 elif group_by == "list":
                     total_time_ms, filtered_intervals = (
@@ -2698,18 +2481,16 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     list_id = task.get("list", {}).get("id")
                     list_name = list_map.get(list_id, "Unknown List")
 
-                    if total_time_ms > 0 or est_total > 0:
+                    if total_time_ms > 0:
                         if list_name not in report:
                             report[list_name] = {
                                 "tasks": 0,
                                 "time_tracked": 0,
                                 "time_estimate": 0,
-                                "intervals_count": 0,
                             }
                         report[list_name]["tasks"] += 1
                         report[list_name]["time_tracked"] += total_time_ms
-                        report[list_name]["time_estimate"] += est_total
-                        report[list_name]["intervals_count"] += len(filtered_intervals)
+                        report[list_name]["time_estimate"] += est_direct
                 else:  # status
                     total_time_ms, filtered_intervals = (
                         filter_time_entries_by_date_range(
@@ -2718,7 +2499,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     )
                     status_name = _extract_status_name(task)
 
-                    if total_time_ms > 0 or est_total > 0:
+                    if total_time_ms > 0:
                         if status_name not in report:
                             report[status_name] = {
                                 "tasks": 0,
@@ -2728,37 +2509,32 @@ def register_pm_analytics_tools(mcp: FastMCP):
                             }
                         report[status_name]["tasks"] += 1
                         report[status_name]["time_tracked"] += total_time_ms
-                        report[status_name]["time_estimate"] += est_total
+                        report[status_name]["time_estimate"] += est_direct
                         report[status_name]["intervals_count"] += len(
                             filtered_intervals
                         )
 
-            # Format the report with human-readable time
+            # Format the report with ONLY human-readable values
             formatted = {
                 key: {
-                    **value,
-                    "human_tracked": _format_duration(value["time_tracked"]),
-                    "human_estimate": _format_duration(value["time_estimate"]),
-                    "hours_decimal": _hours_decimal(value["time_tracked"]),
+                    "tasks": value["tasks"],
+                    "time_tracked": _format_duration(value["time_tracked"]),
+                    "time_estimate": _format_duration(value["time_estimate"]),
                 }
                 for key, value in report.items()
             }
 
             total_tracked = sum(v["time_tracked"] for v in report.values())
             total_estimate = sum(v["time_estimate"] for v in report.values())
-            total_tasks_with_time = sum(v["tasks"] for v in report.values())
 
             return {
-                "folder_name": folder_name or "Unknown",
-                "folder_id": folder_id,
-                "period_type": period_type,
-                "start_date": start_date,
-                "end_date": end_date,
+                "period": f"{start_date} to {end_date}",
+                "folder": folder_name or "Unknown",
+                "space": space_name,
                 "group_by": group_by,
                 "total_time_tracked": _format_duration(total_tracked),
                 "total_time_estimate": _format_duration(total_estimate),
-                "total_hours_decimal": _hours_decimal(total_tracked),
-                "total_tasks_with_time": total_tasks_with_time,
+                "note": "Only includes tasks/subtasks worked on during the date range. Estimates use task-level values to prevent double-counting.",
                 "report": formatted,
             }
 
