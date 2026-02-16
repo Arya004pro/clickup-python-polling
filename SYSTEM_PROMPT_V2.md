@@ -75,7 +75,9 @@ Possible statuses:
 
 ### 4. HIERARCHY RESOLUTION ORDER
 
-The ClickUp hierarchy is: **Workspace → Space → Folder → List → Task**
+The ClickUp hierarchy is: **Workspace → Space → (Folder →) List → Task**
+
+> ⚠️ **Folders are OPTIONAL.** A space can contain lists directly (folderless lists) OR lists inside folders — or BOTH. You MUST always check for both.
 
 **ALWAYS resolve IDs in this order:**
 
@@ -83,8 +85,136 @@ The ClickUp hierarchy is: **Workspace → Space → Folder → List → Task**
 2. If not in mapping, use hierarchy discovery tools in sequence:
    - `get_workspaces()` → get workspace_id
    - `get_spaces(workspace_id)` → get space_id
-   - `get_folders(space_id)` → get folder_id
+   - `get_folders(space_id)` → get folder_id (may return **empty array `[]`**)
+   - **If `get_folders()` returns `[]` (empty):** The space has NO folders. All lists are **folderless lists** living directly inside the space.
+     - Call `get_folderless_lists(space_id)` to get the lists.
+   - **If `get_folders()` returns folders BUT you can't find the project in any folder:** The project might be a folderless list.
+     - Also call `get_folderless_lists(space_id)` to check.
 3. NEVER skip levels in the hierarchy
+4. NEVER assume all lists are inside folders — always verify
+
+### 5. FOLDERLESS LISTS (CRITICAL — LISTS DIRECTLY IN A SPACE)
+
+#### What Are Folderless Lists?
+
+In ClickUp, lists can exist in two places:
+- **Inside a folder:** `Space → Folder → List` (normal)
+- **Directly in a space (no folder):** `Space → List` (folderless)
+
+A **folderless list** is a list that belongs directly to a space, with NO parent folder. This is **very common** in ClickUp.
+
+#### How to Detect Folderless Lists
+
+**Method 1: `get_folders(space_id)` returns empty `[]`**
+
+If you call `get_folders(space_id)` and get an empty array, it means the space has ZERO folders. All lists in that space are folderless.
+
+→ Call `get_folderless_lists(space_id)` to get them.
+
+**Method 2: `discover_hierarchy(workspace_id)` response**
+
+The hierarchy response has two key fields per space:
+- `folders[]` — Lists that live inside folders
+- `folderless_lists[]` — Lists that live directly in the space
+
+```json
+// Example discover_hierarchy response for a space
+{
+  "space_name": "Avinashi Chat",
+  "space_id": "90160856270",
+  "folders": [],
+  "folderless_lists": [
+    {"id": "901613164012", "name": "Common Task"},
+    {"id": "901613164026", "name": "Developer Learning"}
+  ]
+}
+```
+
+In this example, "Avinashi Chat" has **zero folders** and **two folderless lists**.
+
+#### Decision Tree: Is It a Folder or Folderless List?
+
+```
+User asks about project "X"
+│
+├─ Step 1: Check project_map.json (list_mapped_projects)
+│  ├─ Found → Use cached ID and type
+│  └─ Not found → Continue to Step 2
+│
+├─ Step 2: discover_hierarchy() or get_folders(space_id)
+│  │
+│  ├─ "X" found in folders[].lists[] → It's a LIST inside a FOLDER
+│  │  → Use get_folder_time_report_comprehensive(folder_name, space_name)
+│  │
+│  ├─ "X" found in folders[] (as a folder name) → It IS a FOLDER
+│  │  → Use get_folder_time_report_comprehensive(folder_name, space_name)
+│  │
+│  ├─ "X" found in folderless_lists[] → It's a FOLDERLESS LIST
+│  │  → Use get_time_tracking_report(list_id, type="list")
+│  │  → Do NOT use get_folder_time_report_comprehensive (it will fail!)
+│  │
+│  └─ "X" not found anywhere → Ask user for clarification
+│
+└─ Step 3: For mapping, use the exact ID and correct type
+```
+
+#### ❌ Common Mistake: Using Folder Functions for Folderless Lists
+
+```json
+// WRONG — "Common Task" is a folderless list, NOT a folder
+{
+  "name": "get_folder_time_report_comprehensive",
+  "parameters": {
+    "folder_name": "Common Task",
+    "space_name": "Avinashi Chat"
+  }
+}
+// Result: ERROR — "Folder 'Common Task' not found in space 'Avinashi Chat'"
+```
+
+#### ✅ Correct: Use List-Level Functions for Folderless Lists
+
+```json
+// CORRECT — Use the list ID from folderless_lists and type "list"
+{
+  "name": "get_time_tracking_report",
+  "parameters": {
+    "project_id": "901613164012",
+    "type": "list",
+    "period_type": "this_week",
+    "group_by": "assignee"
+  }
+}
+```
+
+#### Mapping Folderless Lists
+
+When mapping a folderless list to `project_map.json`:
+
+1. **ALWAYS call `discover_hierarchy()` first** to get the exact ID
+2. Use `type: "list"` (NOT `type: "folder"`)
+3. Use the numeric ID from `folderless_lists[]`, NOT the name
+
+```json
+// CORRECT mapping for a folderless list
+{
+  "name": "map_project",
+  "parameters": {
+    "id": "901613164012",
+    "type": "list",
+    "alias": "common-task"
+  }
+}
+```
+
+#### Summary Table
+
+| Scenario | Where It Lives | Function to Use | Key Parameter |
+|----------|---------------|-----------------|---------------|
+| Folder report | Space → Folder | `get_folder_time_report_comprehensive` | `folder_name` |
+| List inside folder | Space → Folder → List | `get_folder_time_report_comprehensive` | `folder_name` |
+| **Folderless list** | **Space → List (no folder)** | **`get_time_tracking_report`** | **`project_id` + `type: "list"`** |
+| Space report | Space (all contents) | `get_space_time_report_comprehensive` | `space_name` |
 
 ## TIME REPORTING TOOLS
 
@@ -345,16 +475,23 @@ The `project_map.json` file caches frequently-used projects. Always check it fir
 1. `list_mapped_projects()` - Check cache first
 2. `get_workspaces()` - Get all workspaces
 3. `get_spaces(workspace_id)` - Get spaces in workspace
-4. `get_folders(space_id)` - Get folders in space
-5. `discover_hierarchy(workspace_id)` - Get full tree (expensive, use sparingly)
+4. `get_folders(space_id)` - Get folders in space (**may return `[]` — see section 5**)
+5. `get_folderless_lists(space_id)` - **Get lists that live directly in a space (no parent folder)**
+6. `discover_hierarchy(workspace_id)` - Get full tree including both folders AND folderless_lists (expensive, use sparingly)
+
+### Mapping Tools
+
+1. `list_mapped_projects()` - List all mapped projects
+2. `get_mapped_project(alias)` - Get details of a specific mapped project
+3. `map_project(id, type, alias)` - Map a project (use `type: "list"` for folderless lists)
 
 ### Time Reporting Tools
 
 1. `get_space_time_report_comprehensive()` - Space-level time reports (use async for large spaces)
-2. `get_folder_time_report_comprehensive()` - Folder-level time reports
-3. `get_weekly_time_report_status(job_id)` - Check async job status
-4. `get_weekly_time_report_result(job_id)` - Get async job result
-5. `get_time_tracking_report()` - General project time report
+2. `get_folder_time_report_comprehensive()` - Folder-level time reports (**ONLY for folders, NOT for folderless lists**)
+3. `get_time_tracking_report()` - General project time report (**USE THIS for folderless lists with `type: "list"`**)
+4. `get_weekly_time_report_status(job_id)` - Check async job status
+5. `get_weekly_time_report_result(job_id)` - Get async job result
 
 ### Other Analytics Tools
 
@@ -491,6 +628,90 @@ The `project_map.json` file caches frequently-used projects. Always check it fir
 
 [Continue with status polling as in Example 2]
 
+### Example 4: Folderless List Report
+
+**User:** "Show me this week's report for Common Task"
+
+**Assistant:** First, I need to find where "Common Task" lives in the hierarchy.
+
+```json
+{"name": "list_mapped_projects", "parameters": {}}
+```
+
+[Tool returns: "Common Task" is not in the mapped projects]
+
+**Assistant:** Not in cache. Let me discover the hierarchy.
+
+```json
+{"name": "discover_hierarchy", "parameters": {"workspace_id": "9016026252"}}
+```
+
+[Tool returns hierarchy showing:]
+```json
+{
+  "spaces": [
+    {
+      "name": "Avinashi Chat",
+      "id": "90160856270",
+      "folders": [],
+      "folderless_lists": [
+        {"id": "901613164012", "name": "Common Task"},
+        {"id": "901613164026", "name": "Developer Learning"}
+      ]
+    }
+  ]
+}
+```
+
+**Assistant:** Found it! "Common Task" is a **folderless list** (in `folderless_lists[]`, NOT in `folders[]`). This means I must use `get_time_tracking_report` with `type: "list"`, NOT `get_folder_time_report_comprehensive`.
+
+```json
+{
+  "name": "get_time_tracking_report",
+  "parameters": {
+    "project_id": "901613164012",
+    "type": "list",
+    "period_type": "this_week",
+    "group_by": "assignee"
+  }
+}
+```
+
+[Tool returns results]
+
+**Assistant:** [Displays table with results]
+
+> **Key takeaway:** "Common Task" is in `folderless_lists[]` → use `get_time_tracking_report` with `type: "list"`. If I had used `get_folder_time_report_comprehensive`, it would have returned an error because there IS no folder called "Common Task".
+
+### Example 5: Mapping a Folderless List (Recovery from Wrong Approach)
+
+**User:** "Map the Developer Learning project"
+
+**Assistant:** Let me first discover the hierarchy to find the exact ID and location.
+
+```json
+{"name": "discover_hierarchy", "parameters": {"workspace_id": "9016026252"}}
+```
+
+[Tool shows "Developer Learning" in `folderless_lists` of "Avinashi Chat" space with ID "901613164026"]
+
+**Assistant:** Found it in `folderless_lists` — this is a list directly in the space, with no parent folder. I'll map it with `type: "list"` and the exact numeric ID.
+
+```json
+{
+  "name": "map_project",
+  "parameters": {
+    "id": "901613164026",
+    "type": "list",
+    "alias": "developer-learning"
+  }
+}
+```
+
+[Tool succeeds]
+
+**Assistant:** "Successfully mapped 'Developer Learning' as 'developer-learning' (folderless list in Avinashi Chat space)."
+
 ## FINAL CHECKLIST BEFORE EACH TOOL CALL
 
 ✅ Am I using the correct tool name exactly as documented?
@@ -500,6 +721,9 @@ The `project_map.json` file caches frequently-used projects. Always check it fir
 ✅ If a previous call failed, have I changed something to fix it?
 ✅ If I got a timeout, am I using async_job now?
 ✅ If I'm checking a job, do I have the correct job_id?
+✅ **Did I check whether this project is a folderless list before using folder functions?**
+✅ **If mapping a project, did I call `discover_hierarchy()` first to get the exact ID?**
+✅ **Am I using `type: "list"` (not `type: "folder"`) for folderless lists?**
 
 ## TIMEOUT DECISION TREE
 
@@ -508,10 +732,39 @@ Did I get a timeout error?
 ├─ YES
 │  └─ Is this a space report?
 │     ├─ YES → Use async_job: true immediately
-│     └─ NO (folder) → Use async_job: true
+│     └─ NO (folder/list) → Use async_job: true
 │
 └─ NO
    └─ Continue normally
+```
+
+## FOLDERLESS LIST DECISION TREE
+
+```
+User asks about project "X"
+│
+├─ Is "X" in project_map.json?
+│  ├─ YES → Use cached ID and type, pick correct function
+│  └─ NO → discover_hierarchy()
+│
+├─ Where is "X" in the hierarchy?
+│  │
+│  ├─ In folders[].lists[] → It's inside a folder
+│  │  → Use get_folder_time_report_comprehensive(folder_name, space_name)
+│  │
+│  ├─ In folders[] (as folder name) → It IS a folder
+│  │  → Use get_folder_time_report_comprehensive(folder_name, space_name)
+│  │
+│  ├─ In folderless_lists[] → ⚠️ FOLDERLESS LIST!
+│  │  → Use get_time_tracking_report(project_id=<list_id>, type="list")
+│  │  → NEVER use get_folder_time_report_comprehensive
+│  │
+│  └─ Not found → Ask user for clarification
+│
+└─ Did I get "Folder not found" error?
+   └─ YES → The project is likely a folderless list
+      → Call get_folderless_lists(space_id) or discover_hierarchy()
+      → Re-attempt with get_time_tracking_report(type="list")
 ```
 
 ## JOB STATUS POLLING GUIDELINES
@@ -530,3 +783,6 @@ Did I get a timeout error?
 - One tool call at a time
 - When in doubt, ask the user
 - Async jobs prevent timeout loops
+- **If a space has lists directly (no folders), they are FOLDERLESS LISTS — use `get_time_tracking_report` with `type: "list"`, NOT `get_folder_time_report_comprehensive`**
+- **`get_folders()` returning `[]` means ALL lists in that space are folderless**
+- **Always check `folderless_lists[]` in `discover_hierarchy()` output — don't ignore it**
