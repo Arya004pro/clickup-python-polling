@@ -646,12 +646,12 @@ def _headers() -> Dict[str, str]:
 
 
 def _api_get(
-    endpoint: str, params: Optional[Dict] = None
+    endpoint: str, params: Optional[Dict] = None, timeout: int = 15
 ) -> tuple[Optional[Dict], Optional[str]]:
     """Generic API GET wrapper with error handling."""
     url = f"{BASE_URL}{endpoint}"
     try:
-        response = requests.get(url, headers=_headers(), params=params)
+        response = requests.get(url, headers=_headers(), params=params, timeout=timeout)
         return (
             (response.json(), None)
             if response.status_code == 200

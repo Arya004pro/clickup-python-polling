@@ -13,6 +13,8 @@ from __future__ import annotations
 from fastmcp import FastMCP
 import requests
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from app.mcp.status_helpers import (
@@ -115,10 +117,10 @@ def date_to_timestamp_ms(date_str: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _api_call(method: str, endpoint: str, params: Optional[Dict] = None):
+def _api_call(method: str, endpoint: str, params: Optional[Dict] = None, timeout: int = 30):
     url = f"{BASE_URL}{endpoint}"
     try:
-        response = requests.request(method, url, headers=_headers(), params=params)
+        response = requests.request(method, url, headers=_headers(), params=params, timeout=timeout)
         return (
             (response.json(), None)
             if response.status_code == 200
@@ -133,6 +135,158 @@ def _get_team_id() -> str:
         return CLICKUP_TEAM_ID
     data, _ = _api_call("GET", "/team")
     return data["teams"][0]["id"] if data and data.get("teams") else "0"
+
+
+# --- Rate Limiter (Token Bucket) ---
+class _RateLimiter:
+    """Thread-safe token bucket rate limiter for ClickUp API calls."""
+
+    def __init__(self, requests_per_minute: int = 1000):
+        self.rate_per_second = requests_per_minute / 60
+        self.burst_size = int(requests_per_minute * 0.1)
+        self.tokens = self.burst_size
+        self.last_update = time.time()
+        self.lock = Lock()
+        self.total_requests = 0
+        self.total_waits = 0
+        self.total_wait_time = 0.0
+
+    def acquire(self, tokens: int = 1) -> float:
+        with self.lock:
+            now = time.time()
+            time_passed = now - self.last_update
+            self.tokens = min(
+                self.burst_size, self.tokens + time_passed * self.rate_per_second
+            )
+            self.last_update = now
+
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                self.total_requests += tokens
+                return 0
+
+            tokens_needed = tokens - self.tokens
+            wait_time = tokens_needed / self.rate_per_second
+            if wait_time > 0:
+                time.sleep(wait_time)
+                self.total_waits += 1
+                self.total_wait_time += wait_time
+
+            self.tokens = 0
+            self.last_update = time.time()
+            self.total_requests += tokens
+            return wait_time
+
+    def get_stats(self) -> dict:
+        return {
+            "total_requests": self.total_requests,
+            "total_waits": self.total_waits,
+            "total_wait_time": self.total_wait_time,
+            "avg_wait": self.total_wait_time / self.total_waits
+            if self.total_waits > 0
+            else 0,
+            "requests_per_sec": self.rate_per_second,
+        }
+
+
+# Module-level rate limiter — shared across all batch calls in this module
+_rate_limiter = _RateLimiter(requests_per_minute=1000)
+
+
+def _fetch_all_time_entries_batch(task_ids: list) -> dict:
+    """
+    Batch-fetch time entries for a list of task IDs using concurrent workers.
+    Self-contained: only uses BASE_URL and _headers() from this module.
+
+    Args:
+        task_ids: List of ClickUp task ID strings
+
+    Returns:
+        Dict mapping task_id -> list of time entry dicts
+    """
+    import sys
+
+    if not task_ids:
+        return {}
+
+    total = len(task_ids)
+    result = {}
+    processed = 0
+    errors = 0
+    start_time = time.time()
+
+    optimal_workers = min(200, int(_rate_limiter.rate_per_second * 2))
+    batch_size = max(100, int(total / 20))
+
+    print(f"\n\u23f3 Fetching time entries for {total:,} tasks...")
+    sys.stdout.flush()
+    print(f"\U0001f680 {optimal_workers} concurrent workers")
+    sys.stdout.flush()
+
+    headers = _headers()
+
+    def _fetch_single(tid):
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                _rate_limiter.acquire(1)
+                resp = requests.get(
+                    f"{BASE_URL}/task/{tid}/time", headers=headers
+                )
+                if resp.status_code == 200:
+                    return tid, resp.json().get("data", []), None
+                elif resp.status_code == 429:
+                    wait = min(30, 2 ** attempt * 3)
+                    time.sleep(wait)
+                    continue
+                else:
+                    return tid, [], f"HTTP {resp.status_code}"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                return tid, [], str(e)
+        return tid, [], "Max retries exceeded"
+
+    with ThreadPoolExecutor(max_workers=optimal_workers) as executor:
+        futures = [executor.submit(_fetch_single, tid) for tid in task_ids]
+
+        for future in as_completed(futures):
+            tid, entries, error = future.result()
+            result[tid] = entries
+            processed += 1
+
+            if error:
+                errors += 1
+
+            if processed % batch_size == 0 or processed == total:
+                elapsed = time.time() - start_time
+                rate = processed / elapsed if elapsed > 0 else 0
+                remaining = total - processed
+                eta = (remaining / rate) if rate > 0 else 0
+                progress = (processed / total) * 100
+
+                print(
+                    f"\U0001f4ca [{processed:,}/{total:,}] {progress:.1f}% | "
+                    f"\u26a1 {rate:.1f} tasks/sec | "
+                    f"\u23f1\ufe0f  ETA: {eta:.0f}s | "
+                    f"\u274c Errors: {errors}"
+                )
+                sys.stdout.flush()
+
+    total_time = time.time() - start_time
+    stats = _rate_limiter.get_stats()
+
+    print("\n\u2705 Time entries fetch complete!")
+    sys.stdout.flush()
+    print(f"   Total: {processed:,} tasks in {total_time:.1f}s")
+    sys.stdout.flush()
+    print(f"   Speed: {processed / total_time:.1f} tasks/sec | Errors: {errors}")
+    sys.stdout.flush()
+    print(f"   Rate limiter waits: {stats['total_waits']} ({stats['total_wait_time']:.1f}s)")
+    sys.stdout.flush()
+
+    return result
 
 
 def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List[str]:
@@ -1164,7 +1318,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
         """
         try:
             import sys
-            from app.clickup import fetch_all_time_entries_batch
 
             # Early acknowledgment
             print("⏳ Processing time report request - this may take 1-3 minutes...")
@@ -1348,7 +1501,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 sys.stdout.flush()
 
                 task_ids = [t["id"] for t in all_tasks]
-                time_entries_map = fetch_all_time_entries_batch(task_ids)
+                time_entries_map = _fetch_all_time_entries_batch(task_ids)
 
                 print(
                     "[PROGRESS] Step 5/5: Processing time entries and building report..."
@@ -1476,7 +1629,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 sys.stdout.flush()
 
                 task_ids = [t["id"] for t in all_tasks]
-                time_entries_map = fetch_all_time_entries_batch(task_ids)
+                time_entries_map = _fetch_all_time_entries_batch(task_ids)
 
                 print("[PROGRESS] Step 4/5: Processing time entries...")
                 sys.stdout.flush()
@@ -1569,20 +1722,80 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_weekly_time_report_status(job_id: str) -> dict:
-        """Return status for an async weekly report job."""
+        """Check status for an async report job. HARD LIMIT: 5 polls per job.
+
+        Returns:
+            - status: 'queued', 'running', 'finished', or 'failed'
+            - poll_count: How many times this job has been polled
+            - polls_remaining: How many more polls before hard stop
+            - STOP_POLLING: True when max polls reached — you MUST stop calling this tool
+
+        IMPORTANT: If STOP_POLLING is True, do NOT call this tool again.
+        Instead, tell the user to try 'get_weekly_time_report_result' in a minute.
+        """
         j = JOBS.get(job_id)
         if not j:
             return {"error": "job_id not found"}
-        return {"job_id": job_id, "status": j.get("status"), "error": j.get("error")}
+
+        # Track poll count
+        poll_count = j.get("_poll_count", 0) + 1
+        j["_poll_count"] = poll_count
+        max_polls = 5
+
+        status = j.get("status")
+
+        # If finished or failed, always return immediately
+        if status in ("finished", "failed"):
+            resp = {
+                "job_id": job_id,
+                "status": status,
+                "error": j.get("error"),
+                "poll_count": poll_count,
+                "polls_remaining": 0,
+            }
+            # Auto-include result if finished to save a round trip
+            if status == "finished":
+                resp["result"] = j.get("result")
+                resp["message"] = "Job complete! Result included — no need to call get_weekly_time_report_result."
+            return resp
+
+        # Enforce hard poll limit
+        if poll_count >= max_polls:
+            return {
+                "job_id": job_id,
+                "status": status,
+                "poll_count": poll_count,
+                "polls_remaining": 0,
+                "STOP_POLLING": True,
+                "message": (
+                    "STOP: Maximum poll limit (5) reached. "
+                    "Do NOT call get_weekly_time_report_status again. "
+                    "Tell the user: 'The report is still processing. "
+                    "Please ask me to check the result in 1-2 minutes using: "
+                    f"get_weekly_time_report_result(job_id=\"{job_id}\")'"
+                ),
+            }
+
+        return {
+            "job_id": job_id,
+            "status": status,
+            "error": j.get("error"),
+            "poll_count": poll_count,
+            "polls_remaining": max_polls - poll_count,
+            "message": f"Job still {status}. You have {max_polls - poll_count} status checks remaining. Wait 15-30 seconds before checking again.",
+        }
 
     @mcp.tool()
     def get_weekly_time_report_result(job_id: str) -> dict:
-        """Return result for finished async weekly report job."""
+        """Return result for finished async report job. Safe to call anytime."""
         j = JOBS.get(job_id)
         if not j:
             return {"error": "job_id not found"}
         if j.get("status") != "finished":
-            return {"status": j.get("status"), "message": "Result not ready"}
+            return {
+                "status": j.get("status"),
+                "message": f"Result not ready yet (status: {j.get('status')}). Wait and try again later.",
+            }
         return {"status": "finished", "result": j.get("result")}
 
     @mcp.tool()
@@ -1630,7 +1843,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
     ) -> dict:
 
         try:
-            from app.clickup import fetch_all_time_entries_batch
             from app.mcp.status_helpers import (
                 format_time_entry_interval,
                 format_duration_simple,
@@ -1721,7 +1933,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             task_ids = [t["id"] for t in all_tasks]
             print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
-            time_entries_map = fetch_all_time_entries_batch(task_ids)
+            time_entries_map = _fetch_all_time_entries_batch(task_ids)
 
             # ================================================================
             # STEP 4: Build detailed report by person
@@ -2004,7 +2216,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
         """
         try:
             from app.mcp.status_helpers import parse_time_period_filter
-            from app.clickup import fetch_all_time_entries_batch
             import sys
             import threading
             import uuid
@@ -2142,7 +2353,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             task_ids = [t["id"] for t in all_tasks]
             print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
-            time_entries_map = fetch_all_time_entries_batch(task_ids)
+            time_entries_map = _fetch_all_time_entries_batch(task_ids)
 
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
@@ -2286,7 +2497,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
         """
         try:
             from app.mcp.status_helpers import parse_time_period_filter
-            from app.clickup import fetch_all_time_entries_batch
             import sys
             import threading
             import uuid
@@ -2437,7 +2647,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
             task_ids = [t["id"] for t in all_tasks]
             print(f"[DEBUG] Fetching time entries for {len(task_ids)} tasks...")
-            time_entries_map = fetch_all_time_entries_batch(task_ids)
+            time_entries_map = _fetch_all_time_entries_batch(task_ids)
 
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
@@ -2544,3 +2754,572 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print(f"[DEBUG] Error in get_folder_time_report_comprehensive: {e}")
             print(traceback.format_exc())
             return {"error": str(e)}
+
+    # ============================================================================
+    # EMPLOYEE DAILY TIME REPORT (Timesheet + Time Reporting)
+    # ============================================================================
+
+    @mcp.tool()
+    def get_employee_daily_time_report(
+        period_type: str = "this_month",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        space_name: Optional[str] = None,
+        space_id: Optional[str] = None,
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        list_id: Optional[str] = None,
+        assignee_names: Optional[List[str]] = None,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Employee daily time report — replicates ClickUp's Timesheet & Time Reporting.
+
+        Generates a matrix of Employee × Day showing how much time each team member
+        tracked on each day, with task-level detail, over a given period.
+
+        Default period is this_month (most common use case for timesheet review).
+
+        Args:
+            period_type: today, yesterday, this_week, last_week, this_month, last_month,
+                         this_year, last_30_days, rolling, custom (default: this_month)
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            space_name: Optional filter — only entries in this space
+            space_id: Optional filter — direct space ID
+            folder_name: Optional filter — only entries in this folder (requires space_name)
+            folder_id: Optional filter — direct folder ID
+            list_id: Optional filter — only entries in this list
+            assignee_names: Optional list of usernames to filter (default: all members)
+            async_job: Run in background to prevent timeout (default: False)
+            job_id: Internal use for background jobs
+
+        Returns:
+            Employee-wise daily time report with:
+            - timesheet: Employee × Day matrix (daily hours)
+            - summary: Per-employee totals (time tracked, estimated, tasks, avg daily)
+            - daily_totals: Team-wide totals per day
+            - task_details: Per-employee per-task breakdown
+            (or job_id if async)
+
+        Examples:
+            get_employee_daily_time_report()
+            get_employee_daily_time_report(period_type="last_month")
+            get_employee_daily_time_report(space_name="JewelleryOS", period_type="this_week")
+            get_employee_daily_time_report(folder_name="Luminique", space_name="JewelleryOS")
+            get_employee_daily_time_report(assignee_names=["Arya", "Mehul"])
+            get_employee_daily_time_report(period_type="this_month", async_job=True)
+        """
+        try:
+            from app.mcp.status_helpers import (
+                parse_time_period_filter,
+                get_workspace_members,
+            )
+            from app.mcp.time_stamp_helpers import format_duration_simple
+            from collections import defaultdict
+            import sys
+            import threading
+            import uuid
+
+            print("⌛ Processing employee daily time report...")
+            sys.stdout.flush()
+
+            # ================================================================
+            # ASYNC JOB SUPPORT: Always run async (task-based fetch is heavy)
+            # The team-level endpoint is not available with our token, so we
+            # must use the slower task-based approach which always needs async.
+            # ================================================================
+            if not async_job and not job_id:
+                # Auto-promote to async to prevent MCP timeout
+                print("⚡ AUTO-ASYNC: Task-based fetch always runs in background to prevent timeout.")
+                sys.stdout.flush()
+                async_job = True
+
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_employee_daily_time_report(
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            space_name=space_name,
+                            space_id=space_id,
+                            folder_name=folder_name,
+                            folder_id=folder_id,
+                            list_id=list_id,
+                            assignee_names=assignee_names,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Employee daily time report running in background. Use get_weekly_time_report_status(job_id) to check progress — result will be included when finished.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
+            # ================================================================
+            # STEP 1: Parse date range
+            # ================================================================
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+            sys.stdout.flush()
+
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # ================================================================
+            # STEP 2: Get workspace members to build assignee filter
+            # ================================================================
+            team_id = _get_team_id()
+            members_result = get_workspace_members()
+
+            if "error" in members_result:
+                # Retry up to 2 more times — ClickUp API can be flaky
+                for retry in range(2):
+                    print(f"[WARN] Workspace members fetch failed (attempt {retry + 1}/3): {members_result['error']}. Retrying...")
+                    sys.stdout.flush()
+                    time.sleep(2)
+                    members_result = get_workspace_members()
+                    if "error" not in members_result:
+                        break
+                else:
+                    return {
+                        "error": f"Failed to get workspace members after 3 attempts: {members_result['error']}"
+                    }
+
+            all_members = members_result.get("members", [])
+            # Build user ID → username map
+            user_id_to_name = {}
+            user_name_to_id = {}
+            for m in all_members:
+                uid = str(m.get("id", ""))
+                uname = m.get("username", "Unknown")
+                user_id_to_name[uid] = uname
+                user_name_to_id[uname.lower()] = uid
+
+            # Filter to specific assignees if requested
+            if assignee_names:
+                target_user_ids = []
+                not_found = []
+                for name in assignee_names:
+                    uid = user_name_to_id.get(name.lower())
+                    if uid:
+                        target_user_ids.append(uid)
+                    else:
+                        # Fuzzy match: check if any username contains the search term
+                        matched = False
+                        for uname_lower, uid_val in user_name_to_id.items():
+                            if name.lower() in uname_lower:
+                                target_user_ids.append(uid_val)
+                                matched = True
+                                break
+                        if not matched:
+                            not_found.append(name)
+
+                if not_found:
+                    return {
+                        "error": f"Assignees not found: {not_found}",
+                        "available_members": [m["username"] for m in all_members],
+                        "hint": "Use exact username or a substring match",
+                    }
+            else:
+                # All members
+                target_user_ids = [str(m["id"]) for m in all_members if m.get("id")]
+
+            if not target_user_ids:
+                return {"error": "No team members found to query"}
+
+            # ================================================================
+            # STEP 3: Resolve location filter (space/folder/list)
+            # ================================================================
+            location_filter = {}
+
+            if list_id:
+                location_filter["list_id"] = list_id
+            elif folder_id:
+                location_filter["folder_id"] = folder_id
+            elif folder_name and space_name:
+                # Resolve folder ID from space
+                if not space_id:
+                    spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                    if spaces_data:
+                        for s in spaces_data.get("spaces", []):
+                            if s["name"].lower() == space_name.lower():
+                                space_id = s["id"]
+                                break
+                    if not space_id:
+                        return {"error": f"Space '{space_name}' not found"}
+
+                folders_resp, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if folders_resp:
+                    for f in folders_resp.get("folders", []):
+                        if f["name"].lower() == folder_name.lower():
+                            location_filter["folder_id"] = f["id"]
+                            break
+                    if "folder_id" not in location_filter:
+                        return {
+                            "error": f"Folder '{folder_name}' not found in space '{space_name}'"
+                        }
+            elif space_name or space_id:
+                if not space_id:
+                    spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                    if spaces_data:
+                        for s in spaces_data.get("spaces", []):
+                            if s["name"].lower() == space_name.lower():
+                                space_id = s["id"]
+                                break
+                    if not space_id:
+                        return {"error": f"Space '{space_name}' not found"}
+                location_filter["space_id"] = space_id
+
+            # ================================================================
+            # STEP 4: Fetch time entries via task-based approach
+            # (Team-level endpoint requires admin token which we don't have)
+            # ================================================================
+            all_time_entries = []
+            local_task_map = {}
+
+            print("⏳ Step 4a: Resolving lists for task-based time entry fetch...")
+            sys.stdout.flush()
+
+            # Resolve list IDs based on location filter
+            target_list_ids = []
+
+            if list_id:
+                target_list_ids = [list_id]
+            elif "folder_id" in location_filter:
+                fid = location_filter["folder_id"]
+                r, _ = _api_call("GET", f"/folder/{fid}/list")
+                if r:
+                    target_list_ids = [lst["id"] for lst in r.get("lists", [])]
+            elif "space_id" in location_filter:
+                sid = location_filter["space_id"]
+                # Folderless lists
+                r, _ = _api_call("GET", f"/space/{sid}/list")
+                if r:
+                    target_list_ids.extend([lst["id"] for lst in r.get("lists", [])])
+                # Lists inside folders
+                r, _ = _api_call("GET", f"/space/{sid}/folder")
+                if r:
+                    for folder in r.get("folders", []):
+                        fr, _ = _api_call("GET", f"/folder/{folder['id']}/list")
+                        if fr:
+                            target_list_ids.extend([lst["id"] for lst in fr.get("lists", [])])
+            else:
+                # ENTIRE WORKSPACE (All Spaces)
+                print("⚠️ Fetching ALL lists from all spaces in workspace... This is a heavy operation.")
+                sys.stdout.flush()
+                r, _ = _api_call("GET", f"/team/{team_id}/space")
+                if r:
+                    for space in r.get("spaces", []):
+                        sid = space["id"]
+                        lr, _ = _api_call("GET", f"/space/{sid}/list")
+                        if lr:
+                            target_list_ids.extend([lst["id"] for lst in lr.get("lists", [])])
+                        fr, _ = _api_call("GET", f"/space/{sid}/folder")
+                        if fr:
+                            for folder in fr.get("folders", []):
+                                flr, _ = _api_call("GET", f"/folder/{folder['id']}/list")
+                                if flr:
+                                    target_list_ids.extend([lst["id"] for lst in flr.get("lists", [])])
+
+            print(f"[DEBUG] Found {len(target_list_ids)} lists to scan.")
+            sys.stdout.flush()
+
+            if target_list_ids:
+                # Fetch all tasks (including archived + closed + subtasks)
+                print(f"⏳ Step 4b: Fetching tasks from {len(target_list_ids)} lists...")
+                sys.stdout.flush()
+                all_tasks = _fetch_all_tasks(target_list_ids, {}, include_archived=True)
+                print(f"[DEBUG] Fetched {len(all_tasks)} total tasks")
+                sys.stdout.flush()
+
+                local_task_map = {t["id"]: t for t in all_tasks}
+
+                # Fetch time entries for all tasks
+                print(f"⏳ Step 4c: Fetching time entries for {len(all_tasks)} tasks...")
+                sys.stdout.flush()
+                task_entries_map = _fetch_all_time_entries_batch([t["id"] for t in all_tasks])
+
+                # Flatten results
+                for entries in task_entries_map.values():
+                    all_time_entries.extend(entries)
+
+            print(f"[DEBUG] Total time entries fetched: {len(all_time_entries)}")
+            sys.stdout.flush()
+
+            if not all_time_entries:
+                return {
+                    "period": f"{start_date} to {end_date}",
+                    "period_type": period_type,
+                    "location_filter": location_filter or "entire workspace",
+                    "message": "No time entries found for the specified period and filters",
+                    "timesheet": {},
+                    "summary": {},
+                }
+
+            # ================================================================
+            # STEP 5: Build the Employee × Day matrix
+            # ================================================================
+            # Structure: { username: { "YYYY-MM-DD": { ms, tasks } } }
+            employee_daily = defaultdict(lambda: defaultdict(lambda: {
+                "time_ms": 0,
+                "tasks": defaultdict(lambda: {
+                    "time_ms": 0,
+                    "task_name": "",
+                    "task_id": "",
+                    "intervals": 0,
+                }),
+            }))
+
+            # Also track per-employee totals and task estimation
+            employee_totals = defaultdict(lambda: {
+                "total_time_ms": 0,
+                "total_intervals": 0,
+                "task_ids": set(),
+                "days_worked": set(),
+            })
+
+            all_dates = set()
+
+            for entry in all_time_entries:
+                # Extract user
+                user = entry.get("user", {})
+                user_id = str(user.get("id", ""))
+                username = user.get("username") or user_id_to_name.get(user_id, "Unknown")
+
+                # Extract task info
+                task = entry.get("task", {}) or {}
+                task_id = task.get("id", "no_task")
+                task_name = task.get("name", "")
+                
+                # Enrich task name if missing (common in fallback task-based fetch)
+                if not task_name and task_id in local_task_map:
+                    task_name = local_task_map[task_id].get("name", "Unknown Task")
+                
+                if not task_name:
+                    task_name = "No Task"
+
+                # Process intervals — handle both formats:
+                # Format A (team-level): entry has "intervals" array
+                # Format B (task-level): entry itself has start/end/duration (intervals may be empty)
+                intervals = entry.get("intervals", [])
+
+                # If no intervals array (or empty), treat the entry itself as a single interval
+                if not intervals:
+                    entry_start = entry.get("start")
+                    entry_duration = entry.get("duration") or entry.get("time", 0)
+                    if entry_start:
+                        intervals = [{
+                            "start": entry_start,
+                            "end": entry.get("end"),
+                            "time": entry_duration,
+                        }]
+
+                for interval in intervals:
+                    interval_start = interval.get("start")
+                    interval_end = interval.get("end")
+                    duration = interval.get("time", 0)
+
+                    if not interval_start:
+                        continue
+
+                    try:
+                        interval_start_ms = int(interval_start)
+                        duration_ms = int(duration) if duration else 0
+                    except (ValueError, TypeError):
+                        continue
+
+                    # If duration is 0 but we have start+end, compute it
+                    if duration_ms == 0 and interval_end:
+                        try:
+                            duration_ms = int(interval_end) - interval_start_ms
+                        except (ValueError, TypeError):
+                            pass
+
+                    if duration_ms <= 0:
+                        continue
+
+                    # Only include intervals within the date range
+                    if interval_start_ms < start_ms or interval_start_ms > end_ms:
+                        continue
+
+                    # Determine the date from the start timestamp
+                    dt = datetime.fromtimestamp(
+                        interval_start_ms / 1000, tz=timezone.utc
+                    )
+                    date_str = dt.strftime("%Y-%m-%d")
+                    all_dates.add(date_str)
+
+                    # Accumulate
+                    day_data = employee_daily[username][date_str]
+                    day_data["time_ms"] += duration_ms
+
+                    task_data = day_data["tasks"][task_id]
+                    task_data["time_ms"] += duration_ms
+                    task_data["task_name"] = task_name
+                    task_data["task_id"] = task_id
+                    task_data["intervals"] += 1
+
+                    # Totals
+                    employee_totals[username]["total_time_ms"] += duration_ms
+                    employee_totals[username]["total_intervals"] += 1
+                    employee_totals[username]["task_ids"].add(task_id)
+                    employee_totals[username]["days_worked"].add(date_str)
+
+            # Sort dates chronologically
+            sorted_dates = sorted(all_dates)
+
+            # ================================================================
+            # STEP 6: Format the timesheet matrix
+            # ================================================================
+            timesheet = {}
+            for username in sorted(employee_daily.keys()):
+                daily_data = employee_daily[username]
+                timesheet[username] = {}
+                for date_str in sorted_dates:
+                    day = daily_data.get(date_str)
+                    if day and day["time_ms"] > 0:
+                        timesheet[username][date_str] = format_duration_simple(
+                            day["time_ms"]
+                        )
+                    else:
+                        timesheet[username][date_str] = "-"
+
+            # ================================================================
+            # STEP 7: Build employee summary (Time Reporting view)
+            # ================================================================
+            summary = {}
+            for username, totals in sorted(employee_totals.items()):
+                total_ms = totals["total_time_ms"]
+                days_count = len(totals["days_worked"])
+                avg_daily_ms = total_ms // days_count if days_count > 0 else 0
+
+                summary[username] = {
+                    "time_tracked": format_duration_simple(total_ms),
+                    "time_tracked_ms": total_ms,
+                    "total_tasks": len(totals["task_ids"]),
+                    "total_intervals": totals["total_intervals"],
+                    "days_worked": days_count,
+                    "avg_daily": format_duration_simple(avg_daily_ms),
+                }
+
+            # ================================================================
+            # STEP 8: Daily totals across the whole team
+            # ================================================================
+            daily_totals = {}
+            for date_str in sorted_dates:
+                day_total_ms = 0
+                day_members_active = 0
+                for username in employee_daily:
+                    day = employee_daily[username].get(date_str)
+                    if day and day["time_ms"] > 0:
+                        day_total_ms += day["time_ms"]
+                        day_members_active += 1
+
+                # Get day name for readability
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                day_name = dt.strftime("%a")
+
+                daily_totals[date_str] = {
+                    "day": day_name,
+                    "total_time": format_duration_simple(day_total_ms),
+                    "active_members": day_members_active,
+                }
+
+            # ================================================================
+            # STEP 9: Build per-employee task-level detail
+            # ================================================================
+            task_details = {}
+            for username in sorted(employee_daily.keys()):
+                # Aggregate across all days for this employee
+                employee_tasks = defaultdict(lambda: {"time_ms": 0, "task_name": "", "intervals": 0, "days": []})
+                for date_str in sorted_dates:
+                    day = employee_daily[username].get(date_str)
+                    if not day:
+                        continue
+                    for tid, tdata in day["tasks"].items():
+                        if tdata["time_ms"] > 0:
+                            employee_tasks[tid]["time_ms"] += tdata["time_ms"]
+                            employee_tasks[tid]["task_name"] = tdata["task_name"]
+                            employee_tasks[tid]["intervals"] += tdata["intervals"]
+                            employee_tasks[tid]["days"].append(date_str)
+
+                # Sort tasks by time tracked (descending)
+                sorted_tasks = sorted(
+                    employee_tasks.items(),
+                    key=lambda x: x[1]["time_ms"],
+                    reverse=True,
+                )
+
+                task_details[username] = [
+                    {
+                        "task_id": tid,
+                        "task_name": tdata["task_name"],
+                        "time_tracked": format_duration_simple(tdata["time_ms"]),
+                        "intervals": tdata["intervals"],
+                        "days_count": len(set(tdata["days"])),
+                    }
+                    for tid, tdata in sorted_tasks
+                ]
+
+            # ================================================================
+            # STEP 10: Grand totals
+            # ================================================================
+            grand_total_ms = sum(
+                t["total_time_ms"] for t in employee_totals.values()
+            )
+            total_team_tasks = len(
+                set().union(*(t["task_ids"] for t in employee_totals.values()))
+            )
+
+            return {
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "location_filter": location_filter or "entire workspace",
+                "total_members": len(summary),
+                "total_days": len(sorted_dates),
+                "grand_total_time": format_duration_simple(grand_total_ms),
+                "grand_total_tasks": total_team_tasks,
+                "dates": sorted_dates,
+                "timesheet": timesheet,
+                "summary": summary,
+                "daily_totals": daily_totals,
+                "task_details": task_details,
+                "note": "Timesheet shows daily tracked time per employee. '-' means no time tracked that day.",
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_employee_daily_time_report: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e), "traceback": traceback.format_exc()}
