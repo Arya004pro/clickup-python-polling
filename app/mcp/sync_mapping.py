@@ -167,6 +167,187 @@ def _fetch_full_structure(entity_id: str, entity_type: str) -> dict:
     return structure
 
 
+def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[dict]:
+    """
+    Recursively search for an entity by name in a structure.
+    Returns the entity dict with parent context if found.
+    """
+    if not structure or not search_name:
+        return None
+
+    search_lower = search_name.lower().strip()
+
+    # Check current node
+    if structure.get("name", "").lower() == search_lower:
+        return {
+            "id": structure["id"],
+            "name": structure["name"],
+            "type": structure["type"],
+            "structure": structure,
+            "found_at": "root",
+        }
+
+    # Search in children
+    for child in structure.get("children", []):
+        child_name = child.get("name", "").lower()
+
+        if child_name == search_lower:
+            return {
+                "id": child["id"],
+                "name": child["name"],
+                "type": child["type"],
+                "structure": child,
+                "parent_name": structure.get("name"),
+                "parent_type": structure.get("type"),
+                "parent_id": structure.get("id"),
+                "found_at": "direct_child",
+            }
+
+        # Recursively search in nested children (e.g., lists inside folders)
+        if child.get("children"):
+            nested = _search_entity_in_structure(child, search_name)
+            if nested:
+                nested["parent_name"] = structure.get("name")
+                nested["parent_type"] = structure.get("type")
+                nested["parent_id"] = structure.get("id")
+                nested["found_at"] = "nested"
+                return nested
+
+    return None
+
+
+def find_entity_anywhere(entity_name: str) -> Optional[dict]:
+    """
+    Universal entity finder. Searches for a space, folder, or list by name.
+
+    Search priority:
+    1. Mapped projects in project_map.json
+    2. Live API search across all spaces
+
+    Returns:
+        Dict with entity details, type, IDs, and full structure context
+    """
+    if not entity_name:
+        return None
+
+    search_lower = entity_name.lower().strip()
+
+    # 1. Search in mapped projects
+    for alias, data in db.projects.items():
+        alias_lower = alias.lower()
+        stored_alias = data.get("alias", "").lower()
+        structure = data.get("structure", {})
+        structure_name = structure.get("name", "").lower()
+
+        # Check if the entity name matches the mapped project itself
+        if search_lower in [alias_lower, stored_alias, structure_name]:
+            return {
+                "id": data["clickup_id"],
+                "name": structure.get("name", alias),
+                "type": data["clickup_type"],
+                "structure": structure,
+                "source": "project_map",
+                "alias": alias,
+                "found_at": "root",
+            }
+
+        # Search within the structure (for folders/lists inside mapped spaces)
+        result = _search_entity_in_structure(structure, entity_name)
+        if result:
+            result["source"] = "project_map"
+            result["root_alias"] = alias
+            return result
+
+    # 2. Live API search if not found in map
+    teams_data = _api_get("/team")
+    if not teams_data:
+        return None
+
+    team_id = teams_data["teams"][0]["id"]
+    spaces_data = _api_get(f"/team/{team_id}/space")
+
+    if not spaces_data:
+        return None
+
+    # Search spaces
+    for space in spaces_data.get("spaces", []):
+        if space["name"].lower() == search_lower:
+            structure = _fetch_full_structure(space["id"], "space")
+            return {
+                "id": space["id"],
+                "name": space["name"],
+                "type": "space",
+                "structure": structure,
+                "source": "api",
+                "found_at": "root",
+            }
+
+        # Search folders in this space
+        folders_data = _api_get(f"/space/{space['id']}/folder")
+        if folders_data:
+            for folder in folders_data.get("folders", []):
+                if folder["name"].lower() == search_lower:
+                    structure = _fetch_full_structure(folder["id"], "folder")
+                    return {
+                        "id": folder["id"],
+                        "name": folder["name"],
+                        "type": "folder",
+                        "structure": structure,
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folder",
+                    }
+
+                # Search lists in this folder
+                lists_data = _api_get(f"/folder/{folder['id']}/list")
+                if lists_data:
+                    for lst in lists_data.get("lists", []):
+                        if lst["name"].lower() == search_lower:
+                            return {
+                                "id": lst["id"],
+                                "name": lst["name"],
+                                "type": "list",
+                                "structure": {
+                                    "id": lst["id"],
+                                    "name": lst["name"],
+                                    "type": "list",
+                                },
+                                "parent_name": folder["name"],
+                                "parent_type": "folder",
+                                "parent_id": folder["id"],
+                                "grandparent_name": space["name"],
+                                "grandparent_type": "space",
+                                "grandparent_id": space["id"],
+                                "source": "api",
+                                "found_at": "list_in_folder",
+                            }
+
+        # Search folderless lists in this space
+        lists_data = _api_get(f"/space/{space['id']}/list")
+        if lists_data:
+            for lst in lists_data.get("lists", []):
+                if lst["name"].lower() == search_lower:
+                    return {
+                        "id": lst["id"],
+                        "name": lst["name"],
+                        "type": "list",
+                        "structure": {
+                            "id": lst["id"],
+                            "name": lst["name"],
+                            "type": "list",
+                        },
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folderless_list",
+                    }
+
+    return None
+
+
 # --- Tools Definition ---
 
 
@@ -248,6 +429,84 @@ def register_sync_mapping_tools(mcp: FastMCP):
         result = {"workspace_id": target_ws_id, "hierarchy": hierarchy}
         db.set_cache(cache_key, result)
         return {"source": "api", "data": result}
+
+    @mcp.tool()
+    def find_project_anywhere(project_name: str) -> dict:
+        """
+        Universal project/entity finder. Search for any space, folder, or list by name.
+        Works regardless of where the entity is located in the hierarchy.
+
+        Args:
+            project_name: Name of the space, folder, or list to find
+
+        Returns:
+            Entity details including type, ID, location in hierarchy, and structure
+
+        Use this when you need to find a project but don't know if it's a space, folder, or list.
+        This tool searches everywhere: mapped projects, spaces, folders, lists in folders, and folderless lists.
+
+        Example:
+            find_project_anywhere("AIX") -> Returns space "AIX" with all its folders and lists
+            find_project_anywhere("Luminique") -> Returns folder "Luminique" with all its lists
+            find_project_anywhere("Backlog") -> Returns list "Backlog" with its parent context
+        """
+        result = find_entity_anywhere(project_name)
+
+        if not result:
+            return {
+                "error": f"Project '{project_name}' not found",
+                "hint": "The project might not exist, or you may need to map it first using map_project()",
+                "suggestion": "Try using discover_hierarchy() to see all available spaces, folders, and lists",
+            }
+
+        # Format the response for clarity
+        response = {
+            "found": True,
+            "name": result["name"],
+            "id": result["id"],
+            "type": result["type"],
+            "source": result["source"],
+            "location": result.get("found_at", "unknown"),
+        }
+
+        # Add parent context if available
+        if result.get("parent_name"):
+            response["parent"] = {
+                "name": result["parent_name"],
+                "type": result["parent_type"],
+                "id": result["parent_id"],
+            }
+
+        if result.get("grandparent_name"):
+            response["grandparent"] = {
+                "name": result["grandparent_name"],
+                "type": result["grandparent_type"],
+                "id": result["grandparent_id"],
+            }
+
+        # Add structure summary
+        if result.get("structure"):
+            structure = result["structure"]
+            children_count = len(structure.get("children", []))
+            if children_count > 0:
+                response["contains"] = {
+                    "total_children": children_count,
+                    "children": [
+                        {"name": c.get("name"), "type": c.get("type")}
+                        for c in structure.get("children", [])[:10]  # Show first 10
+                    ],
+                }
+                if children_count > 10:
+                    response["contains"]["note"] = (
+                        f"Showing 10 of {children_count} items"
+                    )
+
+        # Add usage hint
+        response["usage_hint"] = (
+            f"Use this {result['type']} ID ({result['id']}) with report generation tools"
+        )
+
+        return response
 
     @mcp.tool()
     def map_project(id: str, type: str, alias: str = None) -> dict:
