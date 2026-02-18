@@ -2056,7 +2056,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
     @mcp.tool()
     def get_space_project_time_report(
         space_name: str,
-        period_type: str = "this_week",
+        period_type: str = "this_month",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -2387,32 +2387,15 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "time_tracked": _format_duration(tracked),
                     "time_estimate": _format_duration(estimated),
                     "team_breakdown": formatted_members,
+                    "_sort_ms": tracked,  # internal sort key, removed below
                 }
 
                 # Only include projects that have activity in the date range
                 if report["tasks_with_time_in_range"] > 0:
                     formatted_projects.append(proj_entry)
 
-            # Sort projects by time tracked (descending)
-            formatted_projects.sort(
-                key=lambda p: sum(
-                    m.get("time_tracked_ms", 0)
-                    for m in project_reports.get(
-                        next(
-                            (
-                                k
-                                for k, v in project_reports.items()
-                                if v["project_name"] == p["project_name"]
-                            ),
-                            "",
-                        ),
-                        {},
-                    )
-                    .get("team_members", {})
-                    .values()
-                ),
-                reverse=True,
-            )
+            # Sort projects by time tracked (descending) using raw ms stored above
+            formatted_projects.sort(key=lambda p: p.pop("_sort_ms", 0), reverse=True)
 
             # Also include projects with no activity for completeness
             inactive_projects = []

@@ -643,7 +643,9 @@ The `project_map.json` file caches frequently-used projects. Universal tools sea
 ### For Time Reports:
 
 1. ALWAYS show results in a markdown table
-2. Include columns: Assignee/Entity, Tasks, Time Tracked, Time Estimate
+2. Include columns:
+   - For team/member reports: **Assignee/Entity, Tasks, Time Tracked, Time Estimate**
+   - For project-wise reports (get_space_project_time_report): **Project Name, Type, Tasks, Time Tracked, Time Estimate**
 3. **TIME FORMAT — CRITICAL:** ALWAYS display time as `Xhr Ymin` — for example `144h 35m`, `2h 30m`, `0h 15m`.
    - The tool response already provides time in this format — copy it exactly.
    - **NEVER reformat time as `H:MM` or `HH:MM` (e.g. `144:35`, `2:30`) — this is WRONG.**
@@ -875,9 +877,22 @@ The `project_map.json` file caches frequently-used projects. Universal tools sea
 }
 ```
 
-[Tool discovers space structure: folders = projects, standalone lists = projects. Returns per-project time tracked & estimated with team breakdown]
+[Tool discovers space structure, runs async in background, returns finished report with per-project tracked & estimated time]
 
-**Assistant:** [Displays table grouped by project showing tracked/estimated time per project]
+**Assistant:** Here is the project-wise time report for **AIX** this month:
+
+| Project Name              | Type   |   Tasks | Time Tracked | Time Estimate |
+| ------------------------- | ------ | ------: | -----------: | ------------: |
+| Taxation - CPA Assistant  | folder |      77 |     144h 35m |         0h 0m |
+| AI Photo Manager          | folder |     122 |     139h 13m |       83h 30m |
+| Bank Statement Model      | folder |      85 |     130h 23m |       79h 45m |
+| Clickup Analysis & Report | folder |      44 |     103h 32m |       98h 40m |
+| AI RAG Agent              | folder |      55 |     100h 38m |       21h 30m |
+| **Grand Total**           |        | **561** | **837h 13m** |  **319h 35m** |
+
+**Inactive projects** (no time tracked this month): R1, Welcome Cure AI Agent, AI for Image playground
+
+> ⚠️ TIME FORMAT REMINDER: Always copy time exactly as the tool returns it — `144h 35m`, never `144:35`. NEVER reformat.
 
 **How projects are identified:**
 
