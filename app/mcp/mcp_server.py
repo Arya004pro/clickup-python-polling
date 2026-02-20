@@ -23,9 +23,23 @@ register_project_intelligence_tools(mcp)
 register_sync_mapping_tools(mcp)
 
 if __name__ == "__main__":
+<<<<<<< Updated upstream
     print("Starting ClickUp MCP Server...")
     mcp.run(
         transport="sse",  # SSE transport for MCP client compatibility
+=======
+    import uvicorn
+
+    print("Starting ClickUp MCP Server in 2s to allow initialization...")
+    time.sleep(2)
+
+    # Create the ASGI app (FastMCP 3.x uses http_app())
+    app = mcp.http_app(transport="sse")
+
+    # Run with uvicorn directly to control timeout settings
+    config = uvicorn.Config(
+        app,
+>>>>>>> Stashed changes
         host="0.0.0.0",
         port=8001,
     )

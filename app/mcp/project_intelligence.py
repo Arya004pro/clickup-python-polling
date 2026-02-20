@@ -8,99 +8,44 @@ import requests
 import time
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from .api_client import client as _client
 from .project_configuration import TRACKED_PROJECTS
+from .clickup_shared import (
+    STATUS_NAME_OVERRIDES,
+    STATUS_OVERRIDE_MAP,
+    get_status_category,
+    extract_status_name as _extract_status_name,
+    format_duration_short as _fmt,
+    calculate_task_metrics as _calc_time_shared,
+    fetch_missing_parents,
+)
 from .status_helpers import (
     extract_status_name,
     get_effective_statuses,
-    get_status_category,
     format_status_for_display,
 )
 
-# --- Status Configuration ---
-STATUS_NAME_OVERRIDES = {
-    "not_started": [
-        "BACKLOG",
-        "QUEUED",
-        "QUEUE",
-        "IN QUEUE",
-        "TO DO",
-        "TO-DO",
-        "PENDING",
-        "OPEN",
-        "IN PLANNING",
-    ],
-    "active": [
-        "SCOPING",
-        "IN DESIGN",
-        "DEV",
-        "IN DEVELOPMENT",
-        "DEVELOPMENT",
-        "REVIEW",
-        "IN REVIEW",
-        "TESTING",
-        "QA",
-        "BUG",
-        "BLOCKED",
-        "WAITING",
-        "STAGING DEPLOY",
-        "READY FOR DEVELOPMENT",
-        "READY FOR PRODUCTION",
-        "IN PROGRESS",
-        "ON HOLD",
-    ],
-    "done": [
-        "SHIPPED",
-        "RELEASE",
-        "COMPLETE",
-        "DONE",
-        "RESOLVED",
-        "PROD",
-        "QC CHECK",
-    ],
-    "closed": ["CANCELLED", "CLOSED"],
-}
 
-STATUS_OVERRIDE_MAP = {
-    s.upper(): cat for cat, statuses in STATUS_NAME_OVERRIDES.items() for s in statuses
-}
-
-
-def get_status_category(status_name: str, status_type: str = None) -> str:
-    if not status_name:
-        return "other"
-    if cat := STATUS_OVERRIDE_MAP.get(status_name.upper()):
-        return cat
-    if status_type:
-        type_map = {
-            "open": "not_started",
-            "done": "done",
-            "closed": "closed",
-            "custom": "active",
-        }
-        return type_map.get(status_type.lower(), "other")
-    return "other"
-
-
-def _extract_status_name(task: dict) -> str:
-    """Safely extracts status name handling both dict and string formats."""
-    status = task.get("status")
-    if isinstance(status, dict):
-        return status.get("status", "Unknown")
-    return str(status) if status else "Unknown"
-
-
-# --- Helpers ---
+# --- Helpers (delegated to shared client) ---
 
 
 def _api(method, endpoint, params=None):
+    """API call helper — delegates to shared client for connection pooling."""
     try:
-        h = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
-        r = requests.request(method, f"{BASE_URL}{endpoint}", headers=h, params=params)
-        return (
-            (r.json(), r.status_code)
-            if r.status_code in [200, 201]
-            else (None, r.status_code)
+        data, err = (
+            _client.get(endpoint, params=params)
+            if method.upper() == "GET"
+            else (
+                _client.post(endpoint, json=params)
+                if method.upper() == "POST"
+                else _client.put(endpoint, json=params)
+                if method.upper() == "PUT"
+                else _client.delete(endpoint, params=params)
+            )
         )
+        if err:
+            return None, 500
+        return data, 200
     except Exception:
         return None, 500
 
@@ -166,74 +111,20 @@ def _get_ids(p_name):
 
 
 def _fetch_deep(list_ids):
-    tasks, seen = [], set()
-    for lid in list_ids:
-        for arch in ["false", "true"]:
-            p = 0
-            while True:
-                d, _ = _api(
-                    "GET",
-                    f"/list/{lid}/task",
-                    {"page": p, "subtasks": "true", "archived": arch},
-                )
-                ts = d.get("tasks", []) if d else []
-                if not ts:
-                    break
-                for t in ts:
-                    if t["id"] not in seen:
-                        seen.add(t["id"])
-                        tasks.append(t)
-                if len(ts) < 100:
-                    break
-                p += 1
-    exist = {t["id"] for t in tasks}
-    for pid in {
-        t["parent"] for t in tasks if t.get("parent") and t["parent"] not in exist
-    }:
-        t, _ = _api("GET", f"/task/{pid}", {"include_subtasks": "true"})
-        if t and t["id"] not in exist:
-            tasks.append(t)
-            exist.add(t["id"])
-    return tasks
+    """Fetch all tasks with subtasks — delegates to shared client for concurrency."""
+    tasks = _client.fetch_all_tasks(list_ids, {}, include_archived=True)
+    # Also fetch missing parents via shared helper
+    return fetch_missing_parents(tasks)
 
 
 def _calc_time(tasks):
-    t_map = {t["id"]: t for t in tasks}
-    c_map = {}
-    [
-        c_map.setdefault(t["parent"], []).append(t["id"])
-        for t in tasks
-        if t.get("parent")
-    ]
-    cache = {}
-
-    def get(tid):
-        if tid in cache:
-            return cache[tid]
-        tr, est = 0, 0
-        for cid in c_map.get(tid, []):
-            c_tr, _, c_est, _ = get(cid)
-            tr += c_tr
-            est += c_est
-        raw_t, raw_e = (
-            int(t_map[tid].get("time_spent") or 0),
-            int(t_map[tid].get("time_estimate") or 0),
-        )
-        d_tr, d_est = (
-            max(0, raw_t - tr if raw_t >= tr else raw_t),
-            max(0, raw_e - est if raw_e >= est else raw_e),
-        )
-        res = (d_tr + tr, d_tr, d_est + est, d_est)
-        cache[tid] = res
-        return res
-
-    for t in tasks:
-        get(t["id"])
-    return cache
-
-
-def _fmt(ms):
-    return f"{int(ms) // 3600000}h {(int(ms) // 60000) % 60}m" if ms else "0m"
+    """Bottom-up time calculation — delegates to shared module, returns tuple format for compatibility."""
+    dict_metrics = _calc_time_shared(tasks)
+    # Convert dict format to tuple format: (tracked_total, tracked_direct, est_total, est_direct)
+    return {
+        tid: (v["tracked_total"], v["tracked_direct"], v["est_total"], v["est_direct"])
+        for tid, v in dict_metrics.items()
+    }
 
 
 def _get_finish_date(task):

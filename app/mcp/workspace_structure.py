@@ -1,9 +1,14 @@
 # app/mcp/workspace_structure.py
 
 from fastmcp import FastMCP
+<<<<<<< Updated upstream
 from app.clickup import _get, BASE_URL
 from app.config import CLICKUP_TEAM_ID
 import json  # ← added for pretty printing
+=======
+from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
+from .api_client import client as _client
+>>>>>>> Stashed changes
 from .status_helpers import (
     get_effective_statuses,
     extract_statuses_from_response,
@@ -12,6 +17,26 @@ from .status_helpers import (
 )
 
 
+<<<<<<< Updated upstream
+=======
+def _get(url, params=None):
+    """Self-contained GET helper — uses shared client session for connection pooling."""
+    # Extract endpoint from full URL if needed
+    if url.startswith(BASE_URL):
+        endpoint = url[len(BASE_URL):]
+        data, err = _client.get(endpoint, params=params)
+        if err:
+            raise RuntimeError(f"ClickUp API error: {err}")
+        return data
+    # Fallback for full URLs
+    headers = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+    resp = _client._session.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"ClickUp API error {resp.status_code}: {resp.text}")
+    return resp.json()
+
+
+>>>>>>> Stashed changes
 def register_workspace_tools(mcp: FastMCP):
     def pretty_json(data):
         """Helper: return indented JSON string for readable terminal output"""

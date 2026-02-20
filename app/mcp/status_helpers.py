@@ -8,6 +8,7 @@ import requests
 from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from .api_client import client as _client
 
 
 # --- Date/Timestamp Helpers ---
@@ -360,6 +361,7 @@ def _headers() -> Dict[str, str]:
 def _api_get(
     endpoint: str, params: Optional[Dict] = None
 ) -> tuple[Optional[Dict], Optional[str]]:
+<<<<<<< Updated upstream
     """Generic API GET wrapper with error handling."""
     url = f"{BASE_URL}{endpoint}"
     try:
@@ -371,6 +373,10 @@ def _api_get(
         )
     except Exception as e:
         return None, str(e)
+=======
+    """Generic API GET wrapper — delegates to shared client for connection pooling."""
+    return _client.get(endpoint, params=params)
+>>>>>>> Stashed changes
 
 
 # --- Core Status Extraction Functions ---

@@ -8,8 +8,11 @@ Features:
 5. Complete Toolset: Includes all analytics, breakdowns, and risk assessments.
 """
 
+<<<<<<< Updated upstream
+=======
+from __future__ import annotations
+>>>>>>> Stashed changes
 from fastmcp import FastMCP
-import requests
 import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
@@ -20,12 +23,8 @@ from app.mcp.status_helpers import (
     parse_week_input,  # ← ADD THIS
     validate_week_dates,  # ← ADD THIS (optional, for validation)
 )
-from app.config import CLICKUP_API_TOKEN, BASE_URL
+from .api_client import client as _client
 
-try:
-    from app.config import CLICKUP_TEAM_ID
-except ImportError:
-    CLICKUP_TEAM_ID = None
 
 # --- Standardized Status Logic ---
 STATUS_NAME_OVERRIDES = {
@@ -89,6 +88,7 @@ def get_status_category(status_name: str, status_type: str = None) -> str:
 # --- API & Data Helpers ---
 
 
+<<<<<<< Updated upstream
 def _headers() -> Dict[str, str]:
     return {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
 
@@ -125,15 +125,37 @@ def _api_call(method: str, endpoint: str, params: Optional[Dict] = None):
         )
     except Exception as e:
         return None, str(e)
+=======
+def _api_call(
+    method: str, endpoint: str, params: Optional[Dict] = None, timeout: int = 30
+):
+    """API call using shared session with connection pooling."""
+    m = method.upper()
+    if m == "GET":
+        return _client.get(endpoint, params=params, timeout=timeout)
+    elif m == "POST":
+        return _client.post(endpoint, params=params, timeout=timeout)
+    elif m == "PUT":
+        return _client.put(endpoint, timeout=timeout)
+    return None, f"Unsupported method: {method}"
+>>>>>>> Stashed changes
 
 
 def _get_team_id() -> str:
-    if CLICKUP_TEAM_ID:
-        return CLICKUP_TEAM_ID
-    data, _ = _api_call("GET", "/team")
-    return data["teams"][0]["id"] if data and data.get("teams") else "0"
+    """Get team ID using shared client (cached)."""
+    return _client.get_team_id()
 
 
+<<<<<<< Updated upstream
+=======
+def _fetch_time_entries_smart(
+    task_ids: list, start_ms: int = 0, end_ms: int = 0
+) -> dict:
+    """Fetch time entries using per-task concurrent batch (connection-pooled)."""
+    return _client.fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+
+>>>>>>> Stashed changes
 def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List[str]:
     """
     Resolve project name to list IDs.
@@ -245,6 +267,7 @@ def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List
 def _fetch_all_tasks(
     list_ids: List[str], base_params: Dict, include_archived: bool = True
 ) -> List[Dict]:
+<<<<<<< Updated upstream
     """Fetch ALL tasks including nested subtasks and archived items."""
     all_tasks = []
     seen_ids = set()
@@ -277,6 +300,10 @@ def _fetch_all_tasks(
                     break
                 page += 1
     return all_tasks
+=======
+    """Fetch ALL tasks using concurrent multi-list fetching (shared client)."""
+    return _client.fetch_all_tasks(list_ids, base_params, include_archived)
+>>>>>>> Stashed changes
 
 
 def _calculate_task_metrics(all_tasks: List[Dict]) -> Dict[str, Dict[str, int]]:
@@ -1291,8 +1318,32 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print(f"[DEBUG] Found {len(all_tasks)} total tasks in space")
 
                 # Fetch time entries for all tasks
+<<<<<<< Updated upstream
                 task_ids = [t["id"] for t in all_tasks]
                 time_entries_map = fetch_all_time_entries_batch(task_ids)
+=======
+                print(
+                    f"[PROGRESS] Step 4/5: Fetching time entries for {len(all_tasks)} tasks..."
+                )
+                print(
+                    "[PROGRESS] This may take a few minutes for large datasets. Please wait..."
+                )
+                sys.stdout.flush()
+
+                # Pre-filter: skip tasks with zero time_spent (no entries exist)
+                timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+                task_ids = [t["id"] for t in timed_tasks]
+                print(f"[PROGRESS] {len(task_ids):,}/{len(all_tasks):,} tasks have time tracked — skipping {len(all_tasks)-len(task_ids):,}")
+                sys.stdout.flush()
+                time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+                print(
+                    "[PROGRESS] Step 5/5: Processing time entries and building report..."
+                )
+                sys.stdout.flush()
+
+                metrics = _calculate_task_metrics(all_tasks)
+>>>>>>> Stashed changes
 
                 # Build report by filtering time entries within date range
                 report = {}
@@ -1365,8 +1416,30 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 print(f"[DEBUG] Found {len(all_tasks)} total tasks")
 
                 # Fetch time entries for all tasks
+<<<<<<< Updated upstream
                 task_ids = [t["id"] for t in all_tasks]
                 time_entries_map = fetch_all_time_entries_batch(task_ids)
+=======
+                print(
+                    f"[PROGRESS] Step 3/5: Fetching time entries for {len(all_tasks)} tasks..."
+                )
+                print(
+                    "[PROGRESS] This may take a few minutes for large datasets. Please wait..."
+                )
+                sys.stdout.flush()
+
+                # Pre-filter: skip tasks with zero time_spent (no entries exist)
+                timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+                task_ids = [t["id"] for t in timed_tasks]
+                print(f"[PROGRESS] {len(task_ids):,}/{len(all_tasks):,} tasks have time tracked — skipping {len(all_tasks)-len(task_ids):,}")
+                sys.stdout.flush()
+                time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+                print("[PROGRESS] Step 4/5: Processing time entries...")
+                sys.stdout.flush()
+
+                metrics = _calculate_task_metrics(all_tasks)
+>>>>>>> Stashed changes
 
                 # Build report by filtering time entries within date range
                 report = {}
@@ -1436,6 +1509,807 @@ def register_pm_analytics_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     @mcp.tool()
+<<<<<<< Updated upstream
+=======
+    def get_async_report_status(job_id: str) -> dict:
+        """Check status for an async report job. HARD LIMIT: 5 polls per job.
+
+        Returns:
+            - status: 'queued', 'running', 'finished', or 'failed'
+            - poll_count: How many times this job has been polled
+            - polls_remaining: How many more polls before hard stop
+            - STOP_POLLING: True when max polls reached — you MUST stop calling this tool
+
+        IMPORTANT: If STOP_POLLING is True, do NOT call this tool again.
+        Instead, tell the user to try 'get_async_report_result' in a minute.
+        """
+        j = JOBS.get(job_id)
+        if not j:
+            return {"error": "job_id not found"}
+
+        # Track poll count
+        poll_count = j.get("_poll_count", 0) + 1
+        j["_poll_count"] = poll_count
+        max_polls = 5
+
+        status = j.get("status")
+
+        # If finished or failed, always return immediately
+        if status in ("finished", "failed"):
+            resp = {
+                "job_id": job_id,
+                "status": status,
+                "error": j.get("error"),
+                "poll_count": poll_count,
+                "polls_remaining": 0,
+            }
+            # Auto-include result if finished to save a round trip
+            if status == "finished":
+                resp["result"] = j.get("result")
+                resp["message"] = (
+                    "Job complete! Result included — no need to call get_async_report_result."
+                )
+            return resp
+
+        # Enforce hard poll limit
+        if poll_count >= max_polls:
+            return {
+                "job_id": job_id,
+                "status": status,
+                "poll_count": poll_count,
+                "polls_remaining": 0,
+                "STOP_POLLING": True,
+                "message": (
+                    "STOP: Maximum poll limit (5) reached. "
+                    "Do NOT call get_async_report_status again. "
+                    "Tell the user: 'The report is still processing. "
+                    "Please ask me to check the result in 1-2 minutes using: "
+                    f'get_async_report_result(job_id="{job_id}")\''
+                ),
+            }
+
+        return {
+            "job_id": job_id,
+            "status": status,
+            "error": j.get("error"),
+            "poll_count": poll_count,
+            "polls_remaining": max_polls - poll_count,
+            "message": f"Job still {status}. You have {max_polls - poll_count} status checks remaining. Wait 15-30 seconds before checking again.",
+        }
+
+    @mcp.tool()
+    def get_async_report_result(job_id: str) -> dict:
+        """Return result for finished async report job. Safe to call anytime."""
+        j = JOBS.get(job_id)
+        if not j:
+            return {"error": "job_id not found"}
+        if j.get("status") != "finished":
+            return {
+                "status": j.get("status"),
+                "message": f"Result not ready yet (status: {j.get('status')}). Wait and try again later.",
+            }
+        return {"status": "finished", "result": j.get("result")}
+
+    @mcp.tool()
+    def get_space_time_report_by_period(
+        space_name: str,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+        allow_multi_week: bool = False,
+        async_job: bool = False,
+    ) -> dict:
+        """Space time report with async support. Works for any period (day, week, month, etc).
+
+        Args:
+            space_name: ClickUp space name
+            week_selector: current, previous, N-weeks-ago, YYYY-MM-DD, YYYY-WNN
+            week_start, week_end: YYYY-MM-DD format
+            allow_multi_week: Enable multi-week ranges
+            async_job: Run in background (use for 300+ tasks)
+
+        Returns:
+            Report dict or job_id if async mode
+        """
+        return get_time_report_by_period(
+            report_type="space",
+            space_name=space_name,
+            week_selector=week_selector,
+            week_start=week_start,
+            week_end=week_end,
+            allow_multi_week=allow_multi_week,
+            async_job=async_job,
+        )
+
+    @mcp.tool()
+    def get_space_project_time_report(
+        space_name: str,
+        period_type: str = "this_month",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_archived: bool = True,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Generate a time report for a SPACE grouped by PROJECT (folder/list).
+
+        Identifies projects in a space based on its hierarchical structure:
+        - Space -> Folder (project name) -> Lists: each folder = a project
+        - Space -> Folderless Lists: each list = a project
+        - Mixed: folders are projects + standalone lists are projects
+
+        For each project, shows:
+        - Total time tracked (within the date range)
+        - Total time estimated
+        - Number of tasks worked on
+        - Team member breakdown within each project
+
+        Args:
+            space_name: ClickUp space name (e.g., "AIX", "JewelleryOS")
+            period_type: today, yesterday, this_week, last_week, this_month,
+                         last_month, this_year, last_30_days, rolling, custom
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            include_archived: Include archived tasks (default: True)
+            async_job: Run in background (auto-triggers at 500+ tasks)
+            job_id: Internal use for background jobs
+
+        Returns:
+            Report with per-project time tracked, estimates, and team breakdown
+
+        Examples:
+            get_space_project_time_report(space_name="AIX")
+            get_space_project_time_report(space_name="AIX", period_type="this_month")
+            get_space_project_time_report(space_name="AIX", period_type="custom",
+                                          custom_start="2026-01-01", custom_end="2026-01-31")
+        """
+        try:
+            from app.mcp.status_helpers import (
+                parse_time_period_filter,
+                filter_time_entries_by_user_and_date_range,
+            )
+            import sys
+
+            print(f"⌛ Generating project-wise time report for space '{space_name}'...")
+            sys.stdout.flush()
+
+            # ================================================================
+            # ASYNC JOB SUPPORT
+            # Always auto-promote to async — space reports are always heavy
+            # ================================================================
+            if not async_job and not job_id:
+                print(
+                    "⚡ AUTO-ASYNC: Space project reports always run in background to prevent timeout."
+                )
+                sys.stdout.flush()
+                async_job = True
+
+            if async_job and not job_id:
+                jid = str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_space_project_time_report(
+                            space_name=space_name,
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            include_archived=include_archived,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Space project time report running in background. Use get_async_report_status(job_id) to check status.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
+            # ================================================================
+            # STEP 1: Parse date range
+            # ================================================================
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+            sys.stdout.flush()
+
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # ================================================================
+            # STEP 2: Resolve space
+            # ================================================================
+            team_id = _get_team_id()
+            spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+            if not spaces_data:
+                return {"error": "Failed to fetch spaces"}
+
+            space_id = None
+            for space in spaces_data.get("spaces", []):
+                if space["name"].lower() == space_name.lower():
+                    space_id = space["id"]
+                    space_name = space["name"]  # Use exact API name
+                    break
+
+            if not space_id:
+                return {"error": f"Space '{space_name}' not found"}
+
+            # ================================================================
+            # STEP 3: Discover space structure — identify projects
+            # Projects = folders (their name is the project) + folderless lists
+            # ================================================================
+            print("[PROGRESS] Discovering space structure (folders & lists)...")
+            sys.stdout.flush()
+
+            # project_key -> { "name": str, "type": "folder"|"list",
+            #                   "id": str, "list_ids": [str] }
+            projects = {}
+
+            # 3a. Folders → each folder is a project
+            resp_folders, _ = _api_call("GET", f"/space/{space_id}/folder")
+            folders = resp_folders.get("folders", []) if resp_folders else []
+
+            for folder in folders:
+                folder_id = folder["id"]
+                folder_name = folder.get("name", "Unnamed Folder")
+                folder_list_ids = [lst["id"] for lst in folder.get("lists", [])]
+
+                if folder_list_ids:
+                    projects[f"folder_{folder_id}"] = {
+                        "name": folder_name,
+                        "type": "folder",
+                        "id": folder_id,
+                        "list_ids": folder_list_ids,
+                    }
+
+            # 3b. Folderless lists → each list is a project
+            resp_lists, _ = _api_call("GET", f"/space/{space_id}/list")
+            folderless_lists = resp_lists.get("lists", []) if resp_lists else []
+
+            for lst in folderless_lists:
+                list_id_val = lst["id"]
+                list_name = lst.get("name", "Unnamed List")
+
+                projects[f"list_{list_id_val}"] = {
+                    "name": list_name,
+                    "type": "list",
+                    "id": list_id_val,
+                    "list_ids": [list_id_val],
+                }
+
+            if not projects:
+                return {
+                    "error": f"No projects (folders or lists) found in space '{space_name}'"
+                }
+
+            print(
+                f"[DEBUG] Found {len(projects)} projects "
+                f"({sum(1 for p in projects.values() if p['type'] == 'folder')} folders, "
+                f"{sum(1 for p in projects.values() if p['type'] == 'list')} standalone lists)"
+            )
+            sys.stdout.flush()
+
+            # ================================================================
+            # STEP 4: Fetch ALL tasks across the space at once (efficient)
+            # ================================================================
+            all_list_ids = []
+            list_id_to_project = {}  # map list_id → project key
+            for proj_key, proj in projects.items():
+                for lid in proj["list_ids"]:
+                    all_list_ids.append(lid)
+                    list_id_to_project[lid] = proj_key
+
+            print(
+                f"[PROGRESS] Fetching tasks from {len(all_list_ids)} lists across {len(projects)} projects..."
+            )
+            sys.stdout.flush()
+
+            all_tasks = _fetch_all_tasks(
+                all_list_ids, {}, include_archived=include_archived
+            )
+
+            print(f"[DEBUG] Fetched {len(all_tasks)} total tasks in space")
+            sys.stdout.flush()
+
+            if not all_tasks:
+                return {
+                    "space_name": space_name,
+                    "period": f"{start_date} to {end_date}",
+                    "message": "No tasks found in this space",
+                    "projects": {},
+                }
+
+            # ================================================================
+            # STEP 5: Fetch time entries for all tasks in one batch
+            # ================================================================
+            # Pre-filter: skip tasks with zero time_spent (no entries exist)
+            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            task_ids = [t["id"] for t in timed_tasks]
+            print(
+                f"[PROGRESS] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks "
+                f"({len(all_tasks)-len(task_ids):,} skipped — zero time_spent)"
+            )
+            sys.stdout.flush()
+            time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+            # ================================================================
+            # STEP 6: Calculate metrics & build report per project
+            # ================================================================
+            print("[PROGRESS] Building project-wise report...")
+            sys.stdout.flush()
+
+            metrics = _calculate_task_metrics(all_tasks)
+
+            # Initialize project reports
+            project_reports = {}
+            for proj_key, proj in projects.items():
+                project_reports[proj_key] = {
+                    "project_name": proj["name"],
+                    "project_type": proj["type"],
+                    "project_id": proj["id"],
+                    "total_tasks": 0,
+                    "tasks_with_time_in_range": 0,
+                    "time_tracked_ms": 0,
+                    "time_estimate_ms": 0,
+                    "team_members": {},
+                }
+
+            for task in all_tasks:
+                task_id = task["id"]
+                task_list_id = task.get("list", {}).get("id", "")
+
+                # Determine which project this task belongs to
+                proj_key = list_id_to_project.get(task_list_id)
+                if not proj_key or proj_key not in project_reports:
+                    continue
+
+                report = project_reports[proj_key]
+                report["total_tasks"] += 1
+
+                # Get time entries and filter by date range
+                task_time_entries = time_entries_map.get(task_id, [])
+                if not task_time_entries:
+                    continue
+
+                # Get per-user time in range
+                user_time_map = filter_time_entries_by_user_and_date_range(
+                    task_time_entries, start_ms, end_ms
+                )
+
+                total_time_in_range = sum(user_time_map.values())
+                if total_time_in_range == 0:
+                    continue
+
+                report["tasks_with_time_in_range"] += 1
+                report["time_tracked_ms"] += total_time_in_range
+
+                # Add estimated time (direct to avoid double-counting)
+                est_direct = metrics.get(task_id, {}).get("est_direct", 0)
+                report["time_estimate_ms"] += est_direct
+
+                # Per-member breakdown
+                for username, time_tracked in user_time_map.items():
+                    member = report["team_members"].setdefault(
+                        username,
+                        {"tasks": 0, "time_tracked_ms": 0, "time_estimate_ms": 0},
+                    )
+                    member["tasks"] += 1
+                    member["time_tracked_ms"] += time_tracked
+                    # Split estimate among users who tracked time
+                    if user_time_map:
+                        member["time_estimate_ms"] += est_direct // len(user_time_map)
+
+            # ================================================================
+            # STEP 7: Format the final output
+            # ================================================================
+            formatted_projects = []
+            grand_total_tracked = 0
+            grand_total_estimated = 0
+            grand_total_tasks = 0
+
+            for proj_key, report in project_reports.items():
+                tracked = report["time_tracked_ms"]
+                estimated = report["time_estimate_ms"]
+                grand_total_tracked += tracked
+                grand_total_estimated += estimated
+                grand_total_tasks += report["tasks_with_time_in_range"]
+
+                # Format team members
+                formatted_members = {}
+                for member_name, member_data in report["team_members"].items():
+                    formatted_members[member_name] = {
+                        "tasks": member_data["tasks"],
+                        "time_tracked": _format_duration(
+                            member_data["time_tracked_ms"]
+                        ),
+                        "time_estimate": _format_duration(
+                            member_data["time_estimate_ms"]
+                        ),
+                    }
+
+                proj_entry = {
+                    "project_name": report["project_name"],
+                    "project_type": report["project_type"],
+                    "total_tasks_in_project": report["total_tasks"],
+                    "tasks_with_time_in_range": report["tasks_with_time_in_range"],
+                    "time_tracked": _format_duration(tracked),
+                    "time_estimate": _format_duration(estimated),
+                    "team_breakdown": formatted_members,
+                    "_sort_ms": tracked,  # internal sort key, removed below
+                }
+
+                # Only include projects that have activity in the date range
+                if report["tasks_with_time_in_range"] > 0:
+                    formatted_projects.append(proj_entry)
+
+            # Sort projects by time tracked (descending) using raw ms stored above
+            formatted_projects.sort(key=lambda p: p.pop("_sort_ms", 0), reverse=True)
+
+            # Also include projects with no activity for completeness
+            inactive_projects = []
+            for proj_key, report in project_reports.items():
+                if report["tasks_with_time_in_range"] == 0:
+                    inactive_projects.append(
+                        {
+                            "project_name": report["project_name"],
+                            "project_type": report["project_type"],
+                            "total_tasks_in_project": report["total_tasks"],
+                            "note": "No time tracked in the selected period",
+                        }
+                    )
+
+            result = {
+                "space_name": space_name,
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "grand_total_time_tracked": _format_duration(grand_total_tracked),
+                "grand_total_time_estimate": _format_duration(grand_total_estimated),
+                "total_projects": len(projects),
+                "active_projects": len(formatted_projects),
+                "total_tasks_with_time": grand_total_tasks,
+                "projects": formatted_projects,
+                "note": (
+                    "Projects are identified as: folders (folder name = project) "
+                    "and standalone folderless lists (list name = project). "
+                    "Only tasks/subtasks worked on during the date range are included."
+                ),
+            }
+
+            if inactive_projects:
+                result["inactive_projects"] = inactive_projects
+
+            print(
+                f"✅ Report complete: {len(formatted_projects)} active projects, "
+                f"{len(inactive_projects)} inactive projects"
+            )
+            sys.stdout.flush()
+
+            return result
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_space_project_time_report: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+    @mcp.tool()
+    def get_time_report_detailed(
+        report_type: str = "team_member",
+        project: Optional[str] = None,
+        space_name: Optional[str] = None,
+        list_id: Optional[str] = None,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+        timezone_offset: str = "+05:30",  # IST by default
+        group_by_date: bool = True,  # Group intervals by date for cleaner output
+    ) -> dict:
+
+        try:
+            from app.mcp.status_helpers import (
+                format_time_entry_interval,
+                format_duration_simple,
+                group_intervals_by_date,
+            )
+
+            # ================================================================
+            # STEP 1: Calculate week boundaries (same as original)
+            # ================================================================
+            if week_start and week_end:
+                is_valid, error_msg = is_valid_monday_sunday_range(week_start, week_end)
+                if not is_valid:
+                    return {"error": f"Invalid week dates: {error_msg}"}
+            elif week_selector:
+                try:
+                    week_start, week_end = parse_week_input(week_selector)
+                except ValueError as e:
+                    return {"error": f"Invalid week_selector: {str(e)}"}
+            else:
+                week_start, week_end = get_current_week_dates()
+
+            start_ms, end_ms = date_range_to_timestamps(week_start, week_end)
+
+            print(
+                f"[DEBUG] Detailed report: {week_start} to {week_end} ({timezone_offset})"
+            )
+
+            # ================================================================
+            # STEP 2: Resolve lists based on report type
+            # ================================================================
+            if report_type == "team_member":
+                if not project and not list_id:
+                    return {
+                        "error": "Provide project or list_id for team_member report"
+                    }
+                list_ids = _resolve_to_list_ids(project, list_id)
+                if not list_ids:
+                    return {"error": "No lists found for project/list_id"}
+
+            elif report_type == "space":
+                if not space_name:
+                    return {"error": "space_name required for space report"}
+
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                space_id = None
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+                list_ids = []
+                resp, _ = _api_call("GET", f"/space/{space_id}/list")
+                if resp:
+                    list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
+
+                resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if resp2:
+                    for folder in resp2.get("folders", []):
+                        list_ids.extend([lst["id"] for lst in folder.get("lists", [])])
+
+                if not list_ids:
+                    return {"error": f"No lists found in space '{space_name}'"}
+            else:
+                return {
+                    "error": f"Invalid report_type: '{report_type}'. Use 'team_member' or 'space'"
+                }
+
+            # ================================================================
+            # STEP 3: Fetch all tasks and their time entries
+            # ================================================================
+            all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
+            print(f"[DEBUG] Found {len(all_tasks)} total tasks")
+
+            if not all_tasks:
+                return {
+                    "week_start": week_start,
+                    "week_end": week_end,
+                    "report": {},
+                    "message": "No tasks found",
+                }
+
+            # Pre-filter: skip tasks with zero time_spent (no entries exist)
+            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            task_ids = [t["id"] for t in timed_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks)-len(task_ids):,} skipped — zero time_spent)")
+            time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+            # ================================================================
+            # STEP 4: Build detailed report by person
+            # ================================================================
+            report = {}
+
+            for task in all_tasks:
+                task_id = task["id"]
+                task_name = task.get("name", "Unnamed Task")
+                task_url = task.get("url", f"https://app.clickup.com/t/{task_id}")
+                task_status = task.get("status", {})
+                status_name = (
+                    task_status.get("status", "Unknown")
+                    if isinstance(task_status, dict)
+                    else "Unknown"
+                )
+
+                time_entries = time_entries_map.get(task_id, [])
+                if not time_entries:
+                    continue
+
+                task_intervals_in_range = []
+                task_time_in_range = 0
+
+                for entry in time_entries:
+                    for interval in entry.get("intervals", []):
+                        interval_start = interval.get("start")
+                        if not interval_start:
+                            continue
+
+                        try:
+                            interval_start = int(interval_start)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if start_ms <= interval_start <= end_ms:
+                            duration = interval.get("time", 0)
+                            task_time_in_range += int(duration)
+
+                            formatted_interval = format_time_entry_interval(
+                                interval, timezone_offset
+                            )
+                            task_intervals_in_range.append(formatted_interval)
+
+                if task_time_in_range == 0:
+                    continue
+
+                assignees = [u["username"] for u in task.get("assignees", [])] or [
+                    "Unassigned"
+                ]
+
+                for member in assignees:
+                    if member not in report:
+                        report[member] = {
+                            "summary": {
+                                "total_time_tracked_ms": 0,
+                                "total_tasks": 0,
+                                "total_intervals": 0,
+                            },
+                            "tasks": [],
+                        }
+
+                    if group_by_date and task_intervals_in_range:
+                        intervals_by_date = group_intervals_by_date(
+                            task_intervals_in_range
+                        )
+                    else:
+                        intervals_by_date = None
+
+                    task_entry = {
+                        "task_id": task_id,
+                        "task_name": task_name,
+                        "task_url": task_url,
+                        "task_status": status_name,
+                        "time_on_task_ms": task_time_in_range,
+                        "time_on_task": format_duration_simple(task_time_in_range),
+                        "intervals_count": len(task_intervals_in_range),
+                    }
+
+                    if intervals_by_date:
+                        task_entry["by_date"] = intervals_by_date
+                    else:
+                        task_entry["time_entries"] = task_intervals_in_range
+
+                    report[member]["tasks"].append(task_entry)
+
+                    report[member]["summary"]["total_time_tracked_ms"] += (
+                        task_time_in_range
+                    )
+                    report[member]["summary"]["total_tasks"] += 1
+                    report[member]["summary"]["total_intervals"] += len(
+                        task_intervals_in_range
+                    )
+
+            # ================================================================
+            # STEP 5: Format summaries and sort tasks
+            # ================================================================
+            for member, data in report.items():
+                data["summary"]["total_time_tracked"] = format_duration_simple(
+                    data["summary"]["total_time_tracked_ms"]
+                )
+
+                data["tasks"].sort(key=lambda x: x["time_on_task_ms"], reverse=True)
+
+            return {
+                "report_type": f"{report_type}_detailed",
+                "week_start": week_start,
+                "week_end": week_end,
+                "timezone": timezone_offset,
+                "report": report,
+                "total_people": len(report),
+                "note": "Time entries are filtered by when they were logged, not when tasks were updated",
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_time_report_detailed: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e), "traceback": traceback.format_exc()}
+
+    # ============================================================================
+    # CONVENIENCE WRAPPER: Get task list for a specific person
+    # ============================================================================
+
+    @mcp.tool()
+    def get_person_tasks_with_time(
+        person_name: str,
+        project: Optional[str] = None,
+        space_name: Optional[str] = None,
+        week_selector: Optional[str] = None,
+        week_start: Optional[str] = None,
+        week_end: Optional[str] = None,
+    ) -> dict:
+        """
+        Get tasks a person worked on with timestamps (wrapper for detailed report).
+
+        Args:
+            person_name: Team member name
+            project: Project name
+            space_name: Space name
+            week_selector: Week selector (previous, 2-weeks-ago, etc.)
+            week_start, week_end: YYYY-MM-DD format
+
+        Returns:
+            Filtered report for specified person's tasks
+        """
+        if project:
+            report_type = "team_member"
+        elif space_name:
+            report_type = "space"
+        else:
+            return {"error": "Provide either project or space_name"}
+
+        full_report = get_time_report_detailed(
+            report_type=report_type,
+            project=project,
+            space_name=space_name,
+            week_selector=week_selector,
+            week_start=week_start,
+            week_end=week_end,
+        )
+
+        if "error" in full_report:
+            return full_report
+
+        person_data = full_report.get("report", {}).get(person_name)
+
+        if not person_data:
+            available_people = list(full_report.get("report", {}).keys())
+            return {
+                "error": f"Person '{person_name}' not found in report",
+                "available_people": available_people,
+                "hint": "Check the spelling or try one of the available names",
+            }
+
+        return {
+            "person_name": person_name,
+            "week_start": full_report["week_start"],
+            "week_end": full_report["week_end"],
+            "summary": person_data["summary"],
+            "tasks": person_data["tasks"],
+        }
+
+    @mcp.tool()
+>>>>>>> Stashed changes
     def get_task_status_distribution(
         project: Optional[str] = None,
         list_id: Optional[str] = None,
@@ -1500,3 +2374,1176 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print(f"[DEBUG] Error in get_task_status_distribution: {e}")
             print(traceback.format_exc())
             return {"error": str(e)}
+<<<<<<< Updated upstream
+=======
+
+    @mcp.tool()
+    def get_space_time_report_comprehensive(
+        space_name: Optional[str] = None,
+        space_id: Optional[str] = None,
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        group_by: str = "assignee",
+        include_archived: bool = True,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Time tracking report for a SPACE with period filters.
+
+        Args:
+            space_name: Name of the ClickUp space (e.g., "JewelleryOS")
+            space_id: Direct space ID
+            period_type: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_30_days, rolling, custom
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            group_by: assignee, folder, or status
+            include_archived: Include archived tasks
+            async_job: Run in background (auto-triggers at 500+ tasks)
+            job_id: Internal use for background jobs
+
+        Returns:
+            Report with time tracked, estimates, task counts grouped by assignee/folder/status (or job_id if async)
+
+        Example:
+            get_space_time_report_comprehensive(space_name="JewelleryOS", period_type="this_week", group_by="assignee")
+        """
+        try:
+            from app.mcp.status_helpers import parse_time_period_filter
+            import sys
+            import threading
+            import uuid
+
+            print(
+                "⌛ Processing space report - this may take 1-3 minutes for large spaces..."
+            )
+            sys.stdout.flush()
+
+            # Always auto-promote space-level reports to async — they are always heavy
+            if not async_job and not job_id:
+                print(
+                    "⚡ AUTO-ASYNC: Space reports always run in background to prevent timeout."
+                )
+                sys.stdout.flush()
+                async_job = True
+
+            if async_job and not job_id:
+                jid = str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_space_time_report_comprehensive(
+                            space_name=space_name,
+                            space_id=space_id,
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            group_by=group_by,
+                            include_archived=include_archived,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Space report running in background. Use get_async_report_status(job_id) to check status.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
+            if not space_id and not space_name:
+                return {"error": "Provide either space_name or space_id"}
+
+            # Parse the time period to get date range
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+
+            if not space_id:
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        space_name = space["name"]  # Use exact name from API
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+            # Get all lists in space
+            list_ids = []
+
+            # Folderless lists
+            resp, _ = _api_call("GET", f"/space/{space_id}/list")
+            if resp:
+                list_ids.extend([lst["id"] for lst in resp.get("lists", [])])
+
+            # Lists from folders
+            resp2, _ = _api_call("GET", f"/space/{space_id}/folder")
+            folder_map = {}  # Map list_id to folder_name for grouping
+            if resp2:
+                for folder in resp2.get("folders", []):
+                    folder_name = folder.get("name", "Unknown Folder")
+                    for lst in folder.get("lists", []):
+                        list_ids.append(lst["id"])
+                        folder_map[lst["id"]] = folder_name
+
+            if not list_ids:
+                return {"error": f"No lists found in space '{space_name}'"}
+
+            print(f"[DEBUG] Found {len(list_ids)} lists in space")
+
+            # Fetch all tasks
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            print(f"[DEBUG] Fetched {len(all_tasks)} tasks from space")
+
+            if not all_tasks:
+                return {
+                    "space_name": space_name,
+                    "space_id": space_id,
+                    "period_type": period_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "message": "No tasks found in this space",
+                    "report": {},
+                }
+
+            # Pre-filter: skip tasks with zero time_spent (no entries exist)
+            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            task_ids = [t["id"] for t in timed_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks)-len(task_ids):,} skipped — zero time_spent)")
+            # Convert date range to timestamps
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+            time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+            from app.mcp.status_helpers import (
+                filter_time_entries_by_user_and_date_range,
+            )
+
+            report = {}
+            metrics = _calculate_task_metrics(all_tasks)
+
+            for task in all_tasks:
+                task_id = task["id"]
+                task_time_entries = time_entries_map.get(task_id, [])
+
+                m = metrics.get(task_id, {})
+                est_direct = m.get("est_direct", 0)
+
+                if group_by == "assignee":
+                    user_time_map = filter_time_entries_by_user_and_date_range(
+                        task_time_entries, start_ms, end_ms
+                    )
+
+                    for username, time_tracked in user_time_map.items():
+                        if username not in report:
+                            report[username] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                            }
+                        report[username]["tasks"] += 1
+                        report[username]["time_tracked"] += time_tracked
+                        report[username]["time_estimate"] += est_direct
+
+                elif group_by == "folder":
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
+                    list_id = task.get("list", {}).get("id")
+                    folder_name = folder_map.get(list_id, "Folderless")
+
+                    if total_time_ms > 0:
+                        if folder_name not in report:
+                            report[folder_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                            }
+                        report[folder_name]["tasks"] += 1
+                        report[folder_name]["time_tracked"] += total_time_ms
+                        report[folder_name]["time_estimate"] += est_direct
+                else:  # status
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
+                    status_name = _extract_status_name(task)
+
+                    if total_time_ms > 0:
+                        if status_name not in report:
+                            report[status_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[status_name]["tasks"] += 1
+                        report[status_name]["time_tracked"] += total_time_ms
+                        report[status_name]["time_estimate"] += est_direct
+                        report[status_name]["intervals_count"] += len(
+                            filtered_intervals
+                        )
+
+            # Format the report with ONLY human-readable values
+            formatted = {
+                key: {
+                    "tasks": value["tasks"],
+                    "time_tracked": _format_duration(value["time_tracked"]),
+                    "time_estimate": _format_duration(value["time_estimate"]),
+                }
+                for key, value in report.items()
+            }
+
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_estimate = sum(v["time_estimate"] for v in report.values())
+
+            return {
+                "period": f"{start_date} to {end_date}",
+                "space": space_name,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_time_estimate": _format_duration(total_estimate),
+                "note": "Only includes tasks/subtasks worked on during the date range. Estimates use task-level values to prevent double-counting.",
+                "report": formatted,
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_space_time_report_comprehensive: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_folder_time_report_comprehensive(
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        space_name: Optional[str] = None,
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        group_by: str = "assignee",
+        include_archived: bool = True,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Time tracking report for a FOLDER with period filters.
+
+        Args:
+            folder_name: Folder name (requires space_name)
+            folder_id: Direct folder ID
+            space_name: Space name (required with folder_name)
+            period_type: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_30_days, rolling, custom
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            group_by: assignee, list, or status
+            include_archived: Include archived tasks
+            async_job: Run in background (auto-triggers at 500+ tasks)
+            job_id: Internal use for background jobs
+
+        Returns:
+            Report with time tracked, estimates, task counts grouped by assignee/list/status (or job_id if async)
+
+        Example:
+            get_folder_time_report_comprehensive(folder_name="Luminique", space_name="JewelleryOS", period_type="this_week")
+        """
+        try:
+            from app.mcp.status_helpers import parse_time_period_filter
+            import sys
+            import threading
+            import uuid
+
+            print(
+                "⌛ Processing folder report - this may take 1-3 minutes for large folders..."
+            )
+            sys.stdout.flush()
+
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_folder_time_report_comprehensive(
+                            folder_name=folder_name,
+                            folder_id=folder_id,
+                            space_name=space_name,
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            group_by=group_by,
+                            include_archived=include_archived,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Folder report running in background. Use get_async_report_status(job_id) to check status.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
+            if not folder_id and not folder_name:
+                return {"error": "Provide either folder_name or folder_id"}
+
+            if folder_name and not space_name:
+                return {"error": "space_name is required when using folder_name"}
+
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+
+            if not folder_id:
+                team_id = _get_team_id()
+                spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                if not spaces_data:
+                    return {"error": "Failed to fetch spaces"}
+
+                space_id = None
+                for space in spaces_data.get("spaces", []):
+                    if space["name"].lower() == space_name.lower():
+                        space_id = space["id"]
+                        break
+
+                if not space_id:
+                    return {"error": f"Space '{space_name}' not found"}
+
+                folders_resp, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if not folders_resp:
+                    return {"error": f"Failed to fetch folders in space '{space_name}'"}
+
+                for folder in folders_resp.get("folders", []):
+                    if folder["name"].lower() == folder_name.lower():
+                        folder_id = folder["id"]
+                        folder_name = folder["name"]  # Use exact name from API
+                        break
+
+                if not folder_id:
+                    return {
+                        "error": f"Folder '{folder_name}' not found in space '{space_name}'"
+                    }
+
+            lists_resp, _ = _api_call("GET", f"/folder/{folder_id}/list")
+            if not lists_resp:
+                return {"error": "Failed to fetch lists in folder"}
+
+            list_ids = []
+            list_map = {}  # Map list_id to list_name for grouping
+            for lst in lists_resp.get("lists", []):
+                list_id = lst["id"]
+                list_ids.append(list_id)
+                list_map[list_id] = lst.get("name", "Unnamed List")
+
+            if not list_ids:
+                return {
+                    "error": f"No lists found in folder '{folder_name or folder_id}'"
+                }
+
+            print(f"[DEBUG] Found {len(list_ids)} lists in folder")
+
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            print(f"[DEBUG] Fetched {len(all_tasks)} tasks from folder")
+
+            if not all_tasks:
+                return {
+                    "folder_name": folder_name or "Unknown",
+                    "folder_id": folder_id,
+                    "period_type": period_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "message": "No tasks found in this folder",
+                    "report": {},
+                }
+
+            if len(all_tasks) >= 500 and not job_id:
+                print(
+                    f"⚡ AUTO-ASYNC: {len(all_tasks)} tasks detected. Switching to background mode to prevent timeout."
+                )
+                sys.stdout.flush()
+                return get_folder_time_report_comprehensive(
+                    folder_name=folder_name,
+                    folder_id=folder_id,
+                    space_name=space_name,
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    group_by=group_by,
+                    include_archived=include_archived,
+                    async_job=True,
+                )
+
+            # Pre-filter: skip tasks with zero time_spent (no entries exist)
+            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            task_ids = [t["id"] for t in timed_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks)-len(task_ids):,} skipped — zero time_spent)")
+            # Convert date range to timestamps
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+            time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+
+            from app.mcp.status_helpers import (
+                filter_time_entries_by_user_and_date_range,
+            )
+
+            report = {}
+            metrics = _calculate_task_metrics(all_tasks)
+
+            for task in all_tasks:
+                task_id = task["id"]
+                task_time_entries = time_entries_map.get(task_id, [])
+
+                m = metrics.get(task_id, {})
+                est_direct = m.get("est_direct", 0)
+
+                if group_by == "assignee":
+                    user_time_map = filter_time_entries_by_user_and_date_range(
+                        task_time_entries, start_ms, end_ms
+                    )
+
+                    for username, time_tracked in user_time_map.items():
+                        if username not in report:
+                            report[username] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                            }
+                        report[username]["tasks"] += 1
+                        report[username]["time_tracked"] += time_tracked
+                        report[username]["time_estimate"] += est_direct
+
+                elif group_by == "list":
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
+                    list_id = task.get("list", {}).get("id")
+                    list_name = list_map.get(list_id, "Unknown List")
+
+                    if total_time_ms > 0:
+                        if list_name not in report:
+                            report[list_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                            }
+                        report[list_name]["tasks"] += 1
+                        report[list_name]["time_tracked"] += total_time_ms
+                        report[list_name]["time_estimate"] += est_direct
+                else:  # status
+                    total_time_ms, filtered_intervals = (
+                        filter_time_entries_by_date_range(
+                            task_time_entries, start_ms, end_ms
+                        )
+                    )
+                    status_name = _extract_status_name(task)
+
+                    if total_time_ms > 0:
+                        if status_name not in report:
+                            report[status_name] = {
+                                "tasks": 0,
+                                "time_tracked": 0,
+                                "time_estimate": 0,
+                                "intervals_count": 0,
+                            }
+                        report[status_name]["tasks"] += 1
+                        report[status_name]["time_tracked"] += total_time_ms
+                        report[status_name]["time_estimate"] += est_direct
+                        report[status_name]["intervals_count"] += len(
+                            filtered_intervals
+                        )
+
+            # Format the report with ONLY human-readable values
+            formatted = {
+                key: {
+                    "tasks": value["tasks"],
+                    "time_tracked": _format_duration(value["time_tracked"]),
+                    "time_estimate": _format_duration(value["time_estimate"]),
+                }
+                for key, value in report.items()
+            }
+
+            total_tracked = sum(v["time_tracked"] for v in report.values())
+            total_estimate = sum(v["time_estimate"] for v in report.values())
+
+            return {
+                "period": f"{start_date} to {end_date}",
+                "folder": folder_name or "Unknown",
+                "space": space_name,
+                "group_by": group_by,
+                "total_time_tracked": _format_duration(total_tracked),
+                "total_time_estimate": _format_duration(total_estimate),
+                "note": "Only includes tasks/subtasks worked on during the date range. Estimates use task-level values to prevent double-counting.",
+                "report": formatted,
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_folder_time_report_comprehensive: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # ============================================================================
+    # EMPLOYEE DAILY TIME REPORT (Timesheet + Time Reporting)
+    # ============================================================================
+
+    @mcp.tool()
+    def get_employee_daily_time_report(
+        period_type: str = "this_month",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        space_name: Optional[str] = None,
+        space_id: Optional[str] = None,
+        folder_name: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        list_id: Optional[str] = None,
+        assignee_names: Optional[List[str]] = None,
+        async_job: bool = False,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Employee daily time report — replicates ClickUp's Timesheet & Time Reporting.
+
+        Generates a matrix of Employee × Day showing how much time each team member
+        tracked on each day, with task-level detail, over a given period.
+
+        Default period is this_month (most common use case for timesheet review).
+
+        Args:
+            period_type: today, yesterday, this_week, last_week, this_month, last_month,
+                         this_year, last_30_days, rolling, custom (default: this_month)
+            custom_start, custom_end: YYYY-MM-DD format for custom period
+            rolling_days: Number of days (1-365) for rolling period
+            space_name: Optional filter — only entries in this space
+            space_id: Optional filter — direct space ID
+            folder_name: Optional filter — only entries in this folder (requires space_name)
+            folder_id: Optional filter — direct folder ID
+            list_id: Optional filter — only entries in this list
+            assignee_names: Optional list of usernames to filter (default: all members)
+            async_job: Run in background to prevent timeout (default: False)
+            job_id: Internal use for background jobs
+
+        Returns:
+            Employee-wise daily time report with:
+            - timesheet: Employee × Day matrix (daily hours)
+            - summary: Per-employee totals (time tracked, estimated, tasks, avg daily)
+            - daily_totals: Team-wide totals per day
+            - task_details: Per-employee per-task breakdown
+            (or job_id if async)
+
+        Examples:
+            get_employee_daily_time_report()
+            get_employee_daily_time_report(period_type="last_month")
+            get_employee_daily_time_report(space_name="JewelleryOS", period_type="this_week")
+            get_employee_daily_time_report(folder_name="Luminique", space_name="JewelleryOS")
+            get_employee_daily_time_report(assignee_names=["Arya", "Mehul"])
+            get_employee_daily_time_report(period_type="this_month", async_job=True)
+        """
+        try:
+            from app.mcp.status_helpers import (
+                parse_time_period_filter,
+                get_workspace_members,
+            )
+            from app.mcp.time_stamp_helpers import format_duration_simple
+            from collections import defaultdict
+            import sys
+            import threading
+            import uuid
+
+            print("⌛ Processing employee daily time report...")
+            sys.stdout.flush()
+
+            # ================================================================
+            # ASYNC JOB SUPPORT: Always run async (task-based fetch is heavy)
+            # The team-level endpoint is not available with our token, so we
+            # must use the slower task-based approach which always needs async.
+            # ================================================================
+            if not async_job and not job_id:
+                # Auto-promote to async to prevent MCP timeout
+                print(
+                    "⚡ AUTO-ASYNC: Task-based fetch always runs in background to prevent timeout."
+                )
+                sys.stdout.flush()
+                async_job = True
+
+            if async_job:
+                jid = job_id or str(uuid.uuid4())
+                JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+                def _bg():
+                    try:
+                        JOBS[jid]["status"] = "running"
+                        res = get_employee_daily_time_report(
+                            period_type=period_type,
+                            custom_start=custom_start,
+                            custom_end=custom_end,
+                            rolling_days=rolling_days,
+                            space_name=space_name,
+                            space_id=space_id,
+                            folder_name=folder_name,
+                            folder_id=folder_id,
+                            list_id=list_id,
+                            assignee_names=assignee_names,
+                            async_job=False,
+                            job_id=jid,
+                        )
+                        JOBS[jid]["result"] = res
+                        JOBS[jid]["status"] = "finished"
+                    except Exception as e:
+                        JOBS[jid]["error"] = str(e)
+                        JOBS[jid]["status"] = "failed"
+
+                th = threading.Thread(target=_bg, daemon=True)
+                th.start()
+                return {
+                    "job_id": jid,
+                    "status": "started",
+                    "message": "Employee daily time report running in background. Use get_async_report_status(job_id) to check progress — result will be included when finished.",
+                }
+
+            if job_id:
+                JOBS.setdefault(job_id, {})["status"] = "running"
+
+            # ================================================================
+            # STEP 1: Parse date range
+            # ================================================================
+            try:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+            except ValueError as e:
+                return {"error": f"Invalid period specification: {str(e)}"}
+
+            print(
+                f"[DEBUG] Period: {period_type}, Date range: {start_date} to {end_date}"
+            )
+            sys.stdout.flush()
+
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # ================================================================
+            # STEP 2: Get workspace members to build assignee filter
+            # ================================================================
+            team_id = _get_team_id()
+            members_result = get_workspace_members()
+
+            if "error" in members_result:
+                # Retry up to 2 more times — ClickUp API can be flaky
+                for retry in range(2):
+                    print(
+                        f"[WARN] Workspace members fetch failed (attempt {retry + 1}/3): {members_result['error']}. Retrying..."
+                    )
+                    sys.stdout.flush()
+                    time.sleep(2)
+                    members_result = get_workspace_members()
+                    if "error" not in members_result:
+                        break
+                else:
+                    return {
+                        "error": f"Failed to get workspace members after 3 attempts: {members_result['error']}"
+                    }
+
+            all_members = members_result.get("members", [])
+            # Build user ID → username map
+            user_id_to_name = {}
+            user_name_to_id = {}
+            for m in all_members:
+                uid = str(m.get("id", ""))
+                uname = m.get("username", "Unknown")
+                user_id_to_name[uid] = uname
+                user_name_to_id[uname.lower()] = uid
+
+            # Filter to specific assignees if requested
+            if assignee_names:
+                target_user_ids = []
+                not_found = []
+                for name in assignee_names:
+                    uid = user_name_to_id.get(name.lower())
+                    if uid:
+                        target_user_ids.append(uid)
+                    else:
+                        # Fuzzy match: check if any username contains the search term
+                        matched = False
+                        for uname_lower, uid_val in user_name_to_id.items():
+                            if name.lower() in uname_lower:
+                                target_user_ids.append(uid_val)
+                                matched = True
+                                break
+                        if not matched:
+                            not_found.append(name)
+
+                if not_found:
+                    return {
+                        "error": f"Assignees not found: {not_found}",
+                        "available_members": [m["username"] for m in all_members],
+                        "hint": "Use exact username or a substring match",
+                    }
+            else:
+                # All members
+                target_user_ids = [str(m["id"]) for m in all_members if m.get("id")]
+
+            if not target_user_ids:
+                return {"error": "No team members found to query"}
+
+            # ================================================================
+            # STEP 3: Resolve location filter (space/folder/list)
+            # ================================================================
+            location_filter = {}
+
+            if list_id:
+                location_filter["list_id"] = list_id
+            elif folder_id:
+                location_filter["folder_id"] = folder_id
+            elif folder_name and space_name:
+                # Resolve folder ID from space
+                if not space_id:
+                    spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                    if spaces_data:
+                        for s in spaces_data.get("spaces", []):
+                            if s["name"].lower() == space_name.lower():
+                                space_id = s["id"]
+                                break
+                    if not space_id:
+                        return {"error": f"Space '{space_name}' not found"}
+
+                folders_resp, _ = _api_call("GET", f"/space/{space_id}/folder")
+                if folders_resp:
+                    for f in folders_resp.get("folders", []):
+                        if f["name"].lower() == folder_name.lower():
+                            location_filter["folder_id"] = f["id"]
+                            break
+                    if "folder_id" not in location_filter:
+                        return {
+                            "error": f"Folder '{folder_name}' not found in space '{space_name}'"
+                        }
+            elif space_name or space_id:
+                if not space_id:
+                    spaces_data, _ = _api_call("GET", f"/team/{team_id}/space")
+                    if spaces_data:
+                        for s in spaces_data.get("spaces", []):
+                            if s["name"].lower() == space_name.lower():
+                                space_id = s["id"]
+                                break
+                    if not space_id:
+                        return {"error": f"Space '{space_name}' not found"}
+                location_filter["space_id"] = space_id
+
+            # ================================================================
+            # STEP 4: Fetch time entries via task-based approach
+            # (Team-level endpoint requires admin token which we don't have)
+            # ================================================================
+            all_time_entries = []
+            local_task_map = {}
+
+            print("⏳ Step 4a: Resolving lists for task-based time entry fetch...")
+            sys.stdout.flush()
+
+            # Resolve list IDs based on location filter
+            target_list_ids = []
+
+            if list_id:
+                target_list_ids = [list_id]
+            elif "folder_id" in location_filter:
+                fid = location_filter["folder_id"]
+                r, _ = _api_call("GET", f"/folder/{fid}/list")
+                if r:
+                    target_list_ids = [lst["id"] for lst in r.get("lists", [])]
+            elif "space_id" in location_filter:
+                sid = location_filter["space_id"]
+                # Folderless lists
+                r, _ = _api_call("GET", f"/space/{sid}/list")
+                if r:
+                    target_list_ids.extend([lst["id"] for lst in r.get("lists", [])])
+                # Lists inside folders
+                r, _ = _api_call("GET", f"/space/{sid}/folder")
+                if r:
+                    for folder in r.get("folders", []):
+                        fr, _ = _api_call("GET", f"/folder/{folder['id']}/list")
+                        if fr:
+                            target_list_ids.extend(
+                                [lst["id"] for lst in fr.get("lists", [])]
+                            )
+            else:
+                # ENTIRE WORKSPACE (All Spaces)
+                print(
+                    "⚠️ Fetching ALL lists from all spaces in workspace... This is a heavy operation."
+                )
+                sys.stdout.flush()
+                r, _ = _api_call("GET", f"/team/{team_id}/space")
+                if r:
+                    for space in r.get("spaces", []):
+                        sid = space["id"]
+                        lr, _ = _api_call("GET", f"/space/{sid}/list")
+                        if lr:
+                            target_list_ids.extend(
+                                [lst["id"] for lst in lr.get("lists", [])]
+                            )
+                        fr, _ = _api_call("GET", f"/space/{sid}/folder")
+                        if fr:
+                            for folder in fr.get("folders", []):
+                                flr, _ = _api_call(
+                                    "GET", f"/folder/{folder['id']}/list"
+                                )
+                                if flr:
+                                    target_list_ids.extend(
+                                        [lst["id"] for lst in flr.get("lists", [])]
+                                    )
+
+            print(f"[DEBUG] Found {len(target_list_ids)} lists to scan.")
+            sys.stdout.flush()
+
+            if target_list_ids:
+                # Fetch all tasks (including archived + closed + subtasks)
+                print(
+                    f"⏳ Step 4b: Fetching tasks from {len(target_list_ids)} lists..."
+                )
+                sys.stdout.flush()
+                all_tasks = _fetch_all_tasks(target_list_ids, {}, include_archived=True)
+                print(f"[DEBUG] Fetched {len(all_tasks)} total tasks")
+                sys.stdout.flush()
+
+                local_task_map = {t["id"]: t for t in all_tasks}
+
+                # Pre-filter: skip tasks with zero time_spent (no entries exist)
+                timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+                print(
+                    f"⏳ Step 4c: Fetching time entries for {len(timed_tasks):,}/{len(all_tasks):,} tasks "
+                    f"({len(all_tasks)-len(timed_tasks):,} skipped — zero time_spent)..."
+                )
+                sys.stdout.flush()
+                task_entries_map = _fetch_time_entries_smart(
+                    [t["id"] for t in timed_tasks], start_ms, end_ms
+                )
+
+                # Flatten results
+                for entries in task_entries_map.values():
+                    all_time_entries.extend(entries)
+
+            print(f"[DEBUG] Total time entries fetched: {len(all_time_entries)}")
+            sys.stdout.flush()
+
+            if not all_time_entries:
+                return {
+                    "period": f"{start_date} to {end_date}",
+                    "period_type": period_type,
+                    "location_filter": location_filter or "entire workspace",
+                    "message": "No time entries found for the specified period and filters",
+                    "timesheet": {},
+                    "summary": {},
+                }
+
+            # ================================================================
+            # STEP 5: Build the Employee × Day matrix
+            # ================================================================
+            # Structure: { username: { "YYYY-MM-DD": { ms, tasks } } }
+            employee_daily = defaultdict(
+                lambda: defaultdict(
+                    lambda: {
+                        "time_ms": 0,
+                        "tasks": defaultdict(
+                            lambda: {
+                                "time_ms": 0,
+                                "task_name": "",
+                                "task_id": "",
+                                "intervals": 0,
+                            }
+                        ),
+                    }
+                )
+            )
+
+            # Also track per-employee totals and task estimation
+            employee_totals = defaultdict(
+                lambda: {
+                    "total_time_ms": 0,
+                    "total_intervals": 0,
+                    "task_ids": set(),
+                    "days_worked": set(),
+                }
+            )
+
+            all_dates = set()
+
+            for entry in all_time_entries:
+                # Extract user
+                user = entry.get("user", {})
+                user_id = str(user.get("id", ""))
+                username = user.get("username") or user_id_to_name.get(
+                    user_id, "Unknown"
+                )
+
+                # Extract task info
+                task = entry.get("task", {}) or {}
+                task_id = task.get("id", "no_task")
+                task_name = task.get("name", "")
+
+                # Enrich task name if missing (common in fallback task-based fetch)
+                if not task_name and task_id in local_task_map:
+                    task_name = local_task_map[task_id].get("name", "Unknown Task")
+
+                if not task_name:
+                    task_name = "No Task"
+
+                # Process intervals — handle both formats:
+                # Format A (team-level): entry has "intervals" array
+                # Format B (task-level): entry itself has start/end/duration (intervals may be empty)
+                intervals = entry.get("intervals", [])
+
+                # If no intervals array (or empty), treat the entry itself as a single interval
+                if not intervals:
+                    entry_start = entry.get("start")
+                    entry_duration = entry.get("duration") or entry.get("time", 0)
+                    if entry_start:
+                        intervals = [
+                            {
+                                "start": entry_start,
+                                "end": entry.get("end"),
+                                "time": entry_duration,
+                            }
+                        ]
+
+                for interval in intervals:
+                    interval_start = interval.get("start")
+                    interval_end = interval.get("end")
+                    duration = interval.get("time", 0)
+
+                    if not interval_start:
+                        continue
+
+                    try:
+                        interval_start_ms = int(interval_start)
+                        duration_ms = int(duration) if duration else 0
+                    except (ValueError, TypeError):
+                        continue
+
+                    # If duration is 0 but we have start+end, compute it
+                    if duration_ms == 0 and interval_end:
+                        try:
+                            duration_ms = int(interval_end) - interval_start_ms
+                        except (ValueError, TypeError):
+                            pass
+
+                    if duration_ms <= 0:
+                        continue
+
+                    # Only include intervals within the date range
+                    if interval_start_ms < start_ms or interval_start_ms > end_ms:
+                        continue
+
+                    # Determine the date from the start timestamp
+                    dt = datetime.fromtimestamp(
+                        interval_start_ms / 1000, tz=timezone.utc
+                    )
+                    date_str = dt.strftime("%Y-%m-%d")
+                    all_dates.add(date_str)
+
+                    # Accumulate
+                    day_data = employee_daily[username][date_str]
+                    day_data["time_ms"] += duration_ms
+
+                    task_data = day_data["tasks"][task_id]
+                    task_data["time_ms"] += duration_ms
+                    task_data["task_name"] = task_name
+                    task_data["task_id"] = task_id
+                    task_data["intervals"] += 1
+
+                    # Totals
+                    employee_totals[username]["total_time_ms"] += duration_ms
+                    employee_totals[username]["total_intervals"] += 1
+                    employee_totals[username]["task_ids"].add(task_id)
+                    employee_totals[username]["days_worked"].add(date_str)
+
+            # Sort dates chronologically
+            sorted_dates = sorted(all_dates)
+
+            # ================================================================
+            # STEP 6: Format the timesheet matrix
+            # ================================================================
+            timesheet = {}
+            for username in sorted(employee_daily.keys()):
+                daily_data = employee_daily[username]
+                timesheet[username] = {}
+                for date_str in sorted_dates:
+                    day = daily_data.get(date_str)
+                    if day and day["time_ms"] > 0:
+                        timesheet[username][date_str] = format_duration_simple(
+                            day["time_ms"]
+                        )
+                    else:
+                        timesheet[username][date_str] = "-"
+
+            # ================================================================
+            # STEP 7: Build employee summary (Time Reporting view)
+            # ================================================================
+            summary = {}
+            for username, totals in sorted(employee_totals.items()):
+                total_ms = totals["total_time_ms"]
+                days_count = len(totals["days_worked"])
+                avg_daily_ms = total_ms // days_count if days_count > 0 else 0
+
+                summary[username] = {
+                    "time_tracked": format_duration_simple(total_ms),
+                    "time_tracked_ms": total_ms,
+                    "total_tasks": len(totals["task_ids"]),
+                    "total_intervals": totals["total_intervals"],
+                    "days_worked": days_count,
+                    "avg_daily": format_duration_simple(avg_daily_ms),
+                }
+
+            # ================================================================
+            # STEP 8: Daily totals across the whole team
+            # ================================================================
+            daily_totals = {}
+            for date_str in sorted_dates:
+                day_total_ms = 0
+                day_members_active = 0
+                for username in employee_daily:
+                    day = employee_daily[username].get(date_str)
+                    if day and day["time_ms"] > 0:
+                        day_total_ms += day["time_ms"]
+                        day_members_active += 1
+
+                # Get day name for readability
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                day_name = dt.strftime("%a")
+
+                daily_totals[date_str] = {
+                    "day": day_name,
+                    "total_time": format_duration_simple(day_total_ms),
+                    "active_members": day_members_active,
+                }
+
+            # ================================================================
+            # STEP 9: Build per-employee task-level detail
+            # ================================================================
+            task_details = {}
+            for username in sorted(employee_daily.keys()):
+                # Aggregate across all days for this employee
+                employee_tasks = defaultdict(
+                    lambda: {"time_ms": 0, "task_name": "", "intervals": 0, "days": []}
+                )
+                for date_str in sorted_dates:
+                    day = employee_daily[username].get(date_str)
+                    if not day:
+                        continue
+                    for tid, tdata in day["tasks"].items():
+                        if tdata["time_ms"] > 0:
+                            employee_tasks[tid]["time_ms"] += tdata["time_ms"]
+                            employee_tasks[tid]["task_name"] = tdata["task_name"]
+                            employee_tasks[tid]["intervals"] += tdata["intervals"]
+                            employee_tasks[tid]["days"].append(date_str)
+
+                # Sort tasks by time tracked (descending)
+                sorted_tasks = sorted(
+                    employee_tasks.items(),
+                    key=lambda x: x[1]["time_ms"],
+                    reverse=True,
+                )
+
+                task_details[username] = [
+                    {
+                        "task_id": tid,
+                        "task_name": tdata["task_name"],
+                        "time_tracked": format_duration_simple(tdata["time_ms"]),
+                        "intervals": tdata["intervals"],
+                        "days_count": len(set(tdata["days"])),
+                    }
+                    for tid, tdata in sorted_tasks
+                ]
+
+            # ================================================================
+            # STEP 10: Grand totals
+            # ================================================================
+            grand_total_ms = sum(t["total_time_ms"] for t in employee_totals.values())
+            total_team_tasks = len(
+                set().union(*(t["task_ids"] for t in employee_totals.values()))
+            )
+
+            return {
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "location_filter": location_filter or "entire workspace",
+                "total_members": len(summary),
+                "total_days": len(sorted_dates),
+                "grand_total_time": format_duration_simple(grand_total_ms),
+                "grand_total_tasks": total_team_tasks,
+                "dates": sorted_dates,
+                "timesheet": timesheet,
+                "summary": summary,
+                "daily_totals": daily_totals,
+                "task_details": task_details,
+                "note": "Timesheet shows daily tracked time per employee. '-' means no time tracked that day.",
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(f"[DEBUG] Error in get_employee_daily_time_report: {e}")
+            print(traceback.format_exc())
+            return {"error": str(e), "traceback": traceback.format_exc()}
+>>>>>>> Stashed changes

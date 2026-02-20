@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Any
 import requests
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from .api_client import client as _client
 
 # --- Constants & Configuration ---
 DATA_FILE = "project_map.json"
@@ -105,12 +106,12 @@ def _slugify(text: str) -> str:
 
 
 def _api_get(endpoint: str, params: dict = None) -> Optional[dict]:
-    """Generic API GET wrapper."""
+    """Generic API GET wrapper — delegates to shared client for connection pooling."""
     try:
-        response = requests.get(f"{BASE_URL}{endpoint}", headers=HEADERS, params=params)
-        if response.status_code == 200:
-            return response.json()
-        return None
+        data, err = _client.get(endpoint, params=params)
+        if err:
+            return None
+        return data
     except Exception as e:
         print(f"API Error: {e}")
         return None
