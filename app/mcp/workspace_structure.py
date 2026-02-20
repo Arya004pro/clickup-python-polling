@@ -1,14 +1,11 @@
 # app/mcp/workspace_structure.py
 
+import json
+import requests
+
 from fastmcp import FastMCP
-<<<<<<< Updated upstream
-from app.clickup import _get, BASE_URL
-from app.config import CLICKUP_TEAM_ID
-import json  # ← added for pretty printing
-=======
 from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
 from .api_client import client as _client
->>>>>>> Stashed changes
 from .status_helpers import (
     get_effective_statuses,
     extract_statuses_from_response,
@@ -17,8 +14,6 @@ from .status_helpers import (
 )
 
 
-<<<<<<< Updated upstream
-=======
 def _get(url, params=None):
     """Self-contained GET helper — uses shared client session for connection pooling."""
     # Extract endpoint from full URL if needed
@@ -36,7 +31,6 @@ def _get(url, params=None):
     return resp.json()
 
 
->>>>>>> Stashed changes
 def register_workspace_tools(mcp: FastMCP):
     def pretty_json(data):
         """Helper: return indented JSON string for readable terminal output"""
@@ -766,41 +760,19 @@ def register_workspace_tools(mcp: FastMCP):
         Returns:
         Pretty-printed confirmation message.
         """
-        from app.clickup import (
-            fetch_all_spaces,
-            fetch_all_lists_in_space,
-        )  # import cached functions
-
-        cleared = []
-
-        try:
-            if type in ("all", "workspaces"):
-                fetch_all_spaces.cache_clear()
-                cleared.append("workspaces")
-
-            if type in ("all", "spaces", "folders", "lists"):
-                fetch_all_lists_in_space.cache_clear()
-                cleared.append("lists_in_space")
-
-            # Add more caches if you create them later (e.g., task lists, time entries)
-            # Example:
-            # if type in ("all", "tasks"):
-            #     fetch_tasks_from_list.cache_clear()
-            #     cleared.append("tasks")
-
-            if not cleared:
-                return {
-                    "status": "nothing_cleared",
-                    "message": f"No caches cleared for type '{type}'. Valid types: 'all', 'workspaces', 'spaces', 'folders', 'lists', 'tasks'",
-                }
-
+        # workspace_structure fetches data live via direct API calls with no
+        # local lru_cache, so there is nothing to clear here.  Restart the MCP
+        # server process if you need a fully cold state.
+        valid_types = {"all", "workspaces", "spaces", "folders", "lists", "tasks"}
+        if type not in valid_types:
             return {
-                "status": "success",
-                "cleared": cleared,
-                "message": f"Successfully cleared {len(cleared)} cache(s)",
+                "status": "invalid_type",
+                "message": f"Unknown type '{type}'. Valid: {sorted(valid_types)}",
             }
-        except Exception as e:
-            return {"status": "error", "message": f"Failed to clear cache: {str(e)}"}
+        return {
+            "status": "no_op",
+            "message": "No caches to clear — all data is fetched live from the ClickUp API.",
+        }
 
     @mcp.tool
     def get_team_members(workspace_id: str = None):
