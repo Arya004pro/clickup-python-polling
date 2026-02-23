@@ -22,12 +22,9 @@ register_project_configuration_tools(mcp)
 register_project_intelligence_tools(mcp)
 register_sync_mapping_tools(mcp)
 
+
 if __name__ == "__main__":
-<<<<<<< Updated upstream
-    print("Starting ClickUp MCP Server...")
-    mcp.run(
-        transport="sse",  # SSE transport for MCP client compatibility
-=======
+    import time
     import uvicorn
 
     print("Starting ClickUp MCP Server in 2s to allow initialization...")
@@ -39,7 +36,8 @@ if __name__ == "__main__":
     # Run with uvicorn directly to control timeout settings
     config = uvicorn.Config(
         app,
->>>>>>> Stashed changes
         host="0.0.0.0",
         port=8001,
     )
+    server = uvicorn.Server(config)
+    server.run()
