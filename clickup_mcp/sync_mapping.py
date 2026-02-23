@@ -168,6 +168,154 @@ def _fetch_full_structure(entity_id: str, entity_type: str) -> dict:
     return structure
 
 
+def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[dict]:
+    """Recursively search for an entity by name in a structure."""
+    if not structure or not search_name:
+        return None
+    search_lower = search_name.lower().strip()
+    if structure.get("name", "").lower() == search_lower:
+        return {
+            "id": structure["id"],
+            "name": structure["name"],
+            "type": structure["type"],
+            "structure": structure,
+            "found_at": "root",
+        }
+    for child in structure.get("children", []):
+        if child.get("name", "").lower() == search_lower:
+            return {
+                "id": child["id"],
+                "name": child["name"],
+                "type": child["type"],
+                "structure": child,
+                "parent_name": structure.get("name"),
+                "parent_type": structure.get("type"),
+                "parent_id": structure.get("id"),
+                "found_at": "direct_child",
+            }
+        if child.get("children"):
+            nested = _search_entity_in_structure(child, search_name)
+            if nested:
+                nested["parent_name"] = structure.get("name")
+                nested["parent_type"] = structure.get("type")
+                nested["parent_id"] = structure.get("id")
+                nested["found_at"] = "nested"
+                return nested
+    return None
+
+
+def find_entity_anywhere(entity_name: str) -> Optional[dict]:
+    """
+    Universal entity finder. Searches for a space, folder, or list by name.
+    Search priority:
+    1. Mapped projects in project_map.json
+    2. Live API search across all spaces
+    """
+    if not entity_name:
+        return None
+    search_lower = entity_name.lower().strip()
+
+    # 1. Search in mapped projects
+    for alias, data in db.projects.items():
+        structure = data.get("structure", {})
+        if search_lower in [
+            alias.lower(),
+            data.get("alias", "").lower(),
+            structure.get("name", "").lower(),
+        ]:
+            return {
+                "id": data["clickup_id"],
+                "name": structure.get("name", alias),
+                "type": data["clickup_type"],
+                "structure": structure,
+                "source": "project_map",
+                "alias": alias,
+                "found_at": "root",
+            }
+        result = _search_entity_in_structure(structure, entity_name)
+        if result:
+            result["source"] = "project_map"
+            result["root_alias"] = alias
+            return result
+
+    # 2. Live API search
+    teams_data = _api_get("/team")
+    if not teams_data:
+        return None
+    team_id = teams_data["teams"][0]["id"]
+    spaces_data = _api_get(f"/team/{team_id}/space")
+    if not spaces_data:
+        return None
+
+    for space in spaces_data.get("spaces", []):
+        if space["name"].lower() == search_lower:
+            return {
+                "id": space["id"],
+                "name": space["name"],
+                "type": "space",
+                "structure": _fetch_full_structure(space["id"], "space"),
+                "source": "api",
+                "found_at": "root",
+            }
+        folders_data = _api_get(f"/space/{space['id']}/folder")
+        if folders_data:
+            for folder in folders_data.get("folders", []):
+                if folder["name"].lower() == search_lower:
+                    return {
+                        "id": folder["id"],
+                        "name": folder["name"],
+                        "type": "folder",
+                        "structure": _fetch_full_structure(folder["id"], "folder"),
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folder",
+                    }
+                lists_data = _api_get(f"/folder/{folder['id']}/list")
+                if lists_data:
+                    for lst in lists_data.get("lists", []):
+                        if lst["name"].lower() == search_lower:
+                            return {
+                                "id": lst["id"],
+                                "name": lst["name"],
+                                "type": "list",
+                                "structure": {
+                                    "id": lst["id"],
+                                    "name": lst["name"],
+                                    "type": "list",
+                                },
+                                "parent_name": folder["name"],
+                                "parent_type": "folder",
+                                "parent_id": folder["id"],
+                                "grandparent_name": space["name"],
+                                "grandparent_type": "space",
+                                "grandparent_id": space["id"],
+                                "source": "api",
+                                "found_at": "list_in_folder",
+                            }
+        lists_data = _api_get(f"/space/{space['id']}/list")
+        if lists_data:
+            for lst in lists_data.get("lists", []):
+                if lst["name"].lower() == search_lower:
+                    return {
+                        "id": lst["id"],
+                        "name": lst["name"],
+                        "type": "list",
+                        "structure": {
+                            "id": lst["id"],
+                            "name": lst["name"],
+                            "type": "list",
+                        },
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folderless_list",
+                    }
+    return None
+
+
 # --- Tools Definition ---
 
 
@@ -438,6 +586,58 @@ def register_sync_mapping_tools(mcp: FastMCP):
         """Remove expired cache entries."""
         count = db.prune_expired_cache()
         return {"success": True, "removed_entries": count, "message": "Cache pruned."}
+
+    @mcp.tool()
+    def find_project_anywhere(project_name: str) -> dict:
+        """
+        Universal project/entity finder. Search for any space, folder, or list by name.
+        Works regardless of where the entity is located in the hierarchy.
+        Use this BEFORE any report tool to resolve the entity type and ID.
+        """
+        result = find_entity_anywhere(project_name)
+        if not result:
+            return {
+                "error": f"Project '{project_name}' not found",
+                "suggestion": "Try discover_hierarchy() to see all available spaces, folders, and lists",
+            }
+        response = {
+            "found": True,
+            "name": result["name"],
+            "id": result["id"],
+            "type": result["type"],
+            "source": result["source"],
+            "location": result.get("found_at", "unknown"),
+        }
+        if result.get("parent_name"):
+            response["parent"] = {
+                "name": result["parent_name"],
+                "type": result["parent_type"],
+                "id": result["parent_id"],
+            }
+        if result.get("grandparent_name"):
+            response["grandparent"] = {
+                "name": result["grandparent_name"],
+                "type": result["grandparent_type"],
+                "id": result["grandparent_id"],
+            }
+        if result.get("structure"):
+            children = result["structure"].get("children", [])
+            if children:
+                response["contains"] = {
+                    "total_children": len(children),
+                    "children": [
+                        {"name": c.get("name"), "type": c.get("type")}
+                        for c in children[:10]
+                    ],
+                }
+                if len(children) > 10:
+                    response["contains"]["note"] = (
+                        f"Showing 10 of {len(children)} items"
+                    )
+        response["usage_hint"] = (
+            f"Use this {result['type']} ID ({result['id']}) with report generation tools"
+        )
+        return response
 
     @mcp.tool()
     def get_environment_context() -> dict:

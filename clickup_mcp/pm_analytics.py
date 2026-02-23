@@ -10,9 +10,13 @@ Features:
 
 from __future__ import annotations
 from fastmcp import FastMCP
+import requests
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
+from app.config import CLICKUP_API_TOKEN, BASE_URL
 from clickup_mcp.status_helpers import (
     get_current_week_dates,
     date_range_to_timestamps,
@@ -103,11 +107,68 @@ def _get_team_id() -> str:
     return _client.get_team_id()
 
 
+def _headers() -> dict:
+    return {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+
+
+class _RateLimiter:
+    """Thread-safe token bucket rate limiter."""
+
+    def __init__(self, rpm: int = 1000):
+        self.rate = rpm / 60
+        self.tokens = int(rpm * 0.1)
+        self.last = time.time()
+        self.lock = Lock()
+
+    def acquire(self):
+        with self.lock:
+            now = time.time()
+            self.tokens = min(
+                int(self.rate * 6), self.tokens + (now - self.last) * self.rate
+            )
+            self.last = now
+            if self.tokens >= 1:
+                self.tokens -= 1
+                return
+            time.sleep(1 / self.rate)
+
+
+_rate_limiter = _RateLimiter()
+
+
 def _fetch_time_entries_smart(
     task_ids: list, start_ms: int = 0, end_ms: int = 0
 ) -> dict:
-    """Fetch time entries using per-task concurrent batch (connection-pooled)."""
-    return _client.fetch_time_entries_smart(task_ids, start_ms, end_ms)
+    """Fetch time entries for all tasks using concurrent workers with rate limiting."""
+    if not task_ids:
+        return {}
+    result = {}
+    headers = _headers()
+
+    def _fetch_one(tid):
+        for attempt in range(3):
+            try:
+                _rate_limiter.acquire()
+                resp = requests.get(
+                    f"{BASE_URL}/task/{tid}/time", headers=headers, timeout=30
+                )
+                if resp.status_code == 200:
+                    return tid, resp.json().get("data", [])
+                if resp.status_code == 429:
+                    time.sleep(min(30, 2**attempt * 3))
+                    continue
+            except Exception:
+                if attempt < 2:
+                    time.sleep(0.5)
+        return tid, []
+
+    workers = min(50, max(10, len(task_ids) // 10))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for tid, entries in (
+            f.result() for f in as_completed(ex.submit(_fetch_one, t) for t in task_ids)
+        ):
+            result[tid] = entries
+    return result
 
 
 def _resolve_to_list_ids(project: Optional[str], list_id: Optional[str]) -> List[str]:
@@ -1508,13 +1569,9 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 )
                 sys.stdout.flush()
 
-                # Pre-filter: skip tasks with zero time_spent (no entries exist)
-                timed_tasks = [
-                    t for t in all_tasks if int(t.get("time_spent") or 0) > 0
-                ]
-                task_ids = [t["id"] for t in timed_tasks]
+                task_ids = [t["id"] for t in all_tasks]
                 print(
-                    f"[PROGRESS] {len(task_ids):,}/{len(all_tasks):,} tasks have time tracked — skipping {len(all_tasks) - len(task_ids):,}"
+                    f"[PROGRESS] Fetching time entries for {len(task_ids):,} tasks..."
                 )
                 sys.stdout.flush()
                 time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
@@ -1644,13 +1701,9 @@ def register_pm_analytics_tools(mcp: FastMCP):
                 )
                 sys.stdout.flush()
 
-                # Pre-filter: skip tasks with zero time_spent (no entries exist)
-                timed_tasks = [
-                    t for t in all_tasks if int(t.get("time_spent") or 0) > 0
-                ]
-                task_ids = [t["id"] for t in timed_tasks]
+                task_ids = [t["id"] for t in all_tasks]
                 print(
-                    f"[PROGRESS] {len(task_ids):,}/{len(all_tasks):,} tasks have time tracked — skipping {len(all_tasks) - len(task_ids):,}"
+                    f"[PROGRESS] Fetching time entries for {len(task_ids):,} tasks..."
                 )
                 sys.stdout.flush()
                 time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
@@ -2080,13 +2133,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # ================================================================
             # STEP 5: Fetch time entries for all tasks in one batch
             # ================================================================
-            # Pre-filter: skip tasks with zero time_spent (no entries exist)
-            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            task_ids = [t["id"] for t in timed_tasks]
-            print(
-                f"[PROGRESS] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks "
-                f"({len(all_tasks) - len(task_ids):,} skipped — zero time_spent)"
-            )
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[PROGRESS] Fetching time entries for {len(task_ids):,} tasks...")
             sys.stdout.flush()
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
 
@@ -2353,12 +2401,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "message": "No tasks found",
                 }
 
-            # Pre-filter: skip tasks with zero time_spent (no entries exist)
-            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            task_ids = [t["id"] for t in timed_tasks]
-            print(
-                f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks) - len(task_ids):,} skipped — zero time_spent)"
-            )
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,} tasks...")
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
 
             # ================================================================
@@ -2768,12 +2812,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     "report": {},
                 }
 
-            # Pre-filter: skip tasks with zero time_spent (no entries exist)
-            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            task_ids = [t["id"] for t in timed_tasks]
-            print(
-                f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks) - len(task_ids):,} skipped — zero time_spent)"
-            )
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,} tasks...")
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
@@ -3065,12 +3105,8 @@ def register_pm_analytics_tools(mcp: FastMCP):
                     async_job=True,
                 )
 
-            # Pre-filter: skip tasks with zero time_spent (no entries exist)
-            timed_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            task_ids = [t["id"] for t in timed_tasks]
-            print(
-                f"[DEBUG] Fetching time entries for {len(task_ids):,}/{len(all_tasks):,} tasks ({len(all_tasks) - len(task_ids):,} skipped — zero time_spent)"
-            )
+            task_ids = [t["id"] for t in all_tasks]
+            print(f"[DEBUG] Fetching time entries for {len(task_ids):,} tasks...")
             # Convert date range to timestamps
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
@@ -3503,18 +3539,12 @@ def register_pm_analytics_tools(mcp: FastMCP):
 
                 local_task_map = {t["id"]: t for t in all_tasks}
 
-                # Pre-filter: skip tasks with zero time_spent (no entries exist)
-                timed_tasks = [
-                    t for t in all_tasks if int(t.get("time_spent") or 0) > 0
-                ]
+                task_ids = [t["id"] for t in all_tasks]
                 print(
-                    f"⏳ Step 4c: Fetching time entries for {len(timed_tasks):,}/{len(all_tasks):,} tasks "
-                    f"({len(all_tasks) - len(timed_tasks):,} skipped — zero time_spent)..."
+                    f"⏳ Step 4c: Fetching time entries for {len(task_ids):,} tasks..."
                 )
                 sys.stdout.flush()
-                task_entries_map = _fetch_time_entries_smart(
-                    [t["id"] for t in timed_tasks], start_ms, end_ms
-                )
+                task_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
 
                 # Flatten results
                 for entries in task_entries_map.values():
