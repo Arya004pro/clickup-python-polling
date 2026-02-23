@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any
 import requests
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .api_client import client as _client
+from clickup_mcp.api_client import client as _client
 
 # --- Constants & Configuration ---
 DATA_FILE = "project_map.json"

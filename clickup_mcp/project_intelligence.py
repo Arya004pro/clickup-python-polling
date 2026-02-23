@@ -8,9 +8,9 @@ import requests
 import time
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .api_client import client as _client
-from .project_configuration import TRACKED_PROJECTS
-from .clickup_shared import (
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.project_configuration import TRACKED_PROJECTS
+from clickup_mcp.clickup_shared import (
     STATUS_NAME_OVERRIDES,
     STATUS_OVERRIDE_MAP,
     get_status_category,
@@ -19,7 +19,7 @@ from .clickup_shared import (
     calculate_task_metrics as _calc_time_shared,
     fetch_missing_parents,
 )
-from .status_helpers import (
+from clickup_mcp.status_helpers import (
     extract_status_name,
     get_effective_statuses,
     format_status_for_display,

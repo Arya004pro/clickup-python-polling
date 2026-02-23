@@ -21,7 +21,7 @@ from clickup_mcp.status_helpers import (
     parse_week_input,
     validate_week_dates,
 )
-from .api_client import client as _client
+from clickup_mcp.api_client import client as _client
 
 
 # --- Standardized Status Logic ---

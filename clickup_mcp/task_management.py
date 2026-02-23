@@ -10,8 +10,8 @@ import re
 import time
 from typing import List, Dict
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .api_client import client as _client
-from .clickup_shared import (
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.clickup_shared import (
     safe_get as _safe_get,
     format_assignees as _format_assignees,
     format_duration as _format_duration,

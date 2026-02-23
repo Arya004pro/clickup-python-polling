@@ -10,8 +10,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .api_client import client as _client
-from .clickup_shared import (
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.clickup_shared import (
     STATUS_NAME_OVERRIDES,
     STATUS_OVERRIDE_MAP,
     get_status_category,

@@ -5,8 +5,8 @@ import requests
 
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
-from .api_client import client as _client
-from .status_helpers import (
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.status_helpers import (
     get_effective_statuses,
     extract_statuses_from_response,
     get_workspace_members,

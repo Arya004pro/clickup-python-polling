@@ -8,7 +8,7 @@ import requests
 from typing import List, Dict, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .api_client import client as _client
+from clickup_mcp.api_client import client as _client
 
 
 # --- Date/Timestamp Helpers ---
