@@ -13,7 +13,7 @@ from fastmcp import FastMCP
 import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
-from app.mcp.status_helpers import (
+from clickup_mcp.status_helpers import (
     get_current_week_dates,
     date_range_to_timestamps,
     filter_time_entries_by_date_range,
@@ -1900,7 +1900,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
                                           custom_start="2026-01-01", custom_end="2026-01-31")
         """
         try:
-            from app.mcp.status_helpers import (
+            from clickup_mcp.status_helpers import (
                 parse_time_period_filter,
                 filter_time_entries_by_user_and_date_range,
             )
@@ -2265,7 +2265,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
     ) -> dict:
 
         try:
-            from app.mcp.status_helpers import (
+            from clickup_mcp.status_helpers import (
                 format_time_entry_interval,
                 format_duration_simple,
                 group_intervals_by_date,
@@ -2641,7 +2641,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             get_space_time_report_comprehensive(space_name="JewelleryOS", period_type="this_week", group_by="assignee")
         """
         try:
-            from app.mcp.status_helpers import parse_time_period_filter
+            from clickup_mcp.status_helpers import parse_time_period_filter
             import sys
             import threading
             import uuid
@@ -2778,7 +2778,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
 
-            from app.mcp.status_helpers import (
+            from clickup_mcp.status_helpers import (
                 filter_time_entries_by_user_and_date_range,
             )
 
@@ -2916,7 +2916,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             get_folder_time_report_comprehensive(folder_name="Luminique", space_name="JewelleryOS", period_type="this_week")
         """
         try:
-            from app.mcp.status_helpers import parse_time_period_filter
+            from clickup_mcp.status_helpers import parse_time_period_filter
             import sys
             import threading
             import uuid
@@ -3075,7 +3075,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
             time_entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
 
-            from app.mcp.status_helpers import (
+            from clickup_mcp.status_helpers import (
                 filter_time_entries_by_user_and_date_range,
             )
 
@@ -3236,11 +3236,11 @@ def register_pm_analytics_tools(mcp: FastMCP):
             get_employee_daily_time_report(period_type="this_month", async_job=True)
         """
         try:
-            from app.mcp.status_helpers import (
+            from clickup_mcp.status_helpers import (
                 parse_time_period_filter,
                 get_workspace_members,
             )
-            from app.mcp.time_stamp_helpers import format_duration_simple
+            from clickup_mcp.time_stamp_helpers import format_duration_simple
             from collections import defaultdict
             import sys
             import threading

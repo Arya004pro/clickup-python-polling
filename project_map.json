@@ -1581,59 +1581,6 @@
         ],
         "name": "Wizcoder"
       }
-    },
-    "Luminique": {
-      "alias": "Luminique",
-      "clickup_id": "90167907863",
-      "clickup_type": "folder",
-      "last_sync": 1770805400.223844,
-      "structure": {
-        "id": "90167907863",
-        "type": "folder",
-        "children": [
-          {
-            "id": "901612742608",
-            "name": "List",
-            "type": "list"
-          },
-          {
-            "id": "901613177446",
-            "name": "Store Front",
-            "type": "list"
-          },
-          {
-            "id": "901613241141",
-            "name": "Research",
-            "type": "list"
-          },
-          {
-            "id": "901613241313",
-            "name": "Backlog",
-            "type": "list"
-          },
-          {
-            "id": "901613241170",
-            "name": "In Queue",
-            "type": "list"
-          },
-          {
-            "id": "901613241189",
-            "name": "Development",
-            "type": "list"
-          },
-          {
-            "id": "901613241286",
-            "name": "Testing",
-            "type": "list"
-          },
-          {
-            "id": "901613465754",
-            "name": "Bugs - Mehul",
-            "type": "list"
-          }
-        ],
-        "name": "Luminique"
-      }
     }
   },
   "discovery_cache": {}
