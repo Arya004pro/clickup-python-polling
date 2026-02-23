@@ -11,6 +11,7 @@ Features:
 from __future__ import annotations
 from fastmcp import FastMCP
 import requests
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -139,35 +140,86 @@ _rate_limiter = _RateLimiter()
 def _fetch_time_entries_smart(
     task_ids: list, start_ms: int = 0, end_ms: int = 0
 ) -> dict:
-    """Fetch time entries for all tasks using concurrent workers with rate limiting."""
+    """Fetch time entries for all tasks using concurrent workers with rate limiting.
+
+    When start_ms/end_ms are provided they are forwarded to the ClickUp API so
+    only entries within the requested date range are returned, dramatically
+    reducing response sizes and latency for large workspaces.
+    """
     if not task_ids:
         return {}
+
+    total = len(task_ids)
     result = {}
+    errors = 0
+    processed = 0
+    start_time = time.time()
+    # Log every ~5% or at least every 100 tasks
+    log_every = max(100, total // 20)
+
+    # Build optional date range query params
+    time_params: dict = {}
+    if start_ms:
+        time_params["start_date"] = start_ms
+    if end_ms:
+        time_params["end_date"] = end_ms
+
     headers = _headers()
+
+    # Scale workers: more for large batches, capped to avoid overwhelming the API
+    workers = min(100, max(10, total // 10))
+
+    print(f"[DEBUG] Fetching time entries for {total:,} tasks... ({workers} workers)")
+    sys.stdout.flush()
 
     def _fetch_one(tid):
         for attempt in range(3):
             try:
                 _rate_limiter.acquire()
                 resp = requests.get(
-                    f"{BASE_URL}/task/{tid}/time", headers=headers, timeout=30
+                    f"{BASE_URL}/task/{tid}/time",
+                    headers=headers,
+                    params=time_params if time_params else None,
+                    timeout=30,
                 )
                 if resp.status_code == 200:
-                    return tid, resp.json().get("data", [])
+                    return tid, resp.json().get("data", []), None
                 if resp.status_code == 429:
                     time.sleep(min(30, 2**attempt * 3))
                     continue
-            except Exception:
+                return tid, [], f"HTTP {resp.status_code}"
+            except Exception as exc:
                 if attempt < 2:
                     time.sleep(0.5)
-        return tid, []
+                else:
+                    return tid, [], str(exc)
+        return tid, [], "Max retries exceeded"
 
-    workers = min(50, max(10, len(task_ids) // 10))
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        for tid, entries in (
-            f.result() for f in as_completed(ex.submit(_fetch_one, t) for t in task_ids)
-        ):
+        futures = [ex.submit(_fetch_one, t) for t in task_ids]
+        for fut in as_completed(futures):
+            tid, entries, err = fut.result()
             result[tid] = entries
+            processed += 1
+            if err:
+                errors += 1
+            if processed % log_every == 0 or processed == total:
+                elapsed = time.time() - start_time
+                rate = processed / elapsed if elapsed > 0 else 0
+                eta = (total - processed) / rate if rate > 0 else 0
+                pct = processed / total * 100
+                print(
+                    f"[PROGRESS] [{processed:,}/{total:,}] {pct:.0f}% | "
+                    f"{rate:.1f} tasks/sec | ETA: {eta:.0f}s | errors: {errors}"
+                )
+                sys.stdout.flush()
+
+    elapsed = time.time() - start_time
+    print(
+        f"[DEBUG] Time entry fetch done: {processed:,} tasks in {elapsed:.1f}s "
+        f"({processed / elapsed:.1f}/sec) | errors: {errors}"
+    )
+    sys.stdout.flush()
     return result
 
 
