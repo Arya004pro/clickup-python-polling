@@ -213,21 +213,17 @@ The Model Context Protocol (MCP) is an open standard that enables AI models to i
 
 ---
 
-## ⚡ Quick Start Guide
-
-### Prerequisites
-
-- Python 3.11.9+ (tested and recommended)
-- ClickUp account with API access
-- PostgreSQL database (Supabase recommended)
-- An API Key from Gemini, Groq, or Ollama
+## ⚡ Quick Start Guide (Updated)
 
 ### 5-Minute Setup
 
 ```bash
-# 1. Clone the repository, now here a branch might need to be cloned
+# 1. Clone the repository
+# Ensure you are on the correct branch (e.g., qwen-1.2)
 git clone https://github.com/Arya004pro/clickup-python-polling.git
 cd clickup-python-polling
+
+git checkout qwen-1.2
 
 # 2. Create Python virtual environment
 python -m venv myenv
@@ -237,15 +233,8 @@ myenv\Scripts\activate  # Windows
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Create .env file
-copy .env.example .env
-# Edit .env with your credentials (see below)
-
-# 5. Start MCP Server (Terminal 1)
-python app/mcp/mcp_server.py
-
-# 6. Start SLM Client (Terminal 2)
-python slm_client.py
+# 4. Start the server and watchdog
+npm start
 ```
 
 ### Minimum .env Configuration
@@ -791,35 +780,36 @@ All tools return JSON with this structure:
 
 ```
 clickup-python-polling/
-├── app/
+├── clickup_mcp/                # Core MCP server and tools
 │   ├── __init__.py
-│   ├── main.py              # FastAPI REST endpoints
-│   ├── clickup.py           # ClickUp API client
-│   ├── config.py            # Configuration loader
-│   ├── sync.py              # Task sync logic
-│   ├── daily_sync.py        # Daily snapshot sync
-│   ├── supabase_db.py       # Database operations
-│   ├── scheduler.py         # Background jobs
-│   ├── time_tracking.py     # Time entry handling
-│   ├── employee_sync.py     # User mapping
-│   ├── logging_config.py    # Logging setup
-│   └── mcp/
-│       ├── __init__.py
-│       ├── mcp_server.py           # MCP Server entry point
-│       ├── workspace_structure.py  # Workspace tools (10)
-│       ├── task_management.py      # Task tools (12)
-│       ├── pm_analytics.py         # Analytics tools (9)
-│       ├── project_configuration.py # Config tools (7)
-│       ├── project_intelligence.py # Intelligence tools (12)
-│       └── sync_mapping.py         # Sync tools (10)
-├── myenv/                   # Virtual environment
-├── .env                     # Environment variables
-├── .env.example             # Example configuration
-├── requirements.txt         # Python dependencies
-├── check_models.py          # Setup validator
-├── slm_client.py            # SLM Client (Gemini)
-├── project_map.json         # Cached project mappings
-└── README.md                # This file
+│   ├── api_client.py           # API client for ClickUp
+│   ├── clickup_shared.py       # Shared utilities for ClickUp
+│   ├── mcp_server.py           # Main MCP server entry point
+│   ├── pm_analytics.py         # Project management analytics tools
+│   ├── project_configuration.py # Project configuration utilities
+│   ├── project_intelligence.py # Project intelligence tools
+│   ├── status_helpers.py       # Status management helpers
+│   ├── sync_mapping.py         # Sync and mapping utilities
+│   ├── task_management.py      # Task management tools
+│   ├── time_stamp_helpers.py   # Timestamp formatting helpers
+│   ├── watch-restart.py        # Watchdog script for server restarts
+│   └── workspace_structure.py  # Workspace structure management
+├── app/                        # Application-level scripts
+│   ├── __init__.py
+│   ├── clickup.py              # ClickUp integration
+│   ├── config.py               # Configuration settings
+│   ├── daily_sync.py           # Daily synchronization tasks
+│   ├── employee_sync.py        # Employee synchronization tasks
+│   ├── logging_config.py       # Logging configuration
+│   ├── main.py                 # Main application entry point
+│   ├── scheduler.py            # Task scheduler
+│   ├── supabase_db.py          # Supabase database integration
+│   ├── sync.py                 # Synchronization utilities
+│   ├── time_tracking.py        # Time tracking utilities
+├── myenv/                      # Python virtual environment
+├── requirements.txt            # Python dependencies
+├── package.json                # npm scripts for server management
+└── README.md                   # Project documentation
 ```
 
 ---
@@ -849,6 +839,31 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
+## 🛠 Updated Features
+
+### Watchdog Integration for Automatic Server Restarts
+
+- A new script `clickup_mcp/watch-restart.py` has been added to monitor file changes in the `clickup_mcp` directory.
+- Automatically restarts the MCP server when changes are detected.
+- Simplifies development workflow by eliminating the need for manual server restarts.
+
+### Simplified Server Management with npm Scripts
+
+- Added an `npm` script for starting the server and watchdog together.
+- To start the server, simply run:
+
+```bash
+npm start
+```
+
+### Enhanced Task Management and Workspace Tools
+
+- Optimized `task_management.py` for better performance and additional features.
+- Added `time_stamp_helpers.py` for advanced timestamp formatting.
+- Improved `workspace_structure.py` for managing ClickUp workspaces efficiently.
+
+---
+
 ## 🛠 Quick Setup for Testers (Non-Technical Users)
 
 Follow these simple steps to get the ClickUp MCP Server running on your device (even if you're not a developer):
@@ -873,7 +888,7 @@ $ cd clickup-python-polling
 # Create and activate a virtual environment
 $ python -m venv myenv
 $ source myenv/Scripts/activate  # On Windows
-$ source myenv/bin/activate     # On macOS/Linux
+$ source myenv/bin/activate      # On macOS/Linux
 ```
 
 ### 4. Install Dependencies
