@@ -157,15 +157,18 @@ class ClickUpClient:
         )
 
         retry_strategy = Retry(
-            total=3,
+            total=5,
+            connect=5,  # retry on connection-level failures (SSL EOF, reset)
+            read=3,
             backoff_factor=1.0,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET", "POST", "PUT", "DELETE"],
             raise_on_status=False,
+            raise_on_redirect=False,
         )
         adapter = HTTPAdapter(
             pool_connections=60,
-            pool_maxsize=350,
+            pool_maxsize=60,  # match worker cap (60) so every thread reuses a pooled socket
             max_retries=retry_strategy,
         )
         self.session.mount("https://", adapter)
@@ -380,16 +383,18 @@ class ClickUpClient:
     # ------------------------------------------------------------------
 
     def fetch_time_entries_batch(
-        self, task_ids: List[str], max_workers: int = 300
+        self, task_ids: List[str], max_workers: int = 60
     ) -> Dict[str, List]:
         """
         Per-task concurrent fetch with connection pooling.
-        Uses high concurrency (300 workers) with rate-limit-aware scheduling.
+        pool_connections=60 matches max_workers so every thread reuses an
+        existing pooled socket — no new TLS handshakes, no SSL EOF errors.
         """
         if not task_ids:
             return {}
 
         total = len(task_ids)
+        workers = min(max_workers, total)  # capped at 60 by default
         result: Dict[str, list] = {}
         processed = 0
         errors = 0
@@ -397,28 +402,50 @@ class ClickUpClient:
         log_every = max(100, total // 20)
 
         print(f"\n⏳ Fetching time entries for {total:,} tasks (pooled connections)...")
-        print(f"🚀 {max_workers} concurrent workers")
+        print(f"🚀 {workers} concurrent workers (pool_maxsize=60)")
         sys.stdout.flush()
 
+        def _is_ssl_error(exc: Exception) -> bool:
+            s = str(exc).lower()
+            return any(
+                kw in s
+                for kw in (
+                    "ssl",
+                    "eof occurred",
+                    "connection reset",
+                    "connection aborted",
+                    "broken pipe",
+                )
+            )
+
         def _one(tid):
-            for attempt in range(3):
+            import random
+
+            max_attempts = 6
+            for attempt in range(max_attempts):
                 try:
                     self.limiter.acquire()
-                    r = self.session.get(f"{BASE_URL}/task/{tid}/time", timeout=15)
+                    r = self.session.get(f"{BASE_URL}/task/{tid}/time", timeout=20)
                     if r.status_code == 200:
                         return tid, r.json().get("data", []), None
                     if r.status_code == 429:
-                        time.sleep(min(30, 2**attempt * 3))
+                        time.sleep(min(60, 2**attempt * 3))
                         continue
                     return tid, [], f"HTTP {r.status_code}"
                 except Exception as e:
-                    if attempt < 2:
-                        time.sleep(0.5)
+                    if attempt < max_attempts - 1:
+                        if _is_ssl_error(e):
+                            base = 2**attempt * 2
+                            jitter = random.uniform(0, base * 0.5)
+                            delay = min(base + jitter, 45)
+                        else:
+                            delay = 0.5 * (attempt + 1)
+                        time.sleep(delay)
                         continue
                     return tid, [], str(e)
             return tid, [], "Max retries"
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(_one, t) for t in task_ids]
             for f in as_completed(futures):
                 tid, entries, err = f.result()

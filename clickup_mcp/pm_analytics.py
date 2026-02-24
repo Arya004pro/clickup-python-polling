@@ -115,8 +115,12 @@ def _fetch_time_entries_smart(
     Fetch time entries for all tasks concurrently.
 
     Uses _client's pooled requests.Session (pool_connections=60,
-    pool_maxsize=350) and _client's rate limiter — the same stack optimized
+    pool_maxsize=60) and _client's rate limiter — the same stack optimized
     in api_client.py — so TCP/TLS connections are reused across all workers.
+
+    Worker count is capped at 60 to match pool_connections.  Using more
+    workers than pool slots causes urllib3 to open extra TCP connections
+    that ClickUp's server closes mid-handshake with an SSL EOF error.
 
     start_ms / end_ms are forwarded to the ClickUp API when provided so that
     only entries inside the requested period are returned, greatly reducing
@@ -139,9 +143,10 @@ def _fetch_time_entries_smart(
     if end_ms:
         time_params["end_date"] = end_ms
 
-    # 300 workers matches api_client.fetch_time_entries_batch; connection
-    # pooling keeps the actual TCP overhead minimal.
-    workers = 300
+    # Workers are capped at 60 to match pool_connections=60 in api_client.
+    # Using more workers than pool slots forces urllib3 to open extra TCP
+    # connections that ClickUp's server closes mid-handshake with an SSL EOF.
+    workers = min(60, total)
 
     print(
         f"[DEBUG] Fetching time entries for {total:,} tasks... "
@@ -149,24 +154,50 @@ def _fetch_time_entries_smart(
     )
     sys.stdout.flush()
 
+    import random
+
+    def _is_ssl_error(exc: Exception) -> bool:
+        """Return True for SSL/connection-reset errors that are safe to retry."""
+        s = str(exc).lower()
+        return any(
+            kw in s
+            for kw in (
+                "ssl",
+                "eof occurred",
+                "connection reset",
+                "connection aborted",
+                "broken pipe",
+            )
+        )
+
     def _fetch_one(tid):
-        for attempt in range(3):
+        max_attempts = 6
+        for attempt in range(max_attempts):
             try:
                 _client.limiter.acquire()
                 r = _client.session.get(
                     f"{BASE_URL}/task/{tid}/time",
                     params=time_params if time_params else None,
-                    timeout=15,
+                    timeout=20,
                 )
                 if r.status_code == 200:
                     return tid, r.json().get("data", []), None
                 if r.status_code == 429:
-                    time.sleep(min(30, 2**attempt * 3))
+                    time.sleep(min(60, 2**attempt * 3))
                     continue
                 return tid, [], f"HTTP {r.status_code}"
             except Exception as exc:
-                if attempt < 2:
-                    time.sleep(0.5)
+                if attempt < max_attempts - 1:
+                    # SSL / connection errors: longer exponential backoff
+                    # with jitter to avoid thundering herd when many workers
+                    # hit a connection drop at the same time.
+                    if _is_ssl_error(exc):
+                        base = 2**attempt * 2  # 2, 4, 8, 16, 32 …
+                        jitter = random.uniform(0, base * 0.5)
+                        delay = min(base + jitter, 45)
+                    else:
+                        delay = 0.5 * (attempt + 1)
+                    time.sleep(delay)
                 else:
                     return tid, [], str(exc)
         return tid, [], "Max retries exceeded"
@@ -480,7 +511,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
     # the LLM receives the result directly without any manual polling.
     # -------------------------------------------------------------------------
     def _run_job_and_wait(
-        fn, poll_interval: float = 55.0, max_wait: float = 300.0
+        fn, poll_interval: float = 5.0, max_wait: float = 360.0
     ) -> dict:
         """
         Run fn() in a background thread, sleep-poll every poll_interval

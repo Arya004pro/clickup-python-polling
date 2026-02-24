@@ -131,20 +131,37 @@ def register_task_report_tools(mcp: FastMCP):
     JOBS: Dict[str, Dict] = {}
 
     # -------------------------------------------------------------------------
-    # Unified async dispatcher — used by every report tool.
+    # Unified dispatcher — used by every report tool.
     #
-    #   async_job=True  (default) → fire-and-forget, return {job_id} immediately
-    #   async_job=False           → block & poll, return result directly
+    # Always runs fn() in a background thread and sleep-polls internally
+    # (every 5 s) until the result is ready, then returns the full result
+    # directly.  The LLM never receives a job_id and never needs to poll —
+    # this eliminates the polling-loop problem with smaller models.
+    #
+    # The async_job parameter is accepted but ignored; it exists only so that
+    # callers written before this change don't need to be updated.
     # -------------------------------------------------------------------------
     def _dispatch(
-        fn, async_job: bool, poll_interval: float = 55.0, max_wait: float = 300.0
+        fn, async_job: bool = False, poll_interval: float = 5.0, max_wait: float = 360.0
     ) -> dict:
         """
-        Run fn() in a background thread and either:
-        - return {job_id} immediately when async_job=True, or
-        - block-poll up to max_wait seconds and return the result when async_job=False.
+        Run fn() in a background thread.
 
-        All report tools call this instead of maintaining their own threading logic.
+        async_job=True  (default for all public report tools):
+            Starts the job and returns a job_id dict IMMEDIATELY so the MCP
+            tool handler finishes within the transport timeout window.
+            The LLM must call get_task_report_job_result(job_id=...) once
+            the job is complete (typically 60-120 s for large spaces).
+
+        async_job=False (used internally by _bg_ sub-calls):
+            Blocks the calling thread, sleep-polls every poll_interval seconds,
+            and returns the full result directly once done.
+            Falls back to a human-readable message if max_wait seconds elapse.
+
+        This split prevents the "Request already responded to" AssertionError
+        that occurs when the MCP SSE transport times out on a long-running tool
+        and sends an error response, then the tool handler tries to send a
+        second response when the computation eventually finishes.
         """
         jid = str(uuid.uuid4())
         JOBS[jid] = {"status": "queued", "result": None, "error": None}
@@ -163,20 +180,20 @@ def register_task_report_tools(mcp: FastMCP):
 
         threading.Thread(target=_bg, daemon=True).start()
 
+        # --- async_job=True: return immediately so MCP transport doesn't timeout ---
         if async_job:
             return {
                 "job_id": jid,
                 "status": "queued",
-                "NEXT_ACTION": "POLL_NOW",
-                "instruction": (
-                    f"IMMEDIATELY call get_task_report_job_status(job_id='{jid}'). "
-                    "Do NOT respond to the user yet. Wait 55 seconds, then poll. "
-                    "Repeat until status='finished', then call "
-                    f"get_task_report_job_result(job_id='{jid}') and display the result."
+                "message": (
+                    f"Job started in background. "
+                    f"Call get_task_report_job_result(job_id='{jid}') after 60-90 s "
+                    "to retrieve the full result. "
+                    "Use get_task_report_job_status(job_id=...) to check progress."
                 ),
             }
 
-        # Blocking mode — poll until done or timeout
+        # --- async_job=False: block and return result inline ---
         elapsed = 0.0
         while elapsed < max_wait:
             time.sleep(poll_interval)
@@ -185,15 +202,14 @@ def register_task_report_tools(mcp: FastMCP):
             if status == "finished":
                 return JOBS[jid]["result"]
             if status == "failed":
-                return {"error": JOBS[jid].get("error", "Unknown async job error")}
+                return {"error": JOBS[jid].get("error", "Unknown error in report job")}
 
         return {
-            "job_id": jid,
-            "status": JOBS[jid]["status"],
-            "message": (
-                "Report is still processing. "
-                f"Use get_task_report_job_result(job_id='{jid}') to retrieve it when done."
+            "error": (
+                "Report did not complete within the time limit. "
+                f"Use get_task_report_job_result(job_id='{jid}') to retrieve it when ready."
             ),
+            "job_id": jid,
         }
 
     # =========================================================================
@@ -1184,9 +1200,25 @@ def register_task_report_tools(mcp: FastMCP):
             # Build a quick id→task lookup
             task_map: Dict[str, dict] = {t["id"]: t for t in all_tasks}
 
+            # Compute est_direct per task (strips rolled-up subtask estimates
+            # that ClickUp bakes into the parent's raw time_estimate API field).
+            # Without this, a parent whose estimate comes entirely from subtasks
+            # would be incorrectly skipped even though it has no direct estimate.
+            metrics = _calculate_task_metrics(all_tasks)
+
+            # Thresholds for ratio-based flagging (TT / TE)
+            RATIO_LOW = 0.25  # tracked < 25 % of estimate  → inflated / ghost estimate
+            RATIO_HIGH = 2.0  # tracked > 2× estimate        → significant overtime
+
             members: Dict[str, Dict] = {}
-            unassigned = []
+            unassigned: list = []
             total_missing = 0
+
+            # Ratio-outlier buckets (tasks that DO have an estimate but TT/TE
+            # falls outside [RATIO_LOW, RATIO_HIGH])
+            ratio_members: Dict[str, Dict] = {}
+            ratio_unassigned: list = []
+            ratio_total = 0
 
             # ----------------------------------------------------------------
             # MODE A — period filter provided:
@@ -1245,6 +1277,7 @@ def register_task_report_tools(mcp: FastMCP):
                                         )
 
                 seen_task_ids: set = set()
+                seen_ratio_ids: set = set()
                 for tid, trackers in task_trackers.items():
                     task = task_map.get(tid)
                     if not task:
@@ -1262,10 +1295,51 @@ def register_task_report_tools(mcp: FastMCP):
                         if cat in ("done", "closed"):
                             continue
 
-                    # Only flag tasks with no time estimate
-                    if int(task.get("time_estimate") or 0) > 0:
-                        continue
+                    # Main tasks compare against aggregate totals (est_total /
+                    # tracked_total) because their own direct work + subtask work
+                    # all count against the parent estimate.  Subtasks use their
+                    # own direct metrics so they are evaluated independently.
+                    is_subtask = bool(task.get("parent"))
+                    m = metrics.get(tid, {})
+                    metric_key = "direct" if is_subtask else "total"
+                    est_ms = m.get(f"est_{metric_key}", 0)
+                    tracked_ms = m.get(f"tracked_{metric_key}", 0)
 
+                    if est_ms > 0:
+                        # Task HAS an estimate — check ratio (once per task)
+                        if tracked_ms > 0 and tid not in seen_ratio_ids:
+                            seen_ratio_ids.add(tid)
+                            ratio = tracked_ms / est_ms
+                            if ratio < RATIO_LOW or ratio > RATIO_HIGH:
+                                ratio_total += 1
+                                ratio_entry = {
+                                    "task_name": task.get("name", "Unnamed"),
+                                    "status": _extract_status_name(task),
+                                    "list_name": task.get("list", {}).get(
+                                        "name", "Unknown"
+                                    ),
+                                    "task_id": tid,
+                                    "tracked": _format_duration(tracked_ms),
+                                    "estimated": _format_duration(est_ms),
+                                    "ratio": round(ratio, 2),
+                                    "flag": "over" if ratio > RATIO_HIGH else "under",
+                                }
+                                if not trackers:
+                                    ratio_unassigned.append(ratio_entry)
+                                else:
+                                    for uname in trackers:
+                                        if uname not in ratio_members:
+                                            ratio_members[uname] = {
+                                                "count": 0,
+                                                "tasks": [],
+                                            }
+                                        ratio_members[uname]["count"] += 1
+                                        ratio_members[uname]["tasks"].append(
+                                            ratio_entry
+                                        )
+                        continue  # has estimate → not in missing-estimate list
+
+                    # est = 0, TT > 0 → missing estimate
                     # Deduplicate: same task may have entries from multiple users
                     if tid in seen_task_ids:
                         continue
@@ -1289,6 +1363,11 @@ def register_task_report_tools(mcp: FastMCP):
                             members[uname]["tasks"].append(task_entry)
 
                 checked_count = len(task_trackers)
+                # NOTE: No secondary scope sweep here.  When a period_type is
+                # given, the report is intentionally scoped to tasks that had
+                # time logged IN that period.  A secondary sweep would fold in
+                # every all-time unestimated task in the space and make
+                # period-specific reports misleadingly large.
 
             # ----------------------------------------------------------------
             # MODE B — no period filter: scan every task, group by assignee
@@ -1307,24 +1386,66 @@ def register_task_report_tools(mcp: FastMCP):
                         if cat in ("done", "closed"):
                             continue
 
-                    # Only flag tasks with no time_estimate
-                    if int(task.get("time_estimate") or 0) > 0:
-                        continue
+                    task_id_b = task["id"]
+                    is_subtask = bool(task.get("parent"))
+                    m = metrics.get(task_id_b, {})
+                    metric_key = "direct" if is_subtask else "total"
+                    est_ms = m.get(f"est_{metric_key}", 0)
+                    tracked_ms = m.get(f"tracked_{metric_key}", 0)
 
+                    assignees = task.get("assignees", [])
+                    assignee_names = [u.get("username", "Unknown") for u in assignees]
+
+                    if est_ms > 0:
+                        # Task HAS an estimate — check ratio
+                        if tracked_ms > 0:
+                            ratio = tracked_ms / est_ms
+                            if ratio < RATIO_LOW or ratio > RATIO_HIGH:
+                                ratio_total += 1
+                                ratio_entry = {
+                                    "task_name": task.get("name", "Unnamed"),
+                                    "status": _extract_status_name(task),
+                                    "list_name": task.get("list", {}).get(
+                                        "name", "Unknown"
+                                    ),
+                                    "task_id": task_id_b,
+                                    "tracked": _format_duration(tracked_ms),
+                                    "estimated": _format_duration(est_ms),
+                                    "ratio": round(ratio, 2),
+                                    "flag": "over" if ratio > RATIO_HIGH else "under",
+                                }
+                                if not assignee_names:
+                                    ratio_unassigned.append(ratio_entry)
+                                else:
+                                    for uname in assignee_names:
+                                        if uname not in ratio_members:
+                                            ratio_members[uname] = {
+                                                "count": 0,
+                                                "tasks": [],
+                                            }
+                                        ratio_members[uname]["count"] += 1
+                                        ratio_members[uname]["tasks"].append(
+                                            ratio_entry
+                                        )
+                        continue  # has estimate → not in missing-estimate list
+
+                    # No estimate — include regardless of tracked-time status.
+                    # Previously, tasks with tracked_ms == 0 were silently
+                    # skipped, so employees assigned to unstarted unestimated
+                    # tasks never appeared in the report.  Now every
+                    # unestimated task is counted and its assignees are shown.
                     total_missing += 1
                     task_entry = {
                         "task_name": task.get("name", "Unnamed"),
                         "status": _extract_status_name(task),
                         "list_name": task.get("list", {}).get("name", "Unknown"),
-                        "task_id": task["id"],
+                        "task_id": task_id_b,
                     }
 
-                    assignees = task.get("assignees", [])
-                    if not assignees:
+                    if not assignee_names:
                         unassigned.append(task_entry)
                     else:
-                        for u in assignees:
-                            uname = u.get("username", "Unknown")
+                        for uname in assignee_names:
                             if uname not in members:
                                 members[uname] = {"missing_count": 0, "tasks": []}
                             members[uname]["missing_count"] += 1
@@ -1338,15 +1459,19 @@ def register_task_report_tools(mcp: FastMCP):
                     members.items(), key=lambda x: x[1]["missing_count"], reverse=True
                 )
             )
+            sorted_ratio_members = dict(
+                sorted(ratio_members.items(), key=lambda x: x[1]["count"], reverse=True)
+            )
 
             # --- Markdown formatted_output ---
-            # NOTE: Only the summary table is included here to keep the output
-            # manageable for LLMs. Full per-task details are in members[].tasks.
             lines = [
                 "## Missing Estimation Report",
                 f"**Scope:** {scope}  |  **Period:** {period_label}  |  "
                 f"**Tasks without estimate:** {total_missing}  |  "
+                f"**Ratio-flagged tasks:** {ratio_total}  |  "
                 f"**Checked:** {checked_count}",
+                "",
+                "### Missing Time Estimate  _(TE = 0, all assignees)_",
                 "",
                 "| Member | Tasks Without Estimate |",
                 "|--------|----------------------:|",
@@ -1356,19 +1481,74 @@ def register_task_report_tools(mcp: FastMCP):
             if unassigned:
                 lines.append(f"| *(Unassigned)* | {len(unassigned)} |")
             lines.append(f"| **Total** | **{total_missing}** |")
+
+            # --- Ratio-outlier table ---
+            if ratio_total > 0:
+                lines += [
+                    "",
+                    f"### Suspicious TT/TE Ratio  "
+                    f"_(outside {RATIO_LOW}\u00d7\u2013{RATIO_HIGH}\u00d7 band)_",
+                    "",
+                    "| Member | Tasks | Over-Budget (>2\u00d7) | Under-Budget (<0.25\u00d7) |",
+                    "|--------|------:|-------------------:|---------------------:|",
+                ]
+                grand_over = grand_under = 0
+                for mb, d in sorted_ratio_members.items():
+                    over = sum(1 for t in d["tasks"] if t["flag"] == "over")
+                    under = sum(1 for t in d["tasks"] if t["flag"] == "under")
+                    grand_over += over
+                    grand_under += under
+                    lines.append(f"| {mb} | {d['count']} | {over} | {under} |")
+                if ratio_unassigned:
+                    over_u = sum(1 for t in ratio_unassigned if t["flag"] == "over")
+                    under_u = sum(1 for t in ratio_unassigned if t["flag"] == "under")
+                    grand_over += over_u
+                    grand_under += under_u
+                    lines.append(
+                        f"| *(Unassigned)* | {len(ratio_unassigned)} | {over_u} | {under_u} |"
+                    )
+                lines.append(
+                    f"| **Total** | **{ratio_total}** | **{grand_over}** | **{grand_under}** |"
+                )
+            else:
+                lines.append("")
+                lines.append("_No ratio outliers detected._")
+
             lines.append("")
             lines.append(
-                "_Task-level details are available in the `members` field of the raw response._"
+                "_Per-member counts are in the `members` and `ratio_members` fields of the raw response._"
             )
 
+            # Build slim members summary (counts only — no task arrays).
+            # Task-level detail lists are large and overwhelm LLM context;
+            # the formatted_output table is sufficient for display.
+            slim_members = {
+                mb: {"missing_count": d["missing_count"]}
+                for mb, d in sorted_members.items()
+            }
+            slim_ratio_members = {
+                mb: {
+                    "count": d["count"],
+                    "over": sum(1 for t in d["tasks"] if t["flag"] == "over"),
+                    "under": sum(1 for t in d["tasks"] if t["flag"] == "under"),
+                }
+                for mb, d in sorted_ratio_members.items()
+            }
+
+            # formatted_output is listed FIRST so LLM sees it at the top of
+            # the serialised JSON before any large arrays.
             return {
+                "formatted_output": "\n".join(lines),
                 "scope": scope,
                 "period": period_label,
                 "total_tasks_checked": checked_count,
                 "total_missing_estimate": total_missing,
-                "members": sorted_members,
-                "unassigned_tasks": unassigned,
-                "formatted_output": "\n".join(lines),
+                "total_ratio_flagged": ratio_total,
+                "ratio_band": {"low": RATIO_LOW, "high": RATIO_HIGH},
+                "members": slim_members,
+                "unassigned_count": len(unassigned),
+                "ratio_members": slim_ratio_members,
+                "ratio_unassigned_count": len(ratio_unassigned),
             }
 
         except Exception as e:
