@@ -17,8 +17,6 @@ All period-based tools support:
 
 from __future__ import annotations
 
-import json
-import os
 import sys
 import time
 import threading
@@ -130,135 +128,71 @@ def _fetch_entries_by_period(
 def register_task_report_tools(mcp: FastMCP):
     """Register all task-report tools on the provided FastMCP instance."""
 
-    # --- File-backed JOBS store (survives server restarts) ---
-    _JOBS_FILE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", ".jobs_cache.json"
-    )
-    _jobs_lock = threading.Lock()
-
-    def _load_jobs() -> Dict[str, Dict]:
-        """Load jobs from disk."""
-        try:
-            if os.path.exists(_JOBS_FILE):
-                with open(_JOBS_FILE, "r") as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {}
-
-    def _save_jobs(jobs: Dict[str, Dict]):
-        """Persist jobs to disk."""
-        try:
-            with open(_JOBS_FILE, "w") as f:
-                json.dump(jobs, f)
-        except Exception:
-            pass
-
-    def _get_job(job_id: str) -> Optional[Dict]:
-        """Get a single job by ID."""
-        with _jobs_lock:
-            jobs = _load_jobs()
-            return jobs.get(job_id)
-
-    def _set_job(job_id: str, data: Dict):
-        """Set/update a single job."""
-        with _jobs_lock:
-            jobs = _load_jobs()
-            jobs[job_id] = data
-            # Prune old jobs — keep only the last 50
-            if len(jobs) > 50:
-                sorted_ids = sorted(
-                    jobs.keys(),
-                    key=lambda k: jobs[k].get("_created", 0),
-                )
-                for old_id in sorted_ids[: len(jobs) - 50]:
-                    del jobs[old_id]
-            _save_jobs(jobs)
-
-    JOBS = _load_jobs()  # In-memory reference for backward compat
+    JOBS: Dict[str, Dict] = {}
 
     # -------------------------------------------------------------------------
     # Unified async dispatcher — used by every report tool.
     #
-    #   Hybrid: wait up to QUICK_WAIT seconds (under LM Studio's ~30s timeout).
-    #   If done → return result directly. If still running → return job_id.
+    #   async_job=True  (default) → fire-and-forget, return {job_id} immediately
+    #   async_job=False           → block & poll, return result directly
     # -------------------------------------------------------------------------
-    QUICK_WAIT = 45.0  # seconds to wait inline before returning job_id
-
     def _dispatch(
-        fn, async_job: bool = False, poll_interval: float = 5.0, max_wait: float = 600.0
+        fn, async_job: bool, poll_interval: float = 55.0, max_wait: float = 300.0
     ) -> dict:
         """
-        Run fn() in a background thread.
-        - Waits up to QUICK_WAIT seconds inline.
-        - If the report finishes within QUICK_WAIT: return the result directly.
-        - If still running: return {job_id, still_running} — model calls
-          get_task_report_job_result(job_id=...) once when ready.
-        Jobs are persisted to disk so they survive server restarts.
+        Run fn() in a background thread and either:
+        - return {job_id} immediately when async_job=True, or
+        - block-poll up to max_wait seconds and return the result when async_job=False.
+
+        All report tools call this instead of maintaining their own threading logic.
         """
         jid = str(uuid.uuid4())
-        _set_job(
-            jid,
-            {
-                "status": "running",
-                "result": None,
-                "error": None,
-                "_created": time.time(),
-            },
-        )
-
-        done_event = threading.Event()
+        JOBS[jid] = {"status": "queued", "result": None, "error": None}
 
         def _bg() -> None:
             try:
-                result = fn()
-                _set_job(
-                    jid,
-                    {
-                        "status": "finished",
-                        "result": result,
-                        "error": None,
-                        "_created": time.time(),
-                    },
-                )
+                JOBS[jid]["status"] = "running"
+                JOBS[jid]["result"] = fn()
+                JOBS[jid]["status"] = "finished"
             except Exception as exc:
                 import traceback
 
                 traceback.print_exc()
-                _set_job(
-                    jid,
-                    {
-                        "status": "failed",
-                        "result": None,
-                        "error": str(exc),
-                        "_created": time.time(),
-                    },
-                )
-            finally:
-                done_event.set()
+                JOBS[jid]["error"] = str(exc)
+                JOBS[jid]["status"] = "failed"
 
         threading.Thread(target=_bg, daemon=True).start()
 
-        # Wait up to QUICK_WAIT — return directly if fast enough
-        done_event.wait(timeout=QUICK_WAIT)
+        if async_job:
+            return {
+                "job_id": jid,
+                "status": "queued",
+                "NEXT_ACTION": "POLL_NOW",
+                "instruction": (
+                    f"IMMEDIATELY call get_task_report_job_status(job_id='{jid}'). "
+                    "Do NOT respond to the user yet. Wait 55 seconds, then poll. "
+                    "Repeat until status='finished', then call "
+                    f"get_task_report_job_result(job_id='{jid}') and display the result."
+                ),
+            }
 
-        j = _get_job(jid) or {}
-        status = j.get("status")
-        if status == "finished":
-            return j.get("result", {})
-        if status == "failed":
-            return {"error": j.get("error", "Report generation failed")}
+        # Blocking mode — poll until done or timeout
+        elapsed = 0.0
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            status = JOBS[jid]["status"]
+            if status == "finished":
+                return JOBS[jid]["result"]
+            if status == "failed":
+                return {"error": JOBS[jid].get("error", "Unknown async job error")}
 
-        # Still running — return job reference (report continues in background)
         return {
             "job_id": jid,
-            "status": "still_running",
-            "INSTRUCTION": (
-                "The report is still generating. "
-                "In your VERY NEXT response call IMMEDIATELY (do NOT wait, do NOT tell the user to wait): "
-                f"get_task_report_job_result(job_id='{jid}'). "
-                "It will wait internally until the result is ready. "
-                "NEVER ask the user to check — you MUST call the tool yourself right now."
+            "status": JOBS[jid]["status"],
+            "message": (
+                "Report is still processing. "
+                f"Use get_task_report_job_result(job_id='{jid}') to retrieve it when done."
             ),
         }
 
@@ -1153,12 +1087,8 @@ def register_task_report_tools(mcp: FastMCP):
         """
         Missing Time Estimation Report.
 
-        Lists tasks that have no time estimate, grouped by the person who tracked
-        time on them.  For each member the report shows:
-        - how many tasks are missing an estimate
-        - how many of those tasks have time TRACKED (worked on but forgot to estimate)
-        - total time tracked on unestimated tasks
-        - a sample of task names (top 5 by status)
+        Lists all tasks that have no time estimate set, grouped by the person
+        who tracked time on them.
 
         When a period_type is given the report finds tasks that had time entries
         logged within that period and are missing an estimate.  This intentionally
@@ -1188,12 +1118,11 @@ def register_task_report_tools(mcp: FastMCP):
               scope, period, total_tasks_checked, total_missing_estimate,
               members: {
                 member_name: {
-                  missing_count, tasks_with_time_tracked, total_time_tracked,
-                  total_time_tracked_ms,
-                  tasks: [{task_name, status, list_name, task_id, time_tracked, time_tracked_ms}]
+                  missing_count,
+                  tasks: [{task_name, status, list_name, task_id}]
                 }
               },
-              unassigned_tasks: [{task_name, status, list_name, time_tracked}],
+              unassigned_tasks: [{task_name, status, list_name}],
               formatted_output: <markdown>
             }
         """
@@ -1255,11 +1184,6 @@ def register_task_report_tools(mcp: FastMCP):
             # Build a quick id→task lookup
             task_map: Dict[str, dict] = {t["id"]: t for t in all_tasks}
 
-            # Bottom-up metrics: considers subtask time_estimates so a parent
-            # with time_estimate=0 but estimated subtasks is NOT flagged.
-            # est_total = own_estimate + all_subtask_estimates (recursive)
-            metrics = _calculate_task_metrics(all_tasks)
-
             members: Dict[str, Dict] = {}
             unassigned = []
             total_missing = 0
@@ -1270,53 +1194,28 @@ def register_task_report_tools(mcp: FastMCP):
             #   in the period that have no estimate → group by tracker (not
             #   task assignee). A task created months ago will appear here if
             #   someone tracked time on it yesterday.
-            #
-            #   Subtask time entries ARE included because _fetch_all_tasks uses
-            #   subtasks=true, so subtasks appear as individual tasks in
-            #   all_tasks with their own time_spent ≠ 0, and are thus included
-            #   in candidate_ids below.
             # ----------------------------------------------------------------
             if start_ms is not None:
-                # Include tasks/subtasks that have any time tracked at all
-                # (subtasks are already flattened into all_tasks via subtasks=true)
+                # Only bother fetching entries for tasks that have any time at all
                 candidate_ids = [
                     t["id"] for t in all_tasks if int(t.get("time_spent") or 0) > 0
                 ]
                 entries_map = _fetch_time_entries_smart(candidate_ids, start_ms, end_ms)
 
-                # task_id → { username: tracked_ms_in_period }
-                task_tracker_time: Dict[str, Dict[str, int]] = {}
+                # task_id → set of usernames who tracked in this period
+                task_trackers: Dict[str, set] = {}
                 for tid, entries in entries_map.items():
                     for entry in entries:
-                        uname = (entry.get("user") or {}).get("username", "Unknown")
-                        intervals = entry.get("intervals") or []
-                        if intervals:
-                            # Timer-based entry: accumulate each interval that
-                            # falls within the requested period.
-                            for iv in intervals:
-                                iv_start = int(iv.get("start") or 0)
-                                if start_ms <= iv_start <= end_ms:
-                                    duration = int(iv.get("time") or 0)
-                                    if tid not in task_tracker_time:
-                                        task_tracker_time[tid] = {}
-                                    task_tracker_time[tid][uname] = (
-                                        task_tracker_time[tid].get(uname, 0) + duration
-                                    )
-                        else:
-                            # Manual entry: no intervals — use top-level
-                            # start + duration fields instead.
-                            entry_start = int(entry.get("start") or 0)
-                            if start_ms <= entry_start <= end_ms:
-                                duration = int(entry.get("duration") or 0)
-                                if tid not in task_tracker_time:
-                                    task_tracker_time[tid] = {}
-                                task_tracker_time[tid][uname] = (
-                                    task_tracker_time[tid].get(uname, 0) + duration
+                        for iv in entry.get("intervals", []):
+                            iv_start = int(iv.get("start") or 0)
+                            if start_ms <= iv_start <= end_ms:
+                                uname = (entry.get("user") or {}).get(
+                                    "username", "Unknown"
                                 )
+                                task_trackers.setdefault(tid, set()).add(uname)
 
-                # FIRST PASS: tasks with time entries in the period
                 seen_task_ids: set = set()
-                for tid, tracker_times in task_tracker_time.items():
+                for tid, trackers in task_trackers.items():
                     task = task_map.get(tid)
                     if not task:
                         continue
@@ -1333,54 +1232,33 @@ def register_task_report_tools(mcp: FastMCP):
                         if cat in ("done", "closed"):
                             continue
 
-                    # Only flag tasks/subtasks that have NO estimate at any level.
-                    # Use metrics est_total which rolls up estimates from all
-                    # nested subtasks — prevents false positives where a parent
-                    # task has est=0 but its subtasks have estimates set.
-                    if metrics.get(tid, {}).get("est_total", 0) > 0:
+                    # Only flag tasks with no time estimate
+                    if int(task.get("time_estimate") or 0) > 0:
                         continue
 
+                    # Deduplicate: same task may have entries from multiple users
+                    if tid in seen_task_ids:
+                        continue
                     seen_task_ids.add(tid)
-                    total_missing += 1
-                    total_task_tracked_ms = sum(tracker_times.values())
 
+                    total_missing += 1
                     task_entry = {
                         "task_name": task.get("name", "Unnamed"),
                         "status": _extract_status_name(task),
                         "list_name": task.get("list", {}).get("name", "Unknown"),
                         "task_id": tid,
-                        "time_tracked": _format_duration(total_task_tracked_ms),
-                        "time_tracked_ms": total_task_tracked_ms,
                     }
 
-                    if not tracker_times:
+                    if not trackers:
                         unassigned.append(task_entry)
                     else:
-                        for uname, user_tracked_ms in tracker_times.items():
+                        for uname in trackers:
                             if uname not in members:
-                                members[uname] = {
-                                    "missing_count": 0,
-                                    "tasks_with_time_tracked": 0,
-                                    "total_time_tracked_ms": 0,
-                                    "tasks": [],
-                                }
+                                members[uname] = {"missing_count": 0, "tasks": []}
                             members[uname]["missing_count"] += 1
-                            if user_tracked_ms > 0:
-                                members[uname]["tasks_with_time_tracked"] += 1
-                            members[uname]["total_time_tracked_ms"] += user_tracked_ms
-                            task_entry_copy = dict(task_entry)
-                            task_entry_copy["time_tracked"] = _format_duration(
-                                user_tracked_ms
-                            )
-                            task_entry_copy["time_tracked_ms"] = user_tracked_ms
-                            members[uname]["tasks"].append(task_entry_copy)
+                            members[uname]["tasks"].append(task_entry)
 
-                # When a period filter is active we ONLY report tasks that had
-                # time entries in that period — the second-pass sweep of all
-                # unestimated tasks is intentionally skipped so the report
-                # reflects "tasks actually worked on during this period that
-                # are missing an estimate", not every unestimated task ever.
-                checked_count = len(all_tasks)
+                checked_count = len(task_trackers)
 
             # ----------------------------------------------------------------
             # MODE B — no period filter: scan every task, group by assignee
@@ -1399,22 +1277,16 @@ def register_task_report_tools(mcp: FastMCP):
                         if cat in ("done", "closed"):
                             continue
 
-                    # Only flag tasks with no estimate at any level (own + subtasks).
-                    # est_total covers subtask estimates so parent tasks where
-                    # only subtasks have estimates are not incorrectly flagged.
-                    task_id_b = task["id"]
-                    if metrics.get(task_id_b, {}).get("est_total", 0) > 0:
+                    # Only flag tasks with no time_estimate
+                    if int(task.get("time_estimate") or 0) > 0:
                         continue
 
                     total_missing += 1
-                    task_time_spent = int(task.get("time_spent") or 0)
                     task_entry = {
                         "task_name": task.get("name", "Unnamed"),
                         "status": _extract_status_name(task),
                         "list_name": task.get("list", {}).get("name", "Unknown"),
                         "task_id": task["id"],
-                        "time_tracked": _format_duration(task_time_spent),
-                        "time_tracked_ms": task_time_spent,
                     }
 
                     assignees = task.get("assignees", [])
@@ -1424,29 +1296,11 @@ def register_task_report_tools(mcp: FastMCP):
                         for u in assignees:
                             uname = u.get("username", "Unknown")
                             if uname not in members:
-                                members[uname] = {
-                                    "missing_count": 0,
-                                    "tasks_with_time_tracked": 0,
-                                    "total_time_tracked_ms": 0,
-                                    "tasks": [],
-                                }
+                                members[uname] = {"missing_count": 0, "tasks": []}
                             members[uname]["missing_count"] += 1
-                            if task_time_spent > 0:
-                                members[uname]["tasks_with_time_tracked"] += 1
-                            members[uname]["total_time_tracked_ms"] += task_time_spent
                             members[uname]["tasks"].append(task_entry)
 
                 checked_count = len(all_tasks)
-
-            # Add formatted total_time_tracked to each member
-            for mb_data in members.values():
-                mb_data["total_time_tracked"] = _format_duration(
-                    mb_data["total_time_tracked_ms"]
-                )
-                # Sort tasks: tasks with time tracked first, then by tracked ms desc
-                mb_data["tasks"].sort(
-                    key=lambda x: x.get("time_tracked_ms", 0), reverse=True
-                )
 
             # Sort members by missing_count desc
             sorted_members = dict(
@@ -1455,95 +1309,33 @@ def register_task_report_tools(mcp: FastMCP):
                 )
             )
 
-            # --- Compute grand totals for the summary ---
-            grand_tracked_ms = sum(
-                d["total_time_tracked_ms"] for d in sorted_members.values()
-            )
-            grand_tasks_with_time = sum(
-                d["tasks_with_time_tracked"] for d in sorted_members.values()
-            )
-
             # --- Markdown formatted_output ---
+            # NOTE: Only the summary table is included here to keep the output
+            # manageable for LLMs. Full per-task details are in members[].tasks.
             lines = [
                 "## Missing Estimation Report",
-                f"**Scope:** {scope}  |  **Period:** {period_label}",
-                f"**Tasks checked:** {checked_count}  |  "
+                f"**Scope:** {scope}  |  **Period:** {period_label}  |  "
                 f"**Tasks without estimate:** {total_missing}  |  "
-                f"**Of which have time tracked:** {grand_tasks_with_time}  |  "
-                f"**Total unestimated time:** {_format_duration(grand_tracked_ms)}",
+                f"**Checked:** {checked_count}",
                 "",
-                "| Member | Missing Est. | With Time Tracked | Time Tracked (No Est) |",
-                "|--------|------------:|-----------------:|---------------------:|",
+                "| Member | Tasks Without Estimate |",
+                "|--------|----------------------:|",
             ]
             for mb, d in sorted_members.items():
-                lines.append(
-                    f"| {mb} | {d['missing_count']} "
-                    f"| {d['tasks_with_time_tracked']} "
-                    f"| {d['total_time_tracked']} |"
-                )
+                lines.append(f"| {mb} | {d['missing_count']} |")
             if unassigned:
-                unassigned_tracked_ms = sum(
-                    t.get("time_tracked_ms", 0) for t in unassigned
-                )
-                unassigned_with_time = sum(
-                    1 for t in unassigned if t.get("time_tracked_ms", 0) > 0
-                )
-                lines.append(
-                    f"| *(Unassigned)* | {len(unassigned)} "
-                    f"| {unassigned_with_time} "
-                    f"| {_format_duration(unassigned_tracked_ms)} |"
-                )
-            lines.append(
-                f"| **Total** | **{total_missing}** "
-                f"| **{grand_tasks_with_time}** "
-                f"| **{_format_duration(grand_tracked_ms)}** |"
-            )
-
-            # --- Per-member task samples (top 5 tasks with time tracked) ---
+                lines.append(f"| *(Unassigned)* | {len(unassigned)} |")
+            lines.append(f"| **Total** | **{total_missing}** |")
             lines.append("")
             lines.append(
-                "### Per-Member Task Samples (tasks with time tracked but no estimate)"
+                "_Task-level details are available in the `members` field of the raw response._"
             )
-            lines.append("")
-            for mb, d in sorted_members.items():
-                tasks_with_time = [
-                    t for t in d["tasks"] if t.get("time_tracked_ms", 0) > 0
-                ]
-                if not tasks_with_time:
-                    continue
-                sample = tasks_with_time[:5]
-                lines.append(
-                    f"**{mb}** ({d['tasks_with_time_tracked']} tasks with time tracked, "
-                    f"total: {d['total_time_tracked']}):"
-                )
-                lines.append("")
-                lines.append("| Task | Status | Time Tracked |")
-                lines.append("|------|--------|------------:|")
-                for t in sample:
-                    lines.append(
-                        f"| {t['task_name']} | {t['status']} | {t['time_tracked']} |"
-                    )
-                remaining = len(tasks_with_time) - len(sample)
-                if remaining > 0:
-                    lines.append(f"| *...and {remaining} more tasks* | | |")
-                lines.append("")
-
-            # --- Tasks with NO time tracked summary ---
-            no_time_tasks_count = total_missing - grand_tasks_with_time
-            if no_time_tasks_count > 0:
-                lines.append(
-                    f"### Additionally, **{no_time_tasks_count}** tasks have "
-                    f"neither time estimate nor any time tracked."
-                )
-                lines.append("")
 
             return {
                 "scope": scope,
                 "period": period_label,
                 "total_tasks_checked": checked_count,
                 "total_missing_estimate": total_missing,
-                "total_with_time_tracked": grand_tasks_with_time,
-                "total_time_tracked_on_unestimated": _format_duration(grand_tracked_ms),
                 "members": sorted_members,
                 "unassigned_tasks": unassigned,
                 "formatted_output": "\n".join(lines),
@@ -1803,15 +1595,12 @@ def register_task_report_tools(mcp: FastMCP):
     @mcp.tool()
     def get_task_report_job_status(job_id: str) -> dict:
         """
-        OPTIONAL: Check raw status of a background task-report job.
+        Check status of a background task-report job (max 5 polls).
 
-        PREFERRED: Use get_task_report_job_result(job_id) instead — it waits
-        internally for up to 50 seconds and returns the result automatically.
-
-        Only use this tool if you need to confirm the job exists before
-        committing to a longer wait.
+        Returns status, poll count, and result when finished.
+        Stop polling when STOP_POLLING is True or status is 'finished'/'failed'.
         """
-        j = _get_job(job_id)
+        j = JOBS.get(job_id)
         if not j:
             return {
                 "error": "job_id not found — it may have been created by a different tool"
@@ -1819,12 +1608,11 @@ def register_task_report_tools(mcp: FastMCP):
 
         poll_count = j.get("_poll_count", 0) + 1
         j["_poll_count"] = poll_count
-        _set_job(job_id, j)
         max_polls = 5
         status = j.get("status")
 
         if status in ("finished", "failed"):
-            resp: Dict[str, Any] = {
+            resp = {
                 "job_id": job_id,
                 "status": status,
                 "error": j.get("error"),
@@ -1832,27 +1620,8 @@ def register_task_report_tools(mcp: FastMCP):
                 "polls_remaining": 0,
             }
             if status == "finished":
-                raw = j.get("result") or {}
-                resp["result"] = raw
-                # Hoist formatted_output to top level for direct model access
-                if isinstance(raw, dict):
-                    if raw.get("formatted_output"):
-                        resp["formatted_output"] = raw["formatted_output"]
-                        resp["DISPLAY_INSTRUCTION"] = (
-                            "Copy the formatted_output field VERBATIM to the user. "
-                            "Do NOT rewrite, summarise or invent any data."
-                        )
-                    for key in (
-                        "scope",
-                        "period",
-                        "total_tasks_checked",
-                        "total_missing_estimate",
-                        "total_with_time_tracked",
-                        "total_time_tracked_on_unestimated",
-                    ):
-                        if key in raw:
-                            resp[key] = raw[key]
-                resp["message"] = "Job complete! Use the formatted_output field above."
+                resp["result"] = j.get("result")
+                resp["message"] = "Job complete! Result included."
             return resp
 
         if poll_count >= max_polls:
@@ -1877,71 +1646,13 @@ def register_task_report_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_task_report_job_result(job_id: str) -> dict:
-        """
-        PRIMARY tool to retrieve a background task-report result.
-
-        Call this IMMEDIATELY after any tool returns a job_id or still_running.
-        Waits internally up to 50 seconds for the job to finish, then returns
-        the full result. If still running after 50s, returns a still_running
-        response — call this tool again immediately in your next response.
-
-        NEVER ask the user to wait. NEVER explain the status. Just call this
-        tool repeatedly until status is 'finished', then display the result.
-        """
-        j = _get_job(job_id)
+        """Retrieve result of a finished background task-report job."""
+        j = JOBS.get(job_id)
         if not j:
             return {"error": "job_id not found"}
-
-        # If still running, wait up to 50s (under LM Studio ~60s timeout)
-        if j.get("status") not in ("finished", "failed"):
-            waited = 0.0
-            while waited < 50.0:
-                time.sleep(5.0)
-                waited += 5.0
-                j = _get_job(job_id)
-                if not j:
-                    return {"error": "job_id not found"}
-                if j.get("status") in ("finished", "failed"):
-                    break
-
-        if j.get("status") == "finished":
-            raw = j.get("result") or {}
-            # Hoist formatted_output and key summary fields to the top level so
-            # the model can find them without navigating nested JSON.
-            resp: Dict[str, Any] = {
-                "status": "finished",
-                "result": raw,
-            }
-            if isinstance(raw, dict):
-                if raw.get("formatted_output"):
-                    resp["formatted_output"] = raw["formatted_output"]
-                    resp["DISPLAY_INSTRUCTION"] = (
-                        "Copy the formatted_output field VERBATIM to the user. "
-                        "Do NOT rewrite, summarise or invent any data."
-                    )
-                for key in (
-                    "scope",
-                    "period",
-                    "total_tasks_checked",
-                    "total_missing_estimate",
-                    "total_with_time_tracked",
-                    "total_time_tracked_on_unestimated",
-                ):
-                    if key in raw:
-                        resp[key] = raw[key]
-            return resp
-        if j.get("status") == "failed":
-            return {"error": j.get("error", "Job failed")}
-        return {
-            "job_id": job_id,
-            "status": "still_running",
-            "INSTRUCTION": (
-                "The report is STILL generating. "
-                "Call get_task_report_job_result IMMEDIATELY in your next response: "
-                f"get_task_report_job_result(job_id='{job_id}'). "
-                "Do NOT tell the user to wait. Call the tool yourself right now."
-            ),
-        }
+        if j.get("status") != "finished":
+            return {"status": j.get("status"), "message": "Not ready yet."}
+        return {"status": "finished", "result": j.get("result")}
 
 
 # ---------------------------------------------------------------------------
