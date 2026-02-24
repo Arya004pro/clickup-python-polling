@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import hashlib
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -31,6 +32,16 @@ DEBOUNCE_SECONDS = 3.0
 server_process = None
 _pending_restart = None
 _restart_lock = threading.Lock()
+_file_hashes = {}  # Track file content hashes to detect actual changes
+
+
+def _get_file_hash(file_path: str) -> str:
+    """Compute SHA256 hash of file content."""
+    try:
+        with open(file_path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        return ""
 
 
 def start_server():
@@ -54,8 +65,23 @@ def _do_restart():
 
 
 def schedule_restart(src_path: str):
-    """Schedule a restart after DEBOUNCE_SECONDS, cancelling any pending restart."""
+    """Schedule a restart only if file content actually changed (not just touched)."""
     global _pending_restart
+
+    # Compute current file hash
+    current_hash = _get_file_hash(src_path)
+    if not current_hash:
+        return  # File doesn't exist or can't be read
+
+    # Check if content actually changed
+    previous_hash = _file_hashes.get(src_path)
+    if previous_hash == current_hash:
+        # File was touched but content is identical — ignore
+        return
+
+    # Content changed, update hash and schedule restart
+    _file_hashes[src_path] = current_hash
+
     with _restart_lock:
         if _pending_restart is not None:
             _pending_restart.cancel()

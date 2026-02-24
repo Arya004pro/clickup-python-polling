@@ -12,6 +12,8 @@ from __future__ import annotations
 from fastmcp import FastMCP
 import sys
 import time
+import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
@@ -470,10 +472,58 @@ def _extract_status_name(task: Dict) -> str:
 
 
 def register_pm_analytics_tools(mcp: FastMCP):
-    import uuid
-    import threading
 
     JOBS: Dict[str, Dict] = {}
+
+    # -------------------------------------------------------------------------
+    # Shared async helper — blocks the tool call until the job finishes so
+    # the LLM receives the result directly without any manual polling.
+    # -------------------------------------------------------------------------
+    def _run_job_and_wait(
+        fn, poll_interval: float = 55.0, max_wait: float = 300.0
+    ) -> dict:
+        """
+        Run fn() in a background thread, sleep-poll every poll_interval
+        seconds, and return the result once done.
+        Falls back to a job-id response if max_wait seconds are exceeded so
+        the result can still be retrieved via get_async_report_result.
+        """
+        jid = str(uuid.uuid4())
+        JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+        def _bg() -> None:
+            try:
+                JOBS[jid]["status"] = "running"
+                JOBS[jid]["result"] = fn()
+                JOBS[jid]["status"] = "finished"
+            except Exception as exc:
+                import traceback
+
+                traceback.print_exc()
+                JOBS[jid]["error"] = str(exc)
+                JOBS[jid]["status"] = "failed"
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+        elapsed = 0.0
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            status = JOBS[jid]["status"]
+            if status == "finished":
+                return JOBS[jid]["result"]
+            if status == "failed":
+                return {"error": JOBS[jid].get("error", "Unknown async job error")}
+
+        # Still running after max_wait — return a recoverable reference
+        return {
+            "job_id": jid,
+            "status": JOBS[jid]["status"],
+            "message": (
+                "Report is still processing. "
+                f"Use get_async_report_result(job_id='{jid}') to retrieve it when done."
+            ),
+        }
 
     @mcp.tool()
     def get_progress_since(
@@ -1419,41 +1469,21 @@ def register_pm_analytics_tools(mcp: FastMCP):
             print("⏳ Processing time report request - this may take 1-3 minutes...")
             sys.stdout.flush()
 
-            if async_job:
-                jid = job_id or str(uuid.uuid4())
-                JOBS[jid] = {"status": "queued", "result": None, "error": None}
-
-                def _bg():
-                    try:
-                        JOBS[jid]["status"] = "running"
-                        res = get_time_report_by_period(
-                            report_type=report_type,
-                            project=project,
-                            space_name=space_name,
-                            list_id=list_id,
-                            week_selector=week_selector,
-                            week_start=week_start,
-                            week_end=week_end,
-                            allow_multi_week=allow_multi_week,
-                            async_job=False,
-                            job_id=jid,
-                        )
-                        JOBS[jid]["result"] = res
-                        JOBS[jid]["status"] = "finished"
-                    except Exception as e:
-                        JOBS[jid]["error"] = str(e)
-                        JOBS[jid]["status"] = "failed"
-
-                th = threading.Thread(target=_bg, daemon=True)
-                th.start()
-                return {
-                    "job_id": jid,
-                    "status": "started",
-                    "message": "Report running in background. Use get_async_report_status(job_id) to poll.",
-                }
-
-            if job_id:
-                JOBS.setdefault(job_id, {})["status"] = "running"
+            if not job_id:
+                return _run_job_and_wait(
+                    lambda: get_time_report_by_period(
+                        report_type=report_type,
+                        project=project,
+                        space_name=space_name,
+                        list_id=list_id,
+                        week_selector=week_selector,
+                        week_start=week_start,
+                        week_end=week_end,
+                        allow_multi_week=allow_multi_week,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+                )
 
             if week_start and week_end:
                 # Priority 1: Explicit dates provided - validate and use them
@@ -1896,7 +1926,7 @@ def register_pm_analytics_tools(mcp: FastMCP):
             "error": j.get("error"),
             "poll_count": poll_count,
             "polls_remaining": max_polls - poll_count,
-            "message": f"Job still {status}. You have {max_polls - poll_count} status checks remaining. Wait 15-30 seconds before checking again.",
+            "message": f"Job still {status}. You have {max_polls - poll_count} status checks remaining. Wait 50-60 seconds before checking again.",
         }
 
     @mcp.tool()
@@ -1998,49 +2028,21 @@ def register_pm_analytics_tools(mcp: FastMCP):
             sys.stdout.flush()
 
             # ================================================================
-            # ASYNC JOB SUPPORT
-            # Always auto-promote to async — space reports are always heavy
+            # ASYNC JOB SUPPORT — result returned directly, no LLM polling
             # ================================================================
-            if not async_job and not job_id:
-                print(
-                    "⚡ AUTO-ASYNC: Space project reports always run in background to prevent timeout."
+            if not job_id:
+                return _run_job_and_wait(
+                    lambda: get_space_project_time_report(
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
                 )
-                sys.stdout.flush()
-                async_job = True
-
-            if async_job and not job_id:
-                jid = str(uuid.uuid4())
-                JOBS[jid] = {"status": "queued", "result": None, "error": None}
-
-                def _bg():
-                    try:
-                        JOBS[jid]["status"] = "running"
-                        res = get_space_project_time_report(
-                            space_name=space_name,
-                            period_type=period_type,
-                            custom_start=custom_start,
-                            custom_end=custom_end,
-                            rolling_days=rolling_days,
-                            include_archived=include_archived,
-                            async_job=False,
-                            job_id=jid,
-                        )
-                        JOBS[jid]["result"] = res
-                        JOBS[jid]["status"] = "finished"
-                    except Exception as e:
-                        JOBS[jid]["error"] = str(e)
-                        JOBS[jid]["status"] = "failed"
-
-                th = threading.Thread(target=_bg, daemon=True)
-                th.start()
-                return {
-                    "job_id": jid,
-                    "status": "started",
-                    "message": "Space project time report running in background. Use get_async_report_status(job_id) to check status.",
-                }
-
-            if job_id:
-                JOBS.setdefault(job_id, {})["status"] = "running"
 
             # ================================================================
             # STEP 1: Parse date range
@@ -2730,57 +2732,28 @@ def register_pm_analytics_tools(mcp: FastMCP):
         try:
             from clickup_mcp.status_helpers import parse_time_period_filter
             import sys
-            import threading
-            import uuid
 
             print(
                 "⌛ Processing space report - this may take 1-3 minutes for large spaces..."
             )
             sys.stdout.flush()
 
-            # Always auto-promote space-level reports to async — they are always heavy
-            if not async_job and not job_id:
-                print(
-                    "⚡ AUTO-ASYNC: Space reports always run in background to prevent timeout."
+            # Result returned directly — no LLM polling needed
+            if not job_id:
+                return _run_job_and_wait(
+                    lambda: get_space_time_report_comprehensive(
+                        space_name=space_name,
+                        space_id=space_id,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        group_by=group_by,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
                 )
-                sys.stdout.flush()
-                async_job = True
-
-            if async_job and not job_id:
-                jid = str(uuid.uuid4())
-                JOBS[jid] = {"status": "queued", "result": None, "error": None}
-
-                def _bg():
-                    try:
-                        JOBS[jid]["status"] = "running"
-                        res = get_space_time_report_comprehensive(
-                            space_name=space_name,
-                            space_id=space_id,
-                            period_type=period_type,
-                            custom_start=custom_start,
-                            custom_end=custom_end,
-                            rolling_days=rolling_days,
-                            group_by=group_by,
-                            include_archived=include_archived,
-                            async_job=False,
-                            job_id=jid,
-                        )
-                        JOBS[jid]["result"] = res
-                        JOBS[jid]["status"] = "finished"
-                    except Exception as e:
-                        JOBS[jid]["error"] = str(e)
-                        JOBS[jid]["status"] = "failed"
-
-                th = threading.Thread(target=_bg, daemon=True)
-                th.start()
-                return {
-                    "job_id": jid,
-                    "status": "started",
-                    "message": "Space report running in background. Use get_async_report_status(job_id) to check status.",
-                }
-
-            if job_id:
-                JOBS.setdefault(job_id, {})["status"] = "running"
 
             if not space_id and not space_name:
                 return {"error": "Provide either space_name or space_id"}
@@ -3005,50 +2978,28 @@ def register_pm_analytics_tools(mcp: FastMCP):
         try:
             from clickup_mcp.status_helpers import parse_time_period_filter
             import sys
-            import threading
-            import uuid
 
             print(
                 "⌛ Processing folder report - this may take 1-3 minutes for large folders..."
             )
             sys.stdout.flush()
 
-            if async_job:
-                jid = job_id or str(uuid.uuid4())
-                JOBS[jid] = {"status": "queued", "result": None, "error": None}
-
-                def _bg():
-                    try:
-                        JOBS[jid]["status"] = "running"
-                        res = get_folder_time_report_comprehensive(
-                            folder_name=folder_name,
-                            folder_id=folder_id,
-                            space_name=space_name,
-                            period_type=period_type,
-                            custom_start=custom_start,
-                            custom_end=custom_end,
-                            rolling_days=rolling_days,
-                            group_by=group_by,
-                            include_archived=include_archived,
-                            async_job=False,
-                            job_id=jid,
-                        )
-                        JOBS[jid]["result"] = res
-                        JOBS[jid]["status"] = "finished"
-                    except Exception as e:
-                        JOBS[jid]["error"] = str(e)
-                        JOBS[jid]["status"] = "failed"
-
-                th = threading.Thread(target=_bg, daemon=True)
-                th.start()
-                return {
-                    "job_id": jid,
-                    "status": "started",
-                    "message": "Folder report running in background. Use get_async_report_status(job_id) to check status.",
-                }
-
-            if job_id:
-                JOBS.setdefault(job_id, {})["status"] = "running"
+            if not job_id:
+                return _run_job_and_wait(
+                    lambda: get_folder_time_report_comprehensive(
+                        folder_name=folder_name,
+                        folder_id=folder_id,
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        group_by=group_by,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+                )
 
             if not folder_id and not folder_name:
                 return {"error": "Provide either folder_name or folder_id"}
@@ -3330,8 +3281,6 @@ def register_pm_analytics_tools(mcp: FastMCP):
             from clickup_mcp.time_stamp_helpers import format_duration_simple
             from collections import defaultdict
             import sys
-            import threading
-            import uuid
 
             print("⌛ Processing employee daily time report...")
             sys.stdout.flush()
@@ -3341,51 +3290,23 @@ def register_pm_analytics_tools(mcp: FastMCP):
             # The team-level endpoint is not available with our token, so we
             # must use the slower task-based approach which always needs async.
             # ================================================================
-            if not async_job and not job_id:
-                # Auto-promote to async to prevent MCP timeout
-                print(
-                    "⚡ AUTO-ASYNC: Task-based fetch always runs in background to prevent timeout."
+            if not job_id:
+                return _run_job_and_wait(
+                    lambda: get_employee_daily_time_report(
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        space_name=space_name,
+                        space_id=space_id,
+                        folder_name=folder_name,
+                        folder_id=folder_id,
+                        list_id=list_id,
+                        assignee_names=assignee_names,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
                 )
-                sys.stdout.flush()
-                async_job = True
-
-            if async_job:
-                jid = job_id or str(uuid.uuid4())
-                JOBS[jid] = {"status": "queued", "result": None, "error": None}
-
-                def _bg():
-                    try:
-                        JOBS[jid]["status"] = "running"
-                        res = get_employee_daily_time_report(
-                            period_type=period_type,
-                            custom_start=custom_start,
-                            custom_end=custom_end,
-                            rolling_days=rolling_days,
-                            space_name=space_name,
-                            space_id=space_id,
-                            folder_name=folder_name,
-                            folder_id=folder_id,
-                            list_id=list_id,
-                            assignee_names=assignee_names,
-                            async_job=False,
-                            job_id=jid,
-                        )
-                        JOBS[jid]["result"] = res
-                        JOBS[jid]["status"] = "finished"
-                    except Exception as e:
-                        JOBS[jid]["error"] = str(e)
-                        JOBS[jid]["status"] = "failed"
-
-                th = threading.Thread(target=_bg, daemon=True)
-                th.start()
-                return {
-                    "job_id": jid,
-                    "status": "started",
-                    "message": "Employee daily time report running in background. Use get_async_report_status(job_id) to check progress — result will be included when finished.",
-                }
-
-            if job_id:
-                JOBS.setdefault(job_id, {})["status"] = "running"
 
             # ================================================================
             # STEP 1: Parse date range
