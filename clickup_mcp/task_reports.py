@@ -1206,13 +1206,43 @@ def register_task_report_tools(mcp: FastMCP):
                 task_trackers: Dict[str, set] = {}
                 for tid, entries in entries_map.items():
                     for entry in entries:
-                        for iv in entry.get("intervals", []):
-                            iv_start = int(iv.get("start") or 0)
-                            if start_ms <= iv_start <= end_ms:
-                                uname = (entry.get("user") or {}).get(
-                                    "username", "Unknown"
-                                )
-                                task_trackers.setdefault(tid, set()).add(uname)
+                        uname = (entry.get("user") or {}).get("username", "")
+
+                        # ClickUp entries come in two shapes:
+                        #   a) entry has "intervals" list → each interval has its own "start"
+                        #   b) entry has NO intervals   → timestamps sit on the entry itself
+                        # Previously only (a) was handled, so entries without intervals were
+                        # silently dropped and their employees disappeared from the report.
+                        intervals = entry.get("intervals") or []
+                        if intervals:
+                            in_range = any(
+                                start_ms <= int(iv.get("start") or 0) <= end_ms
+                                for iv in intervals
+                            )
+                        else:
+                            # No intervals – the API already filtered by date range,
+                            # so any entry returned is within scope. Double-check with
+                            # the entry-level start timestamp if available.
+                            entry_start = int(entry.get("start") or 0)
+                            in_range = (entry_start == 0) or (
+                                start_ms <= entry_start <= end_ms
+                            )
+
+                        if not in_range:
+                            continue
+
+                        if uname:
+                            task_trackers.setdefault(tid, set()).add(uname)
+                        else:
+                            # No user on the time entry – fall back to task assignees
+                            task = task_map.get(tid)
+                            if task:
+                                for au in task.get("assignees", []):
+                                    au_name = au.get("username", "")
+                                    if au_name:
+                                        task_trackers.setdefault(tid, set()).add(
+                                            au_name
+                                        )
 
                 seen_task_ids: set = set()
                 for tid, trackers in task_trackers.items():
