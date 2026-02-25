@@ -98,7 +98,7 @@ Example format (adapt period and names from ACTUAL data — never hardcode):
 | "what did [member] do", "member report for [person]"                     | get_member_task_report        |
 | "who tracked less than 8 hours", "low hours", "short day report"         | get_low_hours_report          |
 | "missing estimates", "no time estimation", "tasks without estimate"      | get_missing_estimation_report |
-| "overtime", "who went over estimate", "tracked more than estimated"      | get_overtime_report           |
+| "overtime", "who went over estimate", "tracked more than estimated"      | get_overtracked_report        |
 
 ## NEW TOOL SIGNATURES
 
@@ -170,7 +170,7 @@ get_missing_estimation_report(
 #   ratio_unassigned_count → number of unassigned ratio-flagged tasks
 #   total_missing_estimate, total_ratio_flagged, ratio_band: {low: 0.25, high: 2.0}
 
-get_overtime_report(
+get_overtracked_report(
     project_name=None,              # project OR space required
     space_name=None,
     period_type="this_week",
@@ -227,7 +227,7 @@ All report tools default to `async_job=True` and return a **`job_id` immediately
 | ~2 PM | Space/project report for TODAY so far — get_space_task_report(period_type="today")  |
 | ~6 PM | Space/project report for TODAY — get_space_task_report(period_type="today")         |
 
-For each session also check: get_low_hours_report + get_overtime_report
+For each session also check: get_low_hours_report + get_overtracked_report
 
 ## PROJECT TYPES
 

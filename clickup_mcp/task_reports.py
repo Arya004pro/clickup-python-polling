@@ -8,7 +8,7 @@ PM-focused daily report tools covering the full reporting suite:
 3. get_member_task_report      — Individual team member task report
 4. get_low_hours_report        — Employees who tracked < 8 h on any day (with occurrence count)
 5. get_missing_estimation_report — Employees whose tasks have no time estimate
-6. get_overtime_report         — Employees where tracked time > estimated time
+6. get_overtracked_report       — Employees where tracked time exceeds estimated time
 
 All period-based tools support:
   today | yesterday | this_week | last_week | this_month | last_month |
@@ -1515,7 +1515,7 @@ def register_task_report_tools(mcp: FastMCP):
     # =========================================================================
 
     @mcp.tool()
-    def get_overtime_report(
+    def get_overtracked_report(
         project_name: Optional[str] = None,
         space_name: Optional[str] = None,
         period_type: str = "this_week",
@@ -1528,10 +1528,12 @@ def register_task_report_tools(mcp: FastMCP):
         job_id: Optional[str] = None,
     ) -> dict:
         """
-        Overtime Report — employees where tracked time exceeds estimated time.
+        Overtracked Report
+        
+        Employees where tracked time exceeds estimated time.
 
         Identifies tasks and team members where actual time logged exceeded the
-        estimate, showing how much over they went.  Only tasks with both an
+        estimate, showing how much over they went. Only tasks with both an
         estimate AND logged time are included.
 
         ESTIMATION CONSISTENCY RULE:
@@ -1573,7 +1575,7 @@ def register_task_report_tools(mcp: FastMCP):
             if not job_id:
 
                 def _work():
-                    return get_overtime_report(
+                    return get_overtracked_report(
                         project_name=project_name,
                         space_name=space_name,
                         period_type=period_type,
@@ -1619,7 +1621,7 @@ def register_task_report_tools(mcp: FastMCP):
             )
 
             if len(all_tasks) >= 300 and not job_id and not async_job:
-                return get_overtime_report(
+                return get_overtracked_report(
                     project_name=project_name,
                     space_name=space_name,
                     period_type=period_type,

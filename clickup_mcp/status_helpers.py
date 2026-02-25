@@ -2,6 +2,25 @@
 Status Helper Functions for ClickUp MCP Server
 Provides unified status handling across all MCP tools.
 Handles API response polymorphism and status inheritance.
+
+INTERVAL DEDUPLICATION FIX (2026-02-25):
+  filter_time_entries_by_date_range and filter_time_entries_by_user_and_date_range
+  now deduplicate intervals by their "id" field (falling back to (start, end) tuple).
+
+  ROOT CAUSE: _fetch_time_entries_smart fetches entries per task_id independently.
+  When both a subtask AND its parent task exist in all_tasks, the ClickUp API
+  returns the same physical intervals (identified by interval "id") for both.
+  Without deduplication, each shared interval was summed twice, inflating tracked time.
+
+  EXAMPLE (Kamil Shaikh — "Solving turn id..." task):
+    ClickUp UI showed 1h 22m tracked.
+    Report showed 2h 22m — exactly 1h extra — because the subtask's intervals
+    also appeared in the parent task's fetched entries and were counted again.
+
+  FIX: Each call now tracks seen interval fingerprints (interval["id"] when
+  present, otherwise (start_ms, end_ms) tuple as fallback). Any interval
+  already counted is skipped. Deduplication is scoped per-user in the user
+  variant and globally in the date-range-only variant.
 """
 
 import requests
@@ -462,6 +481,13 @@ def filter_time_entries_by_date_range(
     """
     Filter time entry intervals by date range and calculate total time.
 
+    DEDUPLICATION FIX (2026-02-25):
+    Intervals are counted only once even if they appear in multiple entry objects.
+    The ClickUp API returns the same physical intervals for both a subtask and its
+    parent task when both are fetched separately — without this guard the same
+    session gets summed twice, inflating tracked time.
+    Fingerprint = interval["id"] if present, else (start_ms, end_ms) tuple.
+
     Args:
         time_entries: List of time entry objects with 'intervals' field
         start_ms: Start timestamp in milliseconds (inclusive)
@@ -481,6 +507,9 @@ def filter_time_entries_by_date_range(
     """
     total_ms = 0
     filtered_intervals = []
+    # Dedup: track interval fingerprints seen across all entries in this call.
+    # Fingerprint = interval["id"] when available, else (interval_start, interval_end).
+    seen_fingerprints: set = set()
 
     for entry in time_entries:
         for interval in entry.get("intervals", []):
@@ -512,6 +541,14 @@ def filter_time_entries_by_date_range(
             # If still missing an end, treat as instantaneous (skip)
             if interval_end is None:
                 continue
+
+            # --- Deduplication check ---
+            iv_id = interval.get("id")
+            fingerprint = iv_id if iv_id else (interval_start, interval_end)
+            if fingerprint in seen_fingerprints:
+                continue  # Already counted this interval — skip duplicate
+            seen_fingerprints.add(fingerprint)
+            # ---------------------------
 
             # Compute overlap between [interval_start, interval_end] and [start_ms, end_ms]
             overlap_start = max(start_ms, interval_start)
@@ -534,6 +571,19 @@ def filter_time_entries_by_user_and_date_range(
     """
     Filter time entries by date range and calculate time tracked per user.
 
+    DEDUPLICATION FIX (2026-02-25):
+    Intervals are counted only once per user even if they appear in multiple entry
+    objects. The ClickUp API returns the same physical intervals for both a subtask
+    and its parent task when both are fetched separately. Without this guard the
+    same session is summed twice per user, inflating tracked time.
+
+    EXAMPLE of the bug this fixes:
+        subtask entry  → intervals: [{id: "iv_1", ...}]  ← 57 min for kamil
+        parent entry   → intervals: [{id: "iv_1", ...}]  ← same interval, counted again!
+        Result without fix: kamil = 2h 22m  (should be 1h 22m)
+
+    Fingerprint = interval["id"] if present, else (start_ms, end_ms) tuple.
+
     Args:
         time_entries: List of time entry objects with 'user' and 'intervals' fields
         start_ms: Start timestamp in milliseconds (inclusive)
@@ -550,12 +600,18 @@ def filter_time_entries_by_user_and_date_range(
         filter_time_entries_by_user_and_date_range(entries, start_ms, end_ms)
         -> {"John": 3600000}
     """
-    user_time_map = {}
+    user_time_map: Dict[str, int] = {}
+    # Dedup: track seen interval fingerprints per user.
+    # { username -> set of fingerprints already counted for that user }
+    seen_per_user: Dict[str, set] = {}
 
     for entry in time_entries:
         # Get the user who logged this time entry
-        user = entry.get("user", {})
-        username = user.get("username", "Unassigned")
+        user = entry.get("user") or {}
+        username = user.get("username") or "Unassigned"
+
+        if username not in seen_per_user:
+            seen_per_user[username] = set()
 
         for interval in entry.get("intervals", []):
             interval_start = interval.get("start")
@@ -586,6 +642,14 @@ def filter_time_entries_by_user_and_date_range(
             # If still missing an end, treat as instantaneous (skip)
             if interval_end is None:
                 continue
+
+            # --- Per-user deduplication check ---
+            iv_id = interval.get("id")
+            fingerprint = iv_id if iv_id else (interval_start, interval_end)
+            if fingerprint in seen_per_user[username]:
+                continue  # Already counted this interval for this user — skip duplicate
+            seen_per_user[username].add(fingerprint)
+            # -------------------------------------
 
             # Compute overlap between [interval_start, interval_end] and [start_ms, end_ms]
             overlap_start = max(start_ms, interval_start)
