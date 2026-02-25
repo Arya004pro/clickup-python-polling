@@ -89,7 +89,13 @@ def _resolve_space_lists(space_id: str) -> Dict[str, List[str]]:
 
     resp_f, _ = _api_call("GET", f"/space/{space_id}/folder")
     for folder in (resp_f or {}).get("folders", []):
-        lid_list = [lst["id"] for lst in folder.get("lists", [])]
+        # Prefer live folder-list fetch to avoid stale embedded folder payloads.
+        lid_list: List[str] = []
+        live_lists, _ = _api_call("GET", f"/folder/{folder['id']}/list")
+        if live_lists and live_lists.get("lists"):
+            lid_list = [lst["id"] for lst in live_lists.get("lists", [])]
+        else:
+            lid_list = [lst["id"] for lst in folder.get("lists", [])]
         if lid_list:
             projects[folder["name"]] = lid_list
 
@@ -129,25 +135,31 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
     _projects = _cfg.get("monitored_projects", [])
     _name_lower = project_name.strip().lower()
 
+    def _collect_project_list_ids(_p: Dict[str, Any]) -> List[str]:
+        _ids: List[str] = [str(_id) for _id in (_p.get("list_ids") or []) if _id]
+        if _p.get("clickup_id") and _p.get("type") == "folder":
+            _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
+            _ids.extend(
+                [
+                    str(_l["id"])
+                    for _l in (_resp or {}).get("lists", [])
+                    if _l.get("id")
+                ]
+            )
+        return list(dict.fromkeys(_ids))
+
     # Special keyword: aggregate every monitored project
     if _name_lower == "monitored":
         _all_ids: List[str] = []
         for _p in _projects:
-            if _p.get("list_ids"):
-                _all_ids.extend(_p["list_ids"])
-            elif _p.get("clickup_id") and _p.get("type") == "folder":
-                _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
-                _all_ids.extend([_l["id"] for _l in (_resp or {}).get("lists", [])])
+            _all_ids.extend(_collect_project_list_ids(_p))
         return _all_ids or None
 
     # Exact alias match
     for _p in _projects:
         if _p["alias"].strip().lower() == _name_lower:
-            if _p.get("list_ids"):
-                return _p["list_ids"]
-            elif _p.get("clickup_id") and _p.get("type") == "folder":
-                _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
-                return [_l["id"] for _l in (_resp or {}).get("lists", [])]
+            _ids = _collect_project_list_ids(_p)
+            return _ids or None
     return None
 
 

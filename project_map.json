@@ -4,7 +4,7 @@
       "alias": "AI_Projects",
       "clickup_id": "90165507588",
       "clickup_type": "space",
-      "last_sync": 1770799710.4225159,
+      "last_sync": 1772023996.7987316,
       "structure": {
         "id": "90165507588",
         "type": "space",
@@ -22,7 +22,7 @@
       "alias": "AI",
       "clickup_id": "90161321203",
       "clickup_type": "space",
-      "last_sync": 1770799747.3961787,
+      "last_sync": 1772024019.2661107,
       "structure": {
         "id": "90161321203",
         "type": "space",
@@ -521,7 +521,7 @@
       "alias": "JewelleryOS",
       "clickup_id": "90165613766",
       "clickup_type": "space",
-      "last_sync": 1770799765.7136202,
+      "last_sync": 1772024027.1867366,
       "structure": {
         "id": "90165613766",
         "type": "space",
@@ -684,7 +684,7 @@
       "alias": "Avinashi Chat",
       "clickup_id": "90165717669",
       "clickup_type": "space",
-      "last_sync": 1770799777.618347,
+      "last_sync": 1772024031.1043184,
       "structure": {
         "id": "90165717669",
         "type": "space",
@@ -741,7 +741,7 @@
       "alias": "linkutm",
       "clickup_id": "90165243069",
       "clickup_type": "space",
-      "last_sync": 1770799790.935897,
+      "last_sync": 1772024035.8503175,
       "structure": {
         "id": "90165243069",
         "type": "space",
@@ -828,6 +828,21 @@
                 "id": "901613323874",
                 "name": "Sprint 20 (2/2 - 8/2)",
                 "type": "list"
+              },
+              {
+                "id": "901613532828",
+                "name": "Sprint 21 (9/2 - 15/2)",
+                "type": "list"
+              },
+              {
+                "id": "901613546075",
+                "name": "Sprint 22 (16/2 - 22/2)",
+                "type": "list"
+              },
+              {
+                "id": "901613665340",
+                "name": "Sprint 23 (23/2 - 1/3)",
+                "type": "list"
               }
             ],
             "name": "linkutm Sprints"
@@ -840,7 +855,7 @@
       "alias": "AIX",
       "clickup_id": "90165253762",
       "clickup_type": "space",
-      "last_sync": 1770799836.6592486,
+      "last_sync": 1772024063.806844,
       "structure": {
         "id": "90165253762",
         "type": "space",
@@ -869,6 +884,21 @@
               {
                 "id": "901613067323",
                 "name": "R1",
+                "type": "list"
+              },
+              {
+                "id": "901613708967",
+                "name": "Holi",
+                "type": "list"
+              },
+              {
+                "id": "901613708971",
+                "name": "Valentines",
+                "type": "list"
+              },
+              {
+                "id": "901613719186",
+                "name": "Mothers Day",
                 "type": "list"
               }
             ],
@@ -923,6 +953,11 @@
                 "id": "901613067292",
                 "name": "R1",
                 "type": "list"
+              },
+              {
+                "id": "901613708650",
+                "name": "Release 1",
+                "type": "list"
               }
             ],
             "name": "RealEstate Voice Agent"
@@ -933,7 +968,12 @@
             "children": [
               {
                 "id": "901612385642",
-                "name": "List",
+                "name": "Other task",
+                "type": "list"
+              },
+              {
+                "id": "901613721698",
+                "name": "R1 [Without using LLM]",
                 "type": "list"
               }
             ],
@@ -1005,12 +1045,12 @@
             "children": [
               {
                 "id": "901612507760",
-                "name": "List",
+                "name": "R1",
                 "type": "list"
               },
               {
                 "id": "901613067456",
-                "name": "R1",
+                "name": "Other task",
                 "type": "list"
               }
             ],
@@ -1071,6 +1111,16 @@
               {
                 "id": "901612709931",
                 "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613709026",
+                "name": "W2",
+                "type": "list"
+              },
+              {
+                "id": "901613720075",
+                "name": "1098",
                 "type": "list"
               }
             ],
@@ -1144,7 +1194,7 @@
       "alias": "MindTech",
       "clickup_id": "90165634163",
       "clickup_type": "space",
-      "last_sync": 1770799845.7033448,
+      "last_sync": 1772024065.6568756,
       "structure": {
         "id": "90165634163",
         "type": "space",
@@ -1197,7 +1247,7 @@
       "alias": "Venture Studio",
       "clickup_id": "90165763632",
       "clickup_type": "space",
-      "last_sync": 1770799856.8477805,
+      "last_sync": 1772024069.7876282,
       "structure": {
         "id": "90165763632",
         "type": "space",
@@ -1244,7 +1294,7 @@
       "alias": "Avinashi Leaders",
       "clickup_id": "90165752782",
       "clickup_type": "space",
-      "last_sync": 1770799870.9036353,
+      "last_sync": 1772024074.926682,
       "structure": {
         "id": "90165752782",
         "type": "space",
@@ -1306,6 +1356,11 @@
                 "id": "901613405991",
                 "name": "Week 2",
                 "type": "list"
+              },
+              {
+                "id": "901613557904",
+                "name": "Week 3",
+                "type": "list"
               }
             ],
             "name": "Feb 2026"
@@ -1318,7 +1373,7 @@
       "alias": "BlogManager",
       "clickup_id": "90165866900",
       "clickup_type": "space",
-      "last_sync": 1770799881.376623,
+      "last_sync": 1772024077.5950947,
       "structure": {
         "id": "90165866900",
         "type": "space",
@@ -1343,7 +1398,7 @@
       "alias": "3D Team",
       "clickup_id": "90165683323",
       "clickup_type": "space",
-      "last_sync": 1770799891.932584,
+      "last_sync": 1772024079.1377153,
       "structure": {
         "id": "90165683323",
         "type": "space",
@@ -1366,7 +1421,7 @@
       "alias": "UP-BOCW",
       "clickup_id": "90165885558",
       "clickup_type": "space",
-      "last_sync": 1770799900.9163697,
+      "last_sync": 1772024080.7112105,
       "structure": {
         "id": "90165885558",
         "type": "space",
@@ -1384,7 +1439,7 @@
       "alias": "General Task Management",
       "clickup_id": "90165811501",
       "clickup_type": "space",
-      "last_sync": 1770799908.9101255,
+      "last_sync": 1772024082.4202938,
       "structure": {
         "id": "90165811501",
         "type": "space",
@@ -1402,7 +1457,7 @@
       "alias": "Nidan.ai",
       "clickup_id": "90165934294",
       "clickup_type": "space",
-      "last_sync": 1770799917.9645512,
+      "last_sync": 1772024083.9015605,
       "structure": {
         "id": "90165934294",
         "type": "space",
@@ -1420,7 +1475,7 @@
       "alias": "WC-Corporate",
       "clickup_id": "90165634091",
       "clickup_type": "space",
-      "last_sync": 1770799930.7013898,
+      "last_sync": 1772024087.9043658,
       "structure": {
         "id": "90165634091",
         "type": "space",
@@ -1438,6 +1493,18 @@
             "name": "VFS & Onevasco Sprint"
           },
           {
+            "id": "90168558170",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613575761",
+                "name": "Sprint 1 (2/23 - 3/8)",
+                "type": "list"
+              }
+            ],
+            "name": "V2 Development"
+          },
+          {
             "id": "901612146218",
             "name": "WC-corporate-list",
             "type": "list"
@@ -1450,7 +1517,7 @@
       "alias": "VibeScorer",
       "clickup_id": "90165953185",
       "clickup_type": "space",
-      "last_sync": 1770799939.64113,
+      "last_sync": 1772024089.5371404,
       "structure": {
         "id": "90165953185",
         "type": "space",
@@ -1469,6 +1536,11 @@
             "id": "901613067515",
             "name": "R1",
             "type": "list"
+          },
+          {
+            "id": "901613624735",
+            "name": "Interview Feedback",
+            "type": "list"
           }
         ],
         "name": "VibeScorer"
@@ -1478,7 +1550,7 @@
       "alias": "AI WorksheetPro",
       "clickup_id": "90165974124",
       "clickup_type": "space",
-      "last_sync": 1770799948.3196187,
+      "last_sync": 1772024091.4203374,
       "structure": {
         "id": "90165974124",
         "type": "space",
@@ -1496,7 +1568,7 @@
       "alias": "Gold Jewellers",
       "clickup_id": "90165977016",
       "clickup_type": "space",
-      "last_sync": 1770799956.8631928,
+      "last_sync": 1772024093.6416752,
       "structure": {
         "id": "90165977016",
         "type": "space",
@@ -1514,7 +1586,7 @@
       "alias": "NidanAI",
       "clickup_id": "90165717312",
       "clickup_type": "space",
-      "last_sync": 1770799975.1474006,
+      "last_sync": 1772024095.2544696,
       "structure": {
         "id": "90165717312",
         "type": "space",
@@ -1532,7 +1604,7 @@
       "alias": "DevOps & Networking",
       "clickup_id": "90165941160",
       "clickup_type": "space",
-      "last_sync": 1770799984.714697,
+      "last_sync": 1772024096.9361947,
       "structure": {
         "id": "90165941160",
         "type": "space",
@@ -1550,7 +1622,7 @@
       "alias": "BRC",
       "clickup_id": "90166096218",
       "clickup_type": "space",
-      "last_sync": 1770799994.069283,
+      "last_sync": 1772024099.6524642,
       "structure": {
         "id": "90166096218",
         "type": "space",
@@ -1568,7 +1640,7 @@
       "alias": "Wizcoder",
       "clickup_id": "90166136032",
       "clickup_type": "space",
-      "last_sync": 1770800003.051927,
+      "last_sync": 1772024101.306719,
       "structure": {
         "id": "90166136032",
         "type": "space",

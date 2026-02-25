@@ -7,7 +7,10 @@ from clickup_mcp.task_management import register_task_tools
 from clickup_mcp.pm_analytics import register_pm_analytics_tools
 from clickup_mcp.project_configuration import register_project_configuration_tools
 from clickup_mcp.project_intelligence import register_project_intelligence_tools
-from clickup_mcp.sync_mapping import register_sync_mapping_tools
+from clickup_mcp.sync_mapping import (
+    register_sync_mapping_tools,
+    start_mapping_maintenance_scheduler,
+)
 from clickup_mcp.task_reports import register_task_report_tools
 
 mcp = FastMCP(
@@ -23,6 +26,7 @@ register_project_configuration_tools(mcp)
 register_project_intelligence_tools(mcp)
 register_sync_mapping_tools(mcp)
 register_task_report_tools(mcp)
+start_mapping_maintenance_scheduler(hour=18, minute=0)
 
 
 if __name__ == "__main__":
