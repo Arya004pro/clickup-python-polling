@@ -10,9 +10,12 @@ import json
 import os
 import time
 import re
+import threading
 from typing import Dict, List, Optional, Any
 import requests
 from fastmcp import FastMCP
+from apscheduler.schedulers.background import BackgroundScheduler
+from zoneinfo import ZoneInfo
 from app.config import CLICKUP_API_TOKEN, BASE_URL
 from clickup_mcp.api_client import client as _client
 
@@ -20,6 +23,10 @@ from clickup_mcp.api_client import client as _client
 DATA_FILE = "project_map.json"
 CACHE_TTL_SECONDS = 3600  # 1 hour
 HEADERS = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+MONITORING_CONFIG_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "monitoring_config.json"
+)
+DEFAULT_MAINTENANCE_TIMEZONE = "Asia/Kolkata"
 
 # --- Persistence Layer ---
 
@@ -95,6 +102,10 @@ class PersistenceManager:
 
 
 db = PersistenceManager(DATA_FILE)
+
+_maintenance_scheduler: Optional[BackgroundScheduler] = None
+_maintenance_lock = threading.Lock()
+_maintenance_running = False
 
 # --- Helpers ---
 
@@ -202,6 +213,159 @@ def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[d
                 nested["found_at"] = "nested"
                 return nested
     return None
+
+
+def _refresh_project_mapping(alias: str, project: dict) -> dict:
+    """Refresh one mapped project's structure in project_map.json."""
+    cid = project.get("clickup_id")
+    ctype = project.get("clickup_type")
+    if not cid or ctype not in {"space", "folder", "list"}:
+        return {
+            "alias": alias,
+            "success": False,
+            "error": "Missing or invalid clickup_id/clickup_type",
+        }
+
+    new_structure = _fetch_full_structure(cid, ctype)
+    if "name" not in new_structure:
+        return {
+            "alias": alias,
+            "success": False,
+            "error": "Failed to fetch structure from ClickUp API",
+        }
+
+    updated = dict(project)
+    updated["structure"] = new_structure
+    updated["last_sync"] = time.time()
+    db.add_project(alias, updated)
+    return {
+        "alias": alias,
+        "success": True,
+        "children": len(new_structure.get("children", [])),
+    }
+
+
+def _sync_monitoring_config_list_ids() -> dict:
+    """
+    Keep monitoring_config.json list_ids fresh by pulling live folder lists.
+    """
+    if not os.path.exists(MONITORING_CONFIG_FILE):
+        return {
+            "updated_projects": 0,
+            "status": "skipped",
+            "reason": "config_not_found",
+        }
+
+    try:
+        with open(MONITORING_CONFIG_FILE, "r") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return {"updated_projects": 0, "status": "error", "reason": f"read_failed: {e}"}
+
+    projects = cfg.get("monitored_projects", [])
+    changed = 0
+
+    for p in projects:
+        if p.get("type") != "folder" or not p.get("clickup_id"):
+            continue
+
+        resp = _api_get(f"/folder/{p['clickup_id']}/list")
+        if not resp:
+            continue
+
+        live_ids = [lst.get("id") for lst in resp.get("lists", []) if lst.get("id")]
+        live_ids = list(dict.fromkeys(live_ids))
+        old_ids = [lid for lid in (p.get("list_ids") or []) if lid]
+
+        if live_ids and live_ids != old_ids:
+            p["list_ids"] = live_ids
+            changed += 1
+
+    if changed:
+        try:
+            with open(MONITORING_CONFIG_FILE, "w") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            return {
+                "updated_projects": 0,
+                "status": "error",
+                "reason": f"write_failed: {e}",
+            }
+
+    return {"updated_projects": changed, "status": "ok"}
+
+
+def run_mapping_maintenance_once() -> dict:
+    """
+    Internal maintenance:
+    1) Refresh every mapped project structure.
+    2) Refresh monitored folder list_ids.
+    3) Prune expired cache.
+    """
+    global _maintenance_running
+    with _maintenance_lock:
+        if _maintenance_running:
+            return {"status": "skipped", "reason": "maintenance_already_running"}
+        _maintenance_running = True
+
+    try:
+        refreshed = []
+        failed = []
+        for alias, project in list(db.projects.items()):
+            result = _refresh_project_mapping(alias, project)
+            if result.get("success"):
+                refreshed.append(result["alias"])
+            else:
+                failed.append(
+                    {"alias": alias, "error": result.get("error", "unknown_error")}
+                )
+
+        monitor_res = _sync_monitoring_config_list_ids()
+        pruned = db.prune_expired_cache()
+
+        return {
+            "status": "success",
+            "mapped_projects_refreshed": len(refreshed),
+            "mapped_projects_failed": failed,
+            "monitoring_config": monitor_res,
+            "cache_entries_pruned": pruned,
+            "ran_at": time.time(),
+        }
+    finally:
+        _maintenance_running = False
+
+
+def start_mapping_maintenance_scheduler(
+    timezone: str = DEFAULT_MAINTENANCE_TIMEZONE,
+    hour: int = 18,
+    minute: int = 0,
+    run_on_startup: bool = True,
+) -> bool:
+    """
+    Start daily maintenance scheduler. Returns False if already running.
+    """
+    global _maintenance_scheduler
+    if _maintenance_scheduler and _maintenance_scheduler.running:
+        return False
+
+    tz = ZoneInfo(timezone)
+    _maintenance_scheduler = BackgroundScheduler(timezone=tz)
+    _maintenance_scheduler.add_job(
+        run_mapping_maintenance_once,
+        trigger="cron",
+        hour=hour,
+        minute=minute,
+        id="mapping_maintenance_daily",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    _maintenance_scheduler.start()
+
+    if run_on_startup:
+        threading.Thread(target=run_mapping_maintenance_once, daemon=True).start()
+
+    return True
 
 
 def find_entity_anywhere(entity_name: str) -> Optional[dict]:
@@ -504,24 +668,18 @@ def register_sync_mapping_tools(mcp: FastMCP):
         project = db.projects.get(alias)
         if not project:
             return {"error": f"Project alias '{alias}' not found."}
-
-        cid = project["clickup_id"]
-        ctype = project["clickup_type"]
-
-        # Re-fetch structure
-        new_structure = _fetch_full_structure(cid, ctype)
-        if "name" not in new_structure:
-            return {"error": "Failed to refresh structure from ClickUp API."}
-
-        # Update DB
-        project["structure"] = new_structure
-        project["last_sync"] = time.time()
-        db.add_project(alias, project)  # Overwrite
+        result = _refresh_project_mapping(alias, project)
+        if not result.get("success"):
+            return {
+                "error": result.get(
+                    "error", "Failed to refresh structure from ClickUp API."
+                )
+            }
 
         return {
             "success": True,
             "message": f"Refreshed structure for '{alias}'",
-            "structure_summary": f"Contains {len(new_structure.get('children', []))} top-level items.",
+            "structure_summary": f"Contains {result.get('children', 0)} top-level items.",
         }
 
     @mcp.tool()

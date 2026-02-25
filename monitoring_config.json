@@ -1,0 +1,52 @@
+{
+  "monitored_projects": [
+    {
+      "alias": "AI Headshots",
+      "clickup_id": "90167640140",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": [
+        "901612384564",
+        "901613067323",
+        "901613708967",
+        "901613708971",
+        "901613719186"
+      ]
+    },
+    {
+      "alias": "RealEstate Voice Agent",
+      "clickup_id": "90167641034",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": ["901612385620", "901613067292", "901613708650"]
+    },
+    {
+      "alias": "Bank Statement Model",
+      "clickup_id": "90167641054",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": ["901612385642", "901613721698"]
+    },
+    {
+      "alias": "AI Photo Manager",
+      "clickup_id": "90167735477",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": ["901612507760", "901613067456"]
+    },
+    {
+      "alias": "Taxation - CPA Assistant",
+      "clickup_id": "90167885908",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": ["901612709931", "901613709026", "901613720075"]
+    },
+    {
+      "alias": "Clickup Analysis & Report",
+      "clickup_id": "90168229095",
+      "type": "folder",
+      "space": "AIX",
+      "list_ids": ["901613176583"]
+    }
+  ]
+}
