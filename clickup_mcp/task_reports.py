@@ -1522,7 +1522,6 @@ def register_task_report_tools(mcp: FastMCP):
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
-        min_overage_minutes: int = 15,
         include_archived: bool = True,
         async_job: bool = True,
         job_id: Optional[str] = None,
@@ -1551,7 +1550,6 @@ def register_task_report_tools(mcp: FastMCP):
             custom_start:        YYYY-MM-DD (required when period_type="custom")
             custom_end:          YYYY-MM-DD (required when period_type="custom")
             rolling_days:        Number of days for rolling window (1-365)
-            min_overage_minutes: Minimum overage in minutes to flag a task (default 15)
             include_archived:    Include archived tasks (default True)
             async_job:           Run in background (recommended for spaces)
 
@@ -1582,7 +1580,6 @@ def register_task_report_tools(mcp: FastMCP):
                         custom_start=custom_start,
                         custom_end=custom_end,
                         rolling_days=rolling_days,
-                        min_overage_minutes=min_overage_minutes,
                         include_archived=include_archived,
                         async_job=False,
                         job_id="_bg_",
@@ -1597,7 +1594,6 @@ def register_task_report_tools(mcp: FastMCP):
                 rolling_days=rolling_days,
             )
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
-            min_overage_ms = min_overage_minutes * 60 * 1000
 
             # Resolve scope
             if project_name:
@@ -1628,7 +1624,6 @@ def register_task_report_tools(mcp: FastMCP):
                     custom_start=custom_start,
                     custom_end=custom_end,
                     rolling_days=rolling_days,
-                    min_overage_minutes=min_overage_minutes,
                     include_archived=include_archived,
                     async_job=True,
                 )
@@ -1674,7 +1669,7 @@ def register_task_report_tools(mcp: FastMCP):
                 if period_tracked_ms == 0:
                     continue
 
-                # Gate check: is total overage above threshold?
+                # Gate check: raw overage only (tracked must exceed estimate).
                 # Use rollup_tracked_ms for a consistent comparison against est_ms.
                 # For subtasks, rollup_tracked_ms == period_tracked_ms (direct only).
                 # For parents, rollup_tracked_ms includes subtask contributions.
@@ -1682,8 +1677,8 @@ def register_task_report_tools(mcp: FastMCP):
                 # We compare rollup_tracked_ms vs est_ms for the flag decision,
                 # but use period_tracked_ms (actual entries in range) for display.
                 overage_ms = rollup_tracked_ms - est_ms
-                if overage_ms < min_overage_ms:
-                    continue  # Within tolerance
+                if overage_ms <= 0:
+                    continue
 
                 total_overtime_tasks += 1
                 status = _extract_status_name(task)
@@ -1695,7 +1690,7 @@ def register_task_report_tools(mcp: FastMCP):
                 for username, t_ms in user_time.items():
                     proportion = t_ms / total_period_ms
                     per_user_overage = int(overage_ms * proportion)
-                    if per_user_overage < min_overage_ms:
+                    if per_user_overage <= 0:
                         continue
 
                     if username not in members:
@@ -1748,7 +1743,7 @@ def register_task_report_tools(mcp: FastMCP):
                 "## Overtime Report (Tracked > Estimated)",
                 f"**Scope:** {scope}  |  **Period:** {start_date} → {end_date}",
                 f"**Flagged tasks:** {total_overtime_tasks}  |  "
-                f"**Min overage threshold:** {min_overage_minutes} min",
+                f"**Overage mode:** raw (tracked > estimated)",
                 "",
                 "| Member | Overtime Tasks | Total Overtime |",
                 "|--------|---------------:|---------------:|",

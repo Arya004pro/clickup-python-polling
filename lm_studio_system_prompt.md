@@ -175,7 +175,6 @@ get_overtracked_report(
     space_name=None,
     period_type="this_week",
     custom_start=None, custom_end=None, rolling_days=None,
-    min_overage_minutes=15,         # minimum overage to flag
     include_archived=True
 )
 # OVERTIME LOGIC — ESTIMATION CONSISTENCY RULE:

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -31,6 +32,35 @@ DEBOUNCE_SECONDS = 3.0
 server_process = None
 _pending_restart = None
 _restart_lock = threading.Lock()
+_file_signatures: Dict[str, Tuple[int, int]] = {}
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize paths for stable cache keys on Windows/macOS/Linux."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _py_file_signature(path: str) -> Optional[Tuple[int, int]]:
+    """
+    Lightweight signature for real writes:
+    - mtime_ns changes when file content is saved
+    - size catches edge cases where mtime granularity is coarse
+    """
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _seed_file_signatures(watch_path: str) -> None:
+    """Snapshot existing .py files so open/read metadata events are ignored."""
+    for py_file in Path(watch_path).rglob("*.py"):
+        if "__pycache__" in str(py_file):
+            continue
+        sig = _py_file_signature(str(py_file))
+        if sig is not None:
+            _file_signatures[_normalize_path(str(py_file))] = sig
 
 
 def start_server():
@@ -72,12 +102,26 @@ class RestartHandler(FileSystemEventHandler):
         # Ignore __pycache__ and .pyc files
         if "__pycache__" in event.src_path or event.src_path.endswith(".pyc"):
             return
-        if event.src_path.endswith(".py"):
-            schedule_restart(event.src_path)
+        if not event.src_path.endswith(".py"):
+            return
+
+        normalized = _normalize_path(event.src_path)
+        current_sig = _py_file_signature(event.src_path)
+        if current_sig is None:
+            return
+
+        previous_sig = _file_signatures.get(normalized)
+        if previous_sig == current_sig:
+            # Likely editor focus/read/metadata noise; no real save occurred.
+            return
+
+        _file_signatures[normalized] = current_sig
+        schedule_restart(event.src_path)
 
 
 if __name__ == "__main__":
     watch_path = str(ROOT / "clickup_mcp")
+    _seed_file_signatures(watch_path)
     start_server()
     event_handler = RestartHandler()
     observer = Observer()
