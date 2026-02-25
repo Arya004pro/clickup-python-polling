@@ -110,7 +110,6 @@ get_space_task_report(
     custom_end=None,                # YYYY-MM-DD
     rolling_days=None,
     include_archived=True
-    # Returns result directly — no polling needed
 )
 
 get_project_task_report(
@@ -148,7 +147,6 @@ get_missing_estimation_report(
     rolling_days=None,
     include_done=True,              # include done/closed tasks?
     include_archived=True
-    # Returns result directly — no polling needed
 )
 # RETURNS TWO SECTIONS in formatted_output:
 #   Section 1 — "Missing Time Estimate": ALL tasks where TE = 0, grouped by assignee.
@@ -180,6 +178,28 @@ get_overtime_report(
     min_overage_minutes=15,         # minimum overage to flag
     include_archived=True
 )
+# OVERTIME LOGIC — ESTIMATION CONSISTENCY RULE:
+#   • Main task (no parent): uses est_total / tracked_total (subtask rollup included)
+#   • Subtask (has parent):  uses est_direct / tracked_direct (independent)
+#
+# WHY THIS MATTERS:
+#   ClickUp rolls subtask time into the parent's time entries.
+#   Using est_direct on a parent while fetched entries include subtask time
+#   produces false overtime. Always compare total vs total OR direct vs direct.
+#
+# PER-USER OVERAGE DISPLAY:
+#   Each user's overage = their proportional share of total task overage
+#   (based on fraction of period-tracked time), NOT raw (t_ms - split_estimate).
+#
+# EXAMPLE (SLM research task):
+#   est_total=10h, tracked_total=11h 3m → overage=1h 3m  ✅ CORRECT
+#   (Old logic: est_direct=6h vs all entries=11h 3m → overage=5h 3m  ❌ WRONG)
+#
+# RETURNS:
+#   formatted_output  → markdown table (render verbatim)
+#   members           → {member: {overtime_tasks, total_overtime, tasks[...]}}
+#   summary_table     → [{member, overtime_tasks, total_overtime}]
+#   total_overtime_tasks, scope, period
 ```
 
 ## ASYNC WORKFLOW
