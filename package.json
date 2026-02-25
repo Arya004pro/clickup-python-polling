@@ -1,0 +1,9 @@
+{
+  "name": "clickup-python-polling",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "myenv\\Scripts\\python.exe clickup_mcp/watch-restart.py"
+  },
+  "description": "Helper scripts for running the MCP server",
+  "dependencies": {}
+}

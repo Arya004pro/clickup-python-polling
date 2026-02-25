@@ -1,9 +1,34 @@
 # app/mcp/workspace_structure.py
 
+import json
+import requests
+
 from fastmcp import FastMCP
-from app.clickup import _get, BASE_URL
-from app.config import CLICKUP_TEAM_ID
-import json  # ← added for pretty printing
+from app.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, BASE_URL
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.status_helpers import (
+    get_effective_statuses,
+    extract_statuses_from_response,
+    get_workspace_members,
+    resolve_multiple_assignees,
+)
+
+
+def _get(url, params=None):
+    """Self-contained GET helper — uses shared client session for connection pooling."""
+    # Extract endpoint from full URL if needed
+    if url.startswith(BASE_URL):
+        endpoint = url[len(BASE_URL):]
+        data, err = _client.get(endpoint, params=params)
+        if err:
+            raise RuntimeError(f"ClickUp API error: {err}")
+        return data
+    # Fallback for full URLs
+    headers = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+    resp = _client._session.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"ClickUp API error {resp.status_code}: {resp.text}")
+    return resp.json()
 
 
 def register_workspace_tools(mcp: FastMCP):
@@ -45,17 +70,44 @@ def register_workspace_tools(mcp: FastMCP):
     def get_spaces(workspace_id: str = None):
         """
         List all spaces inside a specific workspace (team).
-        Returns pretty-printed JSON list.
+
+        Args:
+            workspace_id: Workspace/Team ID or Name (will auto-resolve names to IDs).
+                         If not provided, uses default team from config.
+
+        Returns:
+            List of spaces with their IDs, names, and metadata.
         """
-        team_id = workspace_id or CLICKUP_TEAM_ID
-
-        if not team_id:
-            teams = _get(f"{BASE_URL}/team").get("teams", [])
-            if not teams:
-                return {"error": "No workspaces found"}
-            team_id = teams[0]["id"]
-
         try:
+            # Step 1: Resolve workspace_id (could be name or ID)
+            team_id = workspace_id or CLICKUP_TEAM_ID
+
+            if not team_id:
+                teams = _get(f"{BASE_URL}/team").get("teams", [])
+                if not teams:
+                    return {"error": "No workspaces found"}
+                team_id = teams[0]["id"]
+
+            # Step 2: If team_id looks like a name (not numeric), resolve it
+            if team_id and not team_id.isdigit():
+                teams = _get(f"{BASE_URL}/team").get("teams", [])
+                found = False
+                for t in teams:
+                    if t["name"].lower() == team_id.lower():
+                        team_id = t["id"]
+                        found = True
+                        break
+
+                if not found:
+                    return {
+                        "error": f"Workspace '{workspace_id}' not found",
+                        "hint": f"Available workspaces: {[t['name'] for t in teams]}",
+                        "available_workspaces": [
+                            {"id": t["id"], "name": t["name"]} for t in teams
+                        ],
+                    }
+
+            # Step 3: Fetch spaces
             spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
             spaces = spaces_data.get("spaces", [])
 
@@ -71,7 +123,14 @@ def register_workspace_tools(mcp: FastMCP):
                 for s in spaces
             ]
 
-            return result
+            return {
+                "workspace_id": team_id,
+                "workspace_name": workspace_id
+                if workspace_id and not workspace_id.isdigit()
+                else None,
+                "total_spaces": len(result),
+                "spaces": result,
+            }
 
         except Exception as e:
             return {"error": f"Failed to fetch spaces: {str(e)}"}
@@ -80,42 +139,74 @@ def register_workspace_tools(mcp: FastMCP):
     def get_space(space_id: str):
         """
         Get detailed information about a specific ClickUp space.
-        Returns pretty-printed JSON object.
+
+        Args:
+            space_id: Space ID or Name (will auto-resolve names to IDs).
+
+        Returns:
+            Detailed space information including statuses, features, and permissions.
         """
         try:
-            # Try direct fetch first
-            space_data = _get(f"{BASE_URL}/space/{space_id}")
-            space = space_data.get("space", {})
-
-            if space and space.get("id") == space_id:
-                return format_space_details(space)
-
-            # Fallback: search in team spaces
-            print(f"[DEBUG] Direct fetch failed. Trying team fallback for {space_id}")
+            # Step 1: Get team ID for resolution
             team_id = CLICKUP_TEAM_ID
             if not team_id:
                 teams = _get(f"{BASE_URL}/team").get("teams", [])
                 if teams:
                     team_id = teams[0]["id"]
 
+            # Step 2: If space_id looks like a name (not numeric), resolve it
+            resolved_space_id = space_id
+            if not space_id.isdigit():
+                if team_id:
+                    spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
+                    all_spaces = spaces_data.get("spaces", [])
+
+                    # Search by name (case-insensitive)
+                    found = False
+                    for s in all_spaces:
+                        if s["name"].lower() == space_id.lower():
+                            resolved_space_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{space_id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+            # Step 3: Try direct fetch with resolved ID
+            space_data = _get(f"{BASE_URL}/space/{resolved_space_id}")
+            space = space_data.get("space", {})
+
+            if space and space.get("id") == resolved_space_id:
+                return format_space_details(space)
+
+            # Step 4: Fallback search
             if team_id:
                 spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
                 all_spaces = spaces_data.get("spaces", [])
                 for s in all_spaces:
-                    if s["id"] == space_id:
+                    if s["id"] == resolved_space_id:
                         return format_space_details(s)
 
             return {
                 "space_id": space_id,
                 "error": "Space not found or not accessible",
-                "hint": "Check if ID exists in get_spaces output and token has access",
+                "hint": "Check if ID/name exists in get_spaces output and token has access",
             }
 
         except Exception as e:
             return {"error": str(e)}
 
     def format_space_details(space: dict) -> dict:
-        """Consistent formatting helper"""
+        """Consistent formatting helper with safe status extraction"""
+        # Extract statuses safely from potentially wrapped response
+        statuses = extract_statuses_from_response(space)
+
         return {
             "space_id": space["id"],
             "name": space["name"],
@@ -124,8 +215,8 @@ def register_workspace_tools(mcp: FastMCP):
             "team_id": space.get("team_id"),
             "archived": space.get("archived", False),
             "multiple_assignees": space.get("multiple_assignees_enabled", False),
-            "statuses": space.get("statuses", []),
-            "status_count": len(space.get("statuses", [])),
+            "statuses": statuses,
+            "status_count": len(statuses),
             "features": space.get("features", {}),
             "permissions": space.get("permissions", {}),
         }
@@ -135,14 +226,44 @@ def register_workspace_tools(mcp: FastMCP):
         """
         List all folders inside a specific ClickUp space.
 
-        Parameters:
-        - space_id (string, required): The ID of the space to fetch folders from.
+        Args:
+            space_id: Space ID or Name (will auto-resolve names to IDs).
 
         Returns:
-        Pretty-printed JSON list of folders with IDs, names, list count, etc.
+            List of folders with IDs, names, and list summaries.
         """
         try:
-            folders_data = _get(f"{BASE_URL}/space/{space_id}/folder")
+            # Step 1: Resolve space name to ID if needed
+            resolved_space_id = space_id
+            if not space_id.isdigit():
+                team_id = CLICKUP_TEAM_ID
+                if not team_id:
+                    teams = _get(f"{BASE_URL}/team").get("teams", [])
+                    if teams:
+                        team_id = teams[0]["id"]
+
+                if team_id:
+                    spaces_data = _get(f"{BASE_URL}/team/{team_id}/space")
+                    all_spaces = spaces_data.get("spaces", [])
+
+                    found = False
+                    for s in all_spaces:
+                        if s["name"].lower() == space_id.lower():
+                            resolved_space_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{space_id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+            # Step 2: Fetch folders
+            folders_data = _get(f"{BASE_URL}/space/{resolved_space_id}/folder")
             folders = folders_data.get("folders", [])
 
             if not folders:
@@ -247,14 +368,20 @@ def register_workspace_tools(mcp: FastMCP):
         }
 
         for lst in folder.get("lists", []):
+            list_id = lst["id"]
+
+            # Get effective statuses (handles inheritance)
+            effective_statuses = get_effective_statuses(list_id)
+
             result["lists"].append(
                 {
-                    "list_id": lst["id"],
+                    "list_id": list_id,
                     "name": lst["name"],
                     "orderindex": lst.get("orderindex"),
                     "task_count": lst.get("task_count", 0),
-                    "status_count": len(lst.get("statuses", [])),
-                    "statuses": lst.get("statuses", []),
+                    "status_count": effective_statuses.get("status_count", 0),
+                    "statuses": effective_statuses.get("statuses", []),
+                    "status_source": effective_statuses.get("source", "unknown"),
                 }
             )
 
@@ -338,17 +465,23 @@ def register_workspace_tools(mcp: FastMCP):
     def build_lists_result(
         lists: list, folder_id: str = None, space_id: str = None
     ) -> list[dict]:
-        """Format list data consistently"""
+        """Format list data consistently with effective status resolution"""
         result = []
         for lst in lists:
+            list_id = lst["id"]
+
+            # Get effective statuses (handles inheritance from space)
+            effective_statuses = get_effective_statuses(list_id)
+
             result.append(
                 {
-                    "list_id": lst["id"],
+                    "list_id": list_id,
                     "name": lst["name"],
                     "orderindex": lst.get("orderindex"),
                     "task_count": lst.get("task_count", 0),
-                    "status_count": len(lst.get("statuses", [])),
-                    "statuses": lst.get("statuses", []),
+                    "status_count": effective_statuses.get("status_count", 0),
+                    "statuses": effective_statuses.get("statuses", []),
+                    "status_source": effective_statuses.get("source", "unknown"),
                     "folder_id": folder_id,
                     "space_id": space_id or lst.get("space", {}).get("id"),
                 }
@@ -379,14 +512,20 @@ def register_workspace_tools(mcp: FastMCP):
 
             result = []
             for lst in lists:
+                list_id = lst["id"]
+
+                # Get effective statuses (handles inheritance)
+                effective_statuses = get_effective_statuses(list_id)
+
                 result.append(
                     {
-                        "list_id": lst["id"],
+                        "list_id": list_id,
                         "name": lst["name"],
                         "orderindex": lst.get("orderindex"),
                         "task_count": lst.get("task_count", 0),
-                        "status_count": len(lst.get("statuses", [])),
-                        "statuses": lst.get("statuses", []),  # full statuses if needed
+                        "status_count": effective_statuses.get("status_count", 0),
+                        "statuses": effective_statuses.get("statuses", []),
+                        "status_source": effective_statuses.get("source", "unknown"),
                     }
                 )
 
@@ -501,9 +640,14 @@ def register_workspace_tools(mcp: FastMCP):
             return {"error": str(e)}
 
     def build_list_result(lst: dict) -> dict:
-        """Format list data consistently"""
+        """Format list data consistently with effective status resolution"""
+        list_id = lst["id"]
+
+        # Get effective statuses (handles inheritance)
+        effective_statuses = get_effective_statuses(list_id)
+
         res = {
-            "list_id": lst["id"],
+            "list_id": list_id,
             "name": lst["name"],
             "orderindex": lst.get("orderindex"),
             "content": lst.get("content"),
@@ -512,8 +656,9 @@ def register_workspace_tools(mcp: FastMCP):
             "folder_name": lst.get("folder", {}).get("name"),
             "space_id": lst.get("space", {}).get("id"),
             "space_name": lst.get("space", {}).get("name"),
-            "statuses": lst.get("statuses", []),
-            "status_count": len(lst.get("statuses", [])),
+            "statuses": effective_statuses.get("statuses", []),
+            "status_count": effective_statuses.get("status_count", 0),
+            "status_source": effective_statuses.get("source", "unknown"),
             "priority_enabled": lst.get("priority_enabled", False),
             "custom_fields_enabled": lst.get("custom_fields_enabled", False),
             "multiple_assignees_flag": lst.get("multiple_assignees", None),
@@ -615,39 +760,73 @@ def register_workspace_tools(mcp: FastMCP):
         Returns:
         Pretty-printed confirmation message.
         """
-        from app.clickup import (
-            fetch_all_spaces,
-            fetch_all_lists_in_space,
-        )  # import cached functions
+        # workspace_structure fetches data live via direct API calls with no
+        # local lru_cache, so there is nothing to clear here.  Restart the MCP
+        # server process if you need a fully cold state.
+        valid_types = {"all", "workspaces", "spaces", "folders", "lists", "tasks"}
+        if type not in valid_types:
+            return {
+                "status": "invalid_type",
+                "message": f"Unknown type '{type}'. Valid: {sorted(valid_types)}",
+            }
+        return {
+            "status": "no_op",
+            "message": "No caches to clear — all data is fetched live from the ClickUp API.",
+        }
 
-        cleared = []
+    @mcp.tool
+    def get_team_members(workspace_id: str = None):
+        """
+        Get all members/assignees from a workspace.
+        Returns member details including IDs, usernames, emails, and roles.
 
+        Args:
+            workspace_id: The workspace/team ID (optional, uses default if not provided)
+
+        Returns:
+            List of team members with their user IDs, usernames, emails, and roles.
+        """
         try:
-            if type in ("all", "workspaces"):
-                fetch_all_spaces.cache_clear()
-                cleared.append("workspaces")
-
-            if type in ("all", "spaces", "folders", "lists"):
-                fetch_all_lists_in_space.cache_clear()
-                cleared.append("lists_in_space")
-
-            # Add more caches if you create them later (e.g., task lists, time entries)
-            # Example:
-            # if type in ("all", "tasks"):
-            #     fetch_tasks_from_list.cache_clear()
-            #     cleared.append("tasks")
-
-            if not cleared:
-                return {
-                    "status": "nothing_cleared",
-                    "message": f"No caches cleared for type '{type}'. Valid types: 'all', 'workspaces', 'spaces', 'folders', 'lists', 'tasks'",
-                }
+            result = get_workspace_members(workspace_id)
+            if "error" in result:
+                return result
 
             return {
-                "status": "success",
-                "cleared": cleared,
-                "message": f"Cache cleared for: {', '.join(cleared)}",
+                "workspace_id": result["workspace_id"],
+                "workspace_name": result["workspace_name"],
+                "total_members": result["member_count"],
+                "members": result["members"],
             }
-
         except Exception as e:
-            return {"status": "error", "message": f"Failed to clear cache: {str(e)}"}
+            return {"error": f"Failed to fetch team members: {str(e)}"}
+
+    @mcp.tool
+    def resolve_assignees(assignee_names: list[str], workspace_id: str = None):
+        """
+        Resolve assignee names/usernames to their user IDs.
+        Use this before calling tools that require assignee IDs.
+
+        Args:
+            assignee_names: List of usernames or emails to resolve (e.g., ["Henish Patel", "user@example.com"])
+            workspace_id: Optional workspace ID to search in
+
+        Returns:
+            Dictionary with resolved IDs and any names that couldn't be found.
+
+        Example:
+            Input: ["Henish Patel", "John Doe"]
+            Output: {
+                "resolved": [{"name": "Henish Patel", "id": 12345678}],
+                "resolved_ids": [12345678],
+                "not_found": ["John Doe"],
+                "success": false
+            }
+        """
+        try:
+            if not assignee_names:
+                return {"error": "No assignee names provided"}
+
+            result = resolve_multiple_assignees(assignee_names, workspace_id)
+            return result
+        except Exception as e:
+            return {"error": f"Failed to resolve assignees: {str(e)}"}

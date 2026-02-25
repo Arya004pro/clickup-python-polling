@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Any
 import requests
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.api_client import client as _client
 
 # --- Constants & Configuration ---
 DATA_FILE = "project_map.json"
@@ -105,12 +106,12 @@ def _slugify(text: str) -> str:
 
 
 def _api_get(endpoint: str, params: dict = None) -> Optional[dict]:
-    """Generic API GET wrapper."""
+    """Generic API GET wrapper — delegates to shared client for connection pooling."""
     try:
-        response = requests.get(f"{BASE_URL}{endpoint}", headers=HEADERS, params=params)
-        if response.status_code == 200:
-            return response.json()
-        return None
+        data, err = _client.get(endpoint, params=params)
+        if err:
+            return None
+        return data
     except Exception as e:
         print(f"API Error: {e}")
         return None
@@ -165,6 +166,154 @@ def _fetch_full_structure(entity_id: str, entity_type: str) -> dict:
             # Lists are leaf nodes (ignoring tasks for structure mapping)
 
     return structure
+
+
+def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[dict]:
+    """Recursively search for an entity by name in a structure."""
+    if not structure or not search_name:
+        return None
+    search_lower = search_name.lower().strip()
+    if structure.get("name", "").lower() == search_lower:
+        return {
+            "id": structure["id"],
+            "name": structure["name"],
+            "type": structure["type"],
+            "structure": structure,
+            "found_at": "root",
+        }
+    for child in structure.get("children", []):
+        if child.get("name", "").lower() == search_lower:
+            return {
+                "id": child["id"],
+                "name": child["name"],
+                "type": child["type"],
+                "structure": child,
+                "parent_name": structure.get("name"),
+                "parent_type": structure.get("type"),
+                "parent_id": structure.get("id"),
+                "found_at": "direct_child",
+            }
+        if child.get("children"):
+            nested = _search_entity_in_structure(child, search_name)
+            if nested:
+                nested["parent_name"] = structure.get("name")
+                nested["parent_type"] = structure.get("type")
+                nested["parent_id"] = structure.get("id")
+                nested["found_at"] = "nested"
+                return nested
+    return None
+
+
+def find_entity_anywhere(entity_name: str) -> Optional[dict]:
+    """
+    Universal entity finder. Searches for a space, folder, or list by name.
+    Search priority:
+    1. Mapped projects in project_map.json
+    2. Live API search across all spaces
+    """
+    if not entity_name:
+        return None
+    search_lower = entity_name.lower().strip()
+
+    # 1. Search in mapped projects
+    for alias, data in db.projects.items():
+        structure = data.get("structure", {})
+        if search_lower in [
+            alias.lower(),
+            data.get("alias", "").lower(),
+            structure.get("name", "").lower(),
+        ]:
+            return {
+                "id": data["clickup_id"],
+                "name": structure.get("name", alias),
+                "type": data["clickup_type"],
+                "structure": structure,
+                "source": "project_map",
+                "alias": alias,
+                "found_at": "root",
+            }
+        result = _search_entity_in_structure(structure, entity_name)
+        if result:
+            result["source"] = "project_map"
+            result["root_alias"] = alias
+            return result
+
+    # 2. Live API search
+    teams_data = _api_get("/team")
+    if not teams_data:
+        return None
+    team_id = teams_data["teams"][0]["id"]
+    spaces_data = _api_get(f"/team/{team_id}/space")
+    if not spaces_data:
+        return None
+
+    for space in spaces_data.get("spaces", []):
+        if space["name"].lower() == search_lower:
+            return {
+                "id": space["id"],
+                "name": space["name"],
+                "type": "space",
+                "structure": _fetch_full_structure(space["id"], "space"),
+                "source": "api",
+                "found_at": "root",
+            }
+        folders_data = _api_get(f"/space/{space['id']}/folder")
+        if folders_data:
+            for folder in folders_data.get("folders", []):
+                if folder["name"].lower() == search_lower:
+                    return {
+                        "id": folder["id"],
+                        "name": folder["name"],
+                        "type": "folder",
+                        "structure": _fetch_full_structure(folder["id"], "folder"),
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folder",
+                    }
+                lists_data = _api_get(f"/folder/{folder['id']}/list")
+                if lists_data:
+                    for lst in lists_data.get("lists", []):
+                        if lst["name"].lower() == search_lower:
+                            return {
+                                "id": lst["id"],
+                                "name": lst["name"],
+                                "type": "list",
+                                "structure": {
+                                    "id": lst["id"],
+                                    "name": lst["name"],
+                                    "type": "list",
+                                },
+                                "parent_name": folder["name"],
+                                "parent_type": "folder",
+                                "parent_id": folder["id"],
+                                "grandparent_name": space["name"],
+                                "grandparent_type": "space",
+                                "grandparent_id": space["id"],
+                                "source": "api",
+                                "found_at": "list_in_folder",
+                            }
+        lists_data = _api_get(f"/space/{space['id']}/list")
+        if lists_data:
+            for lst in lists_data.get("lists", []):
+                if lst["name"].lower() == search_lower:
+                    return {
+                        "id": lst["id"],
+                        "name": lst["name"],
+                        "type": "list",
+                        "structure": {
+                            "id": lst["id"],
+                            "name": lst["name"],
+                            "type": "list",
+                        },
+                        "parent_name": space["name"],
+                        "parent_type": "space",
+                        "parent_id": space["id"],
+                        "source": "api",
+                        "found_at": "folderless_list",
+                    }
+    return None
 
 
 # --- Tools Definition ---
@@ -253,21 +402,57 @@ def register_sync_mapping_tools(mcp: FastMCP):
     def map_project(id: str, type: str, alias: str = None) -> dict:
         """
         Map a ClickUp entity (Space, Folder, or List) as a 'Project'.
-        Verifies ID, fetches internal structure, and persists mapping.
+        Verifies ID/Name, fetches internal structure, and persists mapping.
+
+        Args:
+            id: Entity ID or Name (will auto-resolve names to IDs for spaces).
+            type: Entity type - must be 'space', 'folder', or 'list'.
+            alias: Optional custom alias for the project (auto-generated if not provided).
+
+        Returns:
+            Mapping confirmation with project details.
         """
         if type not in ["space", "folder", "list"]:
             return {"error": "Type must be 'space', 'folder', or 'list'."}
 
-        # Verify ID and get initial Name
-        structure = _fetch_full_structure(id, type)
+        # Step 1: Resolve name to ID if needed (for spaces)
+        resolved_id = id
+        if type == "space" and not id.isdigit():
+            # Try to resolve space name to ID
+            teams_data = _api_get("/team")
+            if teams_data and teams_data.get("teams"):
+                team_id = teams_data["teams"][0]["id"]
+                spaces_data = _api_get(f"/team/{team_id}/space")
+
+                if spaces_data:
+                    all_spaces = spaces_data.get("spaces", [])
+                    found = False
+
+                    for s in all_spaces:
+                        if s["name"].lower() == id.lower():
+                            resolved_id = s["id"]
+                            found = True
+                            break
+
+                    if not found:
+                        return {
+                            "error": f"Space '{id}' not found",
+                            "hint": f"Available spaces: {[s['name'] for s in all_spaces]}",
+                            "available_spaces": [
+                                {"id": s["id"], "name": s["name"]} for s in all_spaces
+                            ],
+                        }
+
+        # Step 2: Verify ID and get initial structure
+        structure = _fetch_full_structure(resolved_id, type)
         if "name" not in structure:
             return {
-                "error": f"Could not verify {type} with ID {id}. Check ID or permissions."
+                "error": f"Could not verify {type} with ID/Name '{id}'. Check ID or permissions."
             }
 
         final_alias = alias or _slugify(structure["name"])
 
-        # Check if alias exists
+        # Step 3: Check if alias exists
         if final_alias in db.projects:
             return {
                 "error": f"Alias '{final_alias}' already exists. Please choose another."
@@ -275,7 +460,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
 
         mapping_data = {
             "alias": final_alias,
-            "clickup_id": id,
+            "clickup_id": resolved_id,
             "clickup_type": type,
             "last_sync": time.time(),
             "structure": structure,
@@ -401,3 +586,84 @@ def register_sync_mapping_tools(mcp: FastMCP):
         """Remove expired cache entries."""
         count = db.prune_expired_cache()
         return {"success": True, "removed_entries": count, "message": "Cache pruned."}
+
+    @mcp.tool()
+    def find_project_anywhere(project_name: str) -> dict:
+        """
+        Universal project/entity finder. Search for any space, folder, or list by name.
+        Works regardless of where the entity is located in the hierarchy.
+        Use this BEFORE any report tool to resolve the entity type and ID.
+        """
+        result = find_entity_anywhere(project_name)
+        if not result:
+            return {
+                "error": f"Project '{project_name}' not found",
+                "suggestion": "Try discover_hierarchy() to see all available spaces, folders, and lists",
+            }
+        response = {
+            "found": True,
+            "name": result["name"],
+            "id": result["id"],
+            "type": result["type"],
+            "source": result["source"],
+            "location": result.get("found_at", "unknown"),
+        }
+        if result.get("parent_name"):
+            response["parent"] = {
+                "name": result["parent_name"],
+                "type": result["parent_type"],
+                "id": result["parent_id"],
+            }
+        if result.get("grandparent_name"):
+            response["grandparent"] = {
+                "name": result["grandparent_name"],
+                "type": result["grandparent_type"],
+                "id": result["grandparent_id"],
+            }
+        if result.get("structure"):
+            children = result["structure"].get("children", [])
+            if children:
+                response["contains"] = {
+                    "total_children": len(children),
+                    "children": [
+                        {"name": c.get("name"), "type": c.get("type")}
+                        for c in children[:10]
+                    ],
+                }
+                if len(children) > 10:
+                    response["contains"]["note"] = (
+                        f"Showing 10 of {len(children)} items"
+                    )
+        response["usage_hint"] = (
+            f"Use this {result['type']} ID ({result['id']}) with report generation tools"
+        )
+        return response
+
+    @mcp.tool()
+    def get_environment_context() -> dict:
+        """
+        Bootstrap tool: returns MCP environment state including
+        mapped projects, cache status, and usage guidance.
+        Call this at session start.
+        """
+        projects = [
+            {
+                "alias": alias,
+                "clickup_id": data.get("clickup_id"),
+                "type": data.get("clickup_type"),
+                "last_sync": data.get("last_sync"),
+            }
+            for alias, data in db.projects.items()
+        ]
+
+        return {
+            "mapped_projects_count": len(projects),
+            "mapped_projects": projects,
+            "cached_items": len(db.cache),
+            "storage": DATA_FILE,
+            "server_status": "ready",
+            "usage_guidance": {
+                "mapped_projects": "Use mapped project tools for analytics/reporting.",
+                "raw_clickup": "Use raw fetch tools only for discovery or unmapped entities.",
+            },
+        }

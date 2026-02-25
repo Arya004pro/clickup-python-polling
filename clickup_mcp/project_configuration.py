@@ -10,69 +10,17 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.clickup_shared import (
+    STATUS_NAME_OVERRIDES,
+    STATUS_OVERRIDE_MAP,
+    get_status_category,
+)
 
 TRACKED_PROJECTS = []  # In-memory storage
 
-# --- Standardized Status Logic (Consistent with PM Analytics) ---
-STATUS_NAME_OVERRIDES = {
-    "not_started": [
-        "BACKLOG",
-        "QUEUED",
-        "QUEUE",
-        "IN QUEUE",
-        "TO DO",
-        "TO-DO",
-        "PENDING",
-        "OPEN",
-        "IN PLANNING",
-    ],
-    "active": [
-        "SCOPING",
-        "IN DESIGN",
-        "DEV",
-        "IN DEVELOPMENT",
-        "DEVELOPMENT",
-        "REVIEW",
-        "IN REVIEW",
-        "TESTING",
-        "QA",
-        "BUG",
-        "BLOCKED",
-        "WAITING",
-        "STAGING DEPLOY",
-        "READY FOR DEVELOPMENT",
-        "READY FOR PRODUCTION",
-        "IN PROGRESS",
-        "ON HOLD",
-    ],
-    "done": ["SHIPPED", "RELEASE", "COMPLETE", "DONE", "RESOLVED", "PROD", "QC CHECK"],
-    "closed": ["CANCELLED", "CLOSED"],
-}
 
-STATUS_OVERRIDE_MAP = {
-    s.upper(): cat for cat, statuses in STATUS_NAME_OVERRIDES.items() for s in statuses
-}
-
-
-def get_status_category(status_name: str, status_type: str = None) -> str:
-    if not status_name:
-        return "other"
-    # 1. Check Overrides (Project Specific naming conventions)
-    if cat := STATUS_OVERRIDE_MAP.get(status_name.upper()):
-        return cat
-    # 2. Check ClickUp Internal Type
-    if status_type:
-        type_map = {
-            "open": "not_started",
-            "done": "done",
-            "closed": "closed",
-            "custom": "active",
-        }
-        return type_map.get(status_type.lower(), "other")
-    return "other"
-
-
-# --- Helpers ---
+# --- Helpers (delegated to shared client) ---
 
 
 def _api_call(
@@ -81,25 +29,20 @@ def _api_call(
     params: Optional[Dict] = None,
     payload: Optional[Dict] = None,
 ):
-    try:
-        headers = {
-            "Authorization": CLICKUP_API_TOKEN,
-            "Content-Type": "application/json",
-        }
-        resp = requests.request(
-            method,
-            f"{BASE_URL}{endpoint}",
-            headers=headers,
-            params=params,
-            json=payload,
-        )
-        return (
-            (resp.json(), None)
-            if resp.status_code == 200
-            else (None, f"API {resp.status_code}")
-        )
-    except Exception as e:
-        return None, str(e)
+    """API call handler — delegates to shared client for connection pooling."""
+    method_upper = method.upper()
+    fn = {
+        "GET": _client.get,
+        "POST": _client.post,
+        "PUT": _client.put,
+        "DELETE": _client.delete,
+    }.get(method_upper, _client.get)
+    kwargs = {}
+    if params:
+        kwargs["params"] = params
+    if payload:
+        kwargs["json"] = payload
+    return fn(endpoint, **kwargs)
 
 
 def _get_list_ids(p: Dict) -> List[str]:

@@ -10,6 +10,14 @@ import re
 import time
 from typing import List, Dict
 from app.config import CLICKUP_API_TOKEN, BASE_URL
+from .api_client import client as _client
+from .clickup_shared import (
+    safe_get as _safe_get,
+    format_assignees as _format_assignees,
+    format_duration as _format_duration,
+    calculate_task_metrics as _calculate_task_metrics,
+    fetch_missing_parents as _fetch_missing_parents,
+)
 
 try:
     from app.config import CLICKUP_TEAM_ID
@@ -19,7 +27,7 @@ except ImportError:
 SPACE_NAME_CACHE = {}
 
 # ============================================================================
-# HELPER FUNCTIONS (API & Formatting)
+# HELPER FUNCTIONS (API & Formatting) — delegated to shared client
 # ============================================================================
 
 
@@ -28,225 +36,35 @@ def _headers():
 
 
 def _api_call(method, endpoint, params=None, payload=None):
-    """Unified API call handler."""
-    url = f"{BASE_URL}{endpoint}"
-    kwargs = {"headers": _headers()}
+    """Unified API call handler — delegates to shared client."""
+    fn = {
+        "GET": _client.get,
+        "POST": _client.post,
+        "PUT": _client.put,
+        "DELETE": _client.delete,
+    }.get(method.upper(), _client.get)
+    kwargs = {}
     if params:
         kwargs["params"] = params
     if payload:
         kwargs["json"] = payload
-
-    response = getattr(requests, method)(url, **kwargs)
-    success_codes = (200, 201) if method in ("post", "put") else (200,)
-
-    if response.status_code not in success_codes:
-        return None, f"API error {response.status_code}: {response.text}"
-    return response.json(), None
+    return fn(endpoint, **kwargs)
 
 
 def _get_team_id():
-    if CLICKUP_TEAM_ID:
-        return CLICKUP_TEAM_ID, None
-    data, err = _api_call("get", "/team")
-    if err:
-        return None, err
-    teams = data.get("teams", [])
-    return teams[0]["id"] if teams else None, "No teams found" if not teams else None
-
-
-def _safe_get(obj, *keys):
-    for key in keys:
-        obj = obj.get(key) if isinstance(obj, dict) else None
-        if obj is None:
-            return None
-    return obj
-
-
-def _format_assignees(assignees):
-    return [a.get("username") for a in (assignees or []) if a.get("username")]
-
-
-def _format_duration(ms: int) -> str:
-    """Format milliseconds to human-readable duration."""
-    if not ms:
-        return "0 min"
-    seconds = int(ms) // 1000
-    if seconds < 60:
-        return f"{seconds} sec"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} min"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours} hr {minutes % 60} min"
-    days = hours // 24
-    return f"{days} d {hours % 24} hr"
+    return _client.get_team_id(), None
 
 
 # ============================================================================
-# CORE LOGIC (Ported from pm_analytics.py for consistency)
+# CORE LOGIC — delegated to shared modules
 # ============================================================================
 
 
 def _fetch_all_tasks(
     list_ids: List[str], base_params: Dict, include_archived: bool = True
 ) -> List[Dict]:
-    """
-    Fetch ALL tasks including deeply nested subtasks.
-
-    By default this will include archived tasks. Set `include_archived=False` to only fetch active tasks.
-    """
-    all_tasks = []
-    seen_ids = set()
-
-    flags = [False, True] if include_archived else [False]
-
-    for list_id in list_ids:
-        for is_archived in flags:
-            page = 0
-            while True:
-                # Params: subtasks=true forces ClickUp to return nested tasks in the main list
-                params = {
-                    **base_params,
-                    "page": page,
-                    "subtasks": "true",
-                    "archived": str(is_archived).lower(),
-                }
-
-                data, error = _api_call("get", f"/list/{list_id}/task", params=params)
-
-                if error or not data:
-                    break
-
-                tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)]
-                if not tasks:
-                    break
-
-                for t in tasks:
-                    if t.get("id") not in seen_ids:
-                        seen_ids.add(t.get("id"))
-                        all_tasks.append(t)
-
-                if len(tasks) < 100:
-                    break
-                page += 1
-
-    return all_tasks
-
-
-def _fetch_missing_parents(all_tasks: List[Dict]) -> List[Dict]:
-    """
-    Identifies if any tasks have parents that are NOT in the current list,
-    and fetches them. This ensures cross-list parents (Main Tasks) are included.
-    """
-    existing_ids = {t["id"] for t in all_tasks}
-    missing_parents = set()
-
-    for t in all_tasks:
-        parent_id = t.get("parent")
-        if parent_id and parent_id not in existing_ids:
-            missing_parents.add(parent_id)
-
-    if not missing_parents:
-        return all_tasks
-
-    extended_tasks = all_tasks.copy()
-
-    for pid in missing_parents:
-        data, err = _api_call("get", f"/task/{pid}")
-        if data and not err:
-            if data["id"] not in existing_ids:
-                existing_ids.add(data["id"])
-                extended_tasks.append(data)
-
-                # Fetch grandparent if needed (1 level up)
-                grandparent = data.get("parent")
-                if grandparent and grandparent not in existing_ids:
-                    gp_data, gp_err = _api_call("get", f"/task/{grandparent}")
-                    if gp_data and not gp_err and gp_data["id"] not in existing_ids:
-                        existing_ids.add(gp_data["id"])
-                        extended_tasks.append(gp_data)
-
-    return extended_tasks
-
-
-def _calculate_task_metrics(all_tasks: List[Dict]) -> Dict[str, Dict[str, int]]:
-    """
-    CORE CALCULATION ENGINE: Robust Bottom-Up Calculation.
-    Builds a map of accurate time metrics for ALL tasks.
-    Returns: { task_id: { 'tracked_total': int, 'tracked_direct': int, 'est_total': int, 'est_direct': int } }
-    """
-    task_map = {t["id"]: t for t in all_tasks}
-
-    # Build adjacency list (Parent -> Children)
-    children_map = {}
-    for t in all_tasks:
-        pid = t.get("parent")
-        if pid:
-            if pid not in children_map:
-                children_map[pid] = []
-            children_map[pid].append(t["id"])
-
-    cache = {}
-
-    def get_values(tid):
-        if tid in cache:
-            return cache[tid]
-
-        task_obj = task_map.get(tid, {})
-        if not task_obj:
-            return (0, 0, 0, 0)
-
-        # Raw API values
-        api_tracked = int(task_obj.get("time_spent") or 0)
-        api_est = int(task_obj.get("time_estimate") or 0)
-
-        # Recursively sum children
-        sum_child_total_tracked = 0
-        sum_child_total_est = 0
-
-        for cid in children_map.get(tid, []):
-            c_track, _, c_est, _ = get_values(cid)
-            sum_child_total_tracked += c_track
-            sum_child_total_est += c_est
-
-        # --- Calculate Direct Tracked ---
-        # Logic: If API Time > Children Sum, the remainder is Direct Time.
-        if api_tracked < sum_child_total_tracked:
-            direct_tracked = api_tracked  # Fallback (API returning direct time)
-        else:
-            direct_tracked = api_tracked - sum_child_total_tracked
-        direct_tracked = max(0, direct_tracked)
-
-        # --- Calculate Direct Estimate ---
-        if api_est < sum_child_total_est:
-            direct_est = api_est
-        else:
-            direct_est = api_est - sum_child_total_est
-        direct_est = max(0, direct_est)
-
-        # True Rollup (Calculated fresh to ensure accuracy)
-        true_total_tracked = direct_tracked + sum_child_total_tracked
-        true_total_est = direct_est + sum_child_total_est
-
-        result = (true_total_tracked, direct_tracked, true_total_est, direct_est)
-        cache[tid] = result
-        return result
-
-    # Compute for all tasks
-    for tid in task_map:
-        get_values(tid)
-
-    # Convert tuple to dict
-    final_map = {}
-    for tid, res in cache.items():
-        final_map[tid] = {
-            "tracked_total": res[0],
-            "tracked_direct": res[1],
-            "est_total": res[2],
-            "est_direct": res[3],
-        }
-    return final_map
+    """Fetch ALL tasks using concurrent multi-list fetching (shared client)."""
+    return _client.fetch_all_tasks(list_ids, base_params, include_archived)
 
 
 def _build_subtask_tree(all_tasks: List[Dict], parent_id: str) -> List[Dict]:
@@ -273,13 +91,15 @@ def _build_subtask_tree(all_tasks: List[Dict], parent_id: str) -> List[Dict]:
 
 
 def _paginate_tasks(list_id, include_closed=True):
-    """Fetch all tasks from a list with pagination (Legacy Helper)."""
+    """Fetch all tasks from a list with pagination (Legacy Helper) — uses shared client."""
     all_tasks, page = [], 0
     while True:
-        data, err = _api_call(
-            "get",
+        data, err = _client.get(
             f"/list/{list_id}/task",
-            [("page", str(page)), ("include_closed", str(include_closed).lower())],
+            params=[
+                ("page", str(page)),
+                ("include_closed", str(include_closed).lower()),
+            ],
         )
         if err or not data:
             return all_tasks, err
@@ -304,10 +124,30 @@ def register_task_tools(mcp: FastMCP):
         statuses: list[str] = None,
         assignees: list[int] = None,
         page: int = None,
+        filter_no_time_entries: bool = False,
     ) -> dict:
-        """List tasks in a list with optional filters."""
+        """
+        List tasks in a list with optional filters.
+
+        Args:
+            list_id: The ClickUp list ID to fetch tasks from.
+            include_closed: Whether to include closed tasks.
+            statuses: Filter by specific status names (e.g., ["backlog", "in review"]).
+            assignees: Filter by assignee user IDs (e.g., [12345678, 87654321]).
+                      Use resolve_assignees tool first to convert names to IDs.
+            page: Specific page number (None = fetch all pages).
+            filter_no_time_entries: If True, only return tasks with zero tracked time (time_spent = 0 or None).
+
+        Note:
+            To get assignee IDs from names, use the resolve_assignees tool first:
+            1. Call resolve_assignees(["Henish Patel"]) to get IDs
+            2. Use the returned IDs in this tool's assignees parameter
+        """
         try:
-            params = [("include_closed", str(include_closed).lower())]
+            params = [
+                ("include_closed", str(include_closed).lower()),
+                ("subtasks", "true"),  # Include nested subtasks for proper time rollups
+            ]
             if statuses:
                 params.extend([("statuses[]", s) for s in statuses])
             if assignees:
@@ -332,6 +172,10 @@ def register_task_tools(mcp: FastMCP):
                 if page is not None:
                     break
 
+            # Filter for tasks with no time entries if requested
+            if filter_no_time_entries:
+                all_tasks = [t for t in all_tasks if int(t.get("time_spent") or 0) == 0]
+
             formatted = [
                 {
                     "task_id": t.get("id"),
@@ -339,6 +183,10 @@ def register_task_tools(mcp: FastMCP):
                     "status": _safe_get(t, "status", "status"),
                     "assignee": _format_assignees(t.get("assignees")),
                     "due_date": t.get("due_date"),
+                    "time_spent": int(t.get("time_spent") or 0),
+                    "time_spent_readable": _format_duration(
+                        int(t.get("time_spent") or 0)
+                    ),
                 }
                 for t in all_tasks
             ]
@@ -361,6 +209,7 @@ def register_task_tools(mcp: FastMCP):
                 "tasks": formatted,
                 "status_counts": status_counts,
                 "requested_status_counts": requested_status_counts,
+                "filter_applied": "no_time_entries" if filter_no_time_entries else None,
             }
         except Exception as e:
             return {"error": str(e), "tasks": []}
@@ -376,7 +225,9 @@ def register_task_tools(mcp: FastMCP):
         """
         try:
             # 1. Fetch the requested task
-            task_data, err = _api_call("get", f"/task/{task_id}")
+            task_data, err = _api_call(
+                "get", f"/task/{task_id}", params={"include_subtasks": "true"}
+            )
             if err or not task_data:
                 return {"error": f"Task {task_id} not found"}
 
@@ -470,7 +321,19 @@ def register_task_tools(mcp: FastMCP):
         due_date: str = None,
         tags: list[str] = None,
     ) -> dict:
-        """Create a new task."""
+        """
+        Create a new task.
+
+        Args:
+            list_id: The list to create the task in
+            name: Task name/title
+            description: Task description (optional)
+            status: Task status (optional)
+            priority: Task priority (optional)
+            assignees: List of assignee user IDs (use resolve_assignees to convert names to IDs)
+            due_date: Due date in milliseconds (optional)
+            tags: List of tag names (optional)
+        """
         try:
             payload = {
                 k: v
@@ -510,7 +373,23 @@ def register_task_tools(mcp: FastMCP):
         add_assignees: list[int] = None,
         remove_assignees: list[int] = None,
     ) -> dict:
-        """Update an existing task."""
+        """
+        Update an existing task.
+
+        Args:
+            task_id: The task ID to update
+            name: New task name (optional)
+            description: New task description (optional)
+            status: New status (optional)
+            priority: New priority (optional)
+            due_date: New due date (optional)
+            add_assignees: User IDs to add as assignees (optional)
+                          Use resolve_assignees() tool first to convert names to IDs
+            remove_assignees: User IDs to remove from assignees (optional)
+
+        Note: For assignee IDs, use the workspace_structure.resolve_assignees() tool
+        to convert assignee names to user IDs before calling this function.
+        """
         try:
             payload = {
                 k: v

@@ -168,6 +168,7 @@ def fetch_tasks_from_list(list_id, updated_after_ms=None, include_archived=True)
             params = {
                 "page": page,
                 "include_closed": "true",
+                "subtasks": "true",  # Include nested subtasks for proper time rollups
                 **extra,
             }
             try:

@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClickUp Map Explorer | Premium</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b0d11;
+            --sidebar: #12151c;
+            --surface: #1a1e27;
+            --surface-hover: #232936;
+            --border: #2d3446;
+            --text: #f0f2f5;
+            --text-dim: #9ba3b1;
+            --accent: #8b5cf6;
+            --accent-glow: rgba(139, 92, 246, 0.15);
+
+            --idx-space: #38bdf8;
+            --idx-folder: #fbbf24;
+            --idx-list: #4ade80;
+
+            --transition: cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            letter-spacing: -0.01em;
+        }
+
+        /* --- Sidebar & Navigation --- */
+        aside {
+            width: 360px;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            z-index: 20;
+            box-shadow: 20px 0 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .aside-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), #d946ef);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 900;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+        }
+
+        .stat-card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0.75rem;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 700;
+        }
+
+        .aside-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+        }
+
+        .section-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-dim);
+            margin-bottom: 1rem;
+            display: block;
+            font-weight: 800;
+        }
+
+        .parent-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s var(--transition);
+        }
+
+        .parent-item:hover {
+            background: var(--surface-hover);
+            transform: translateX(4px);
+        }
+
+        .parent-name {
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .parent-counts {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chip {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* --- Main Content --- */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .sticky-toolbar {
+            padding: 1rem 2rem;
+            background: rgba(11, 13, 17, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            z-index: 10;
+        }
+
+        .search-outer {
+            flex: 1;
+            position: relative;
+        }
+
+        .search-outer input {
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.75rem 1rem 0.75rem 2.75rem;
+            color: var(--text);
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .search-outer input:focus {
+            border-color: var(--accent);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-dim);
+            pointer-events: none;
+        }
+
+        .btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.6rem 1rem;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--text-dim);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #7c3aed;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px var(--accent-glow);
+        }
+
+        .viewport {
+            flex: 1;
+            overflow: auto;
+            padding: 2rem 3rem;
+        }
+
+        /* --- Tree Elements --- */
+        .tree-root {
+            list-style: none;
+        }
+
+        .tree-branch {
+            list-style: none;
+            margin-left: 1.75rem;
+            border-left: 1px solid var(--border);
+            position: relative;
+        }
+
+        .tree-node {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem 0.75rem;
+            margin: 0.2rem 0;
+            border-radius: 8px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.15s;
+            user-select: none;
+        }
+
+        .tree-node:hover {
+            background: var(--surface-hover);
+        }
+
+        .tree-node.highlighted {
+            background: var(--accent-glow);
+            box-shadow: inset 0 0 0 1px var(--accent);
+        }
+
+        .expander {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            transition: transform 0.2s var(--transition);
+        }
+
+        .expander.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .expander.hidden {
+            visibility: hidden;
+        }
+
+        .icon {
+            width: 18px;
+            height: 18px;
+            margin-right: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .icon-space {
+            color: var(--idx-space);
+        }
+
+        .icon-folder {
+            color: var(--idx-folder);
+        }
+
+        .icon-list {
+            color: var(--idx-list);
+        }
+
+        .node-label {
+            font-size: 0.95rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .node-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            margin-left: 0.75rem;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+        }
+
+        .tree-node:hover .node-id {
+            opacity: 1;
+        }
+
+        /* --- Empty State --- */
+        #empty-state {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 1.5rem;
+        }
+
+        .empty-illustration {
+            width: 120px;
+            height: 120px;
+            background: var(--surface);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+        }
+
+        /* Responsive Tags */
+        .badge-tag {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 0.75rem;
+            border: 1px solid currentColor;
+            opacity: 0.8;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-dim);
+        }
+    </style>
+</head>
+
+<body>
+
+    <aside>
+        <div class="aside-header">
+            <div class="logo">
+                <div class="logo-icon">M</div>
+                <span>Map Explorer</span>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-val" id="count-space">0</span>
+                    <span class="stat-label">Spaces</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-val" id="count-folder">0</span>
+                    <span class="stat-label">Folders</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-val" id="count-list">0</span>
+                    <span class="stat-label">Lists</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="aside-scroll">
+            <span class="section-label">Structure Summary</span>
+            <div id="parent-list">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </aside>
+
+    <main>
+        <div class="sticky-toolbar">
+            <input type="file" id="file-input" style="display:none" accept=".json">
+            <button class="btn btn-primary" id="load-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                Load project_map.json
+            </button>
+
+            <div class="search-outer">
+                <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="M21 21l-4.35-4.35" />
+                </svg>
+                <input type="text" id="search-box" placeholder="Search projects, folders, or IDs...">
+            </div>
+
+            <div style="display:flex; gap: 0.5rem">
+                <button class="btn" id="expand-all">Expand All</button>
+                <button class="btn" id="collapse-all">Collapse All</button>
+            </div>
+        </div>
+
+        <div class="viewport" id="viewport">
+            <div id="empty-state">
+                <div class="empty-illustration">🗺️</div>
+                <div>
+                    <h2 style="font-size: 1.5rem; margin-bottom: 0.5rem">Project Map Viewer</h2>
+                    <p style="color: var(--text-dim)">Select your exported <code>project_map.json</code> file to
+                        visualize your ClickUp hierarchy.</p>
+                </div>
+            </div>
+            <div id="tree-root" class="tree-root"></div>
+        </div>
+    </main>
+
+    <script>
+        const STORAGE_KEY = 'clickup_last_map';
+        const SVGS = {
+            space: `<svg class="icon icon-space" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20"/></svg>`,
+            folder: `<svg class="icon icon-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`,
+            list: `<svg class="icon icon-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11M5 6v.01M5 12v.01M5 18v.01"/></svg>`
+        };
+
+        let fullData = null;
+        let counts = { space: 0, folder: 0, list: 0 };
+        let parentSummary = [];
+
+        // --- DOM Elements ---
+        const fileInput = document.getElementById('file-input');
+        const loadBtn = document.getElementById('load-btn');
+        const treeRoot = document.getElementById('tree-root');
+        const emptyState = document.getElementById('empty-state');
+        const searchBox = document.getElementById('search-box');
+        const parentListEl = document.getElementById('parent-list');
+
+        // --- Core Logic ---
+        loadBtn.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => processData(JSON.parse(ev.target.result));
+            reader.readAsText(file);
+        };
+
+        function processData(data) {
+            fullData = data;
+            counts = { space: 0, folder: 0, list: 0 };
+            parentSummary = [];
+            treeRoot.innerHTML = '';
+            emptyState.style.display = 'none';
+
+            const projects = data.mapped_projects || {};
+            Object.values(projects).forEach(proj => {
+                if (proj.structure) {
+                    renderNode(proj.structure, treeRoot);
+                }
+            });
+
+            updateUI();
+        }
+
+        function renderNode(node, container) {
+            const li = document.createElement('li');
+            const nodeDiv = document.createElement('div');
+            nodeDiv.className = 'tree-node';
+            nodeDiv.id = `node-${node.id}`;
+            nodeDiv.dataset.type = node.type;
+            nodeDiv.dataset.name = node.name.toLowerCase();
+            nodeDiv.dataset.id = node.id;
+
+            const hasChildren = node.children && node.children.length > 0;
+            counts[node.type]++;
+
+            if (hasChildren) {
+                const sum = { name: node.name, id: node.id, f: 0, l: 0 };
+                node.children.forEach(c => c.type === 'folder' ? sum.f++ : sum.l++);
+                parentSummary.push(sum);
+            }
+
+            // 1. Expander
+            const expander = document.createElement('div');
+            expander.className = `expander ${hasChildren ? '' : 'hidden'}`;
+            expander.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>`;
+            nodeDiv.appendChild(expander);
+
+            // 2. Icon
+            const iconWrap = document.createElement('div');
+            iconWrap.innerHTML = SVGS[node.type];
+            nodeDiv.appendChild(iconWrap.firstChild);
+
+            // 3. Label
+            const label = document.createElement('span');
+            label.className = 'node-label';
+            label.textContent = node.name;
+            nodeDiv.appendChild(label);
+
+            // 4. ID
+            const idSpan = document.createElement('span');
+            idSpan.className = 'node-id';
+            idSpan.textContent = `#${node.id}`;
+            nodeDiv.appendChild(idSpan);
+
+            li.appendChild(nodeDiv);
+
+            if (hasChildren) {
+                const ul = document.createElement('ul');
+                ul.className = 'tree-branch';
+                node.children.forEach(child => renderNode(child, ul));
+                li.appendChild(ul);
+
+                nodeDiv.onclick = (e) => {
+                    e.stopPropagation();
+                    ul.style.display = ul.style.display === 'none' ? 'block' : 'none';
+                    expander.classList.toggle('collapsed');
+                };
+            }
+
+            container.appendChild(li);
+        }
+
+        function updateUI() {
+            document.getElementById('count-space').innerText = counts.space;
+            document.getElementById('count-folder').innerText = counts.folder;
+            document.getElementById('count-list').innerText = counts.list;
+
+            parentListEl.innerHTML = '';
+            parentSummary.slice(0, 50).forEach(sum => {
+                const div = document.createElement('div');
+                div.className = 'parent-item';
+                div.onclick = () => scrollToNode(sum.id);
+                div.innerHTML = `
+                <span class="parent-name">${sum.name}</span>
+                <div class="parent-counts">
+                    ${sum.f ? `<span class="chip" style="color:var(--idx-folder)">${sum.f}F</span>` : ''}
+                    ${sum.l ? `<span class="chip" style="color:var(--idx-list)">${sum.l}L</span>` : ''}
+                </div>
+            `;
+                parentListEl.appendChild(div);
+            });
+        }
+
+        function scrollToNode(id) {
+            const el = document.getElementById(`node-${id}`);
+            if (!el) return;
+
+            document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('highlighted'));
+
+            // Ensure all parents are expanded
+            let parent = el.parentElement.parentElement;
+            while (parent && parent.className === 'tree-branch') {
+                parent.style.display = 'block';
+                const nodeDiv = parent.parentElement.querySelector('.tree-node');
+                if (nodeDiv) {
+                    nodeDiv.querySelector('.expander').classList.remove('collapsed');
+                }
+                parent = parent.parentElement.parentElement;
+            }
+
+            el.classList.add('highlighted');
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        searchBox.oninput = (e) => {
+            const val = e.target.value.toLowerCase();
+            if (!val) {
+                document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('highlighted'));
+                return;
+            }
+
+            document.querySelectorAll('.tree-node').forEach(n => {
+                const matches = n.dataset.name.includes(val) || n.dataset.id.includes(val);
+                n.classList.toggle('highlighted', matches);
+                if (matches) {
+                    // Potential expand-to-result logic here
+                }
+            });
+        };
+
+        document.getElementById('expand-all').onclick = () => {
+            document.querySelectorAll('.tree-branch').forEach(b => b.style.display = 'block');
+            document.querySelectorAll('.expander').forEach(e => e.classList.remove('collapsed'));
+        };
+
+        document.getElementById('collapse-all').onclick = () => {
+            document.querySelectorAll('.tree-branch').forEach(b => b.style.display = 'none');
+            document.querySelectorAll('.expander').forEach(e => e.classList.add('collapsed'));
+        };
+    </script>
+
+</body>
+
+</html>

@@ -8,91 +8,50 @@ import requests
 import time
 from fastmcp import FastMCP
 from app.config import CLICKUP_API_TOKEN, BASE_URL
-from .project_configuration import TRACKED_PROJECTS
-
-# --- Status Configuration ---
-STATUS_NAME_OVERRIDES = {
-    "not_started": [
-        "BACKLOG",
-        "QUEUED",
-        "QUEUE",
-        "IN QUEUE",
-        "TO DO",
-        "TO-DO",
-        "PENDING",
-        "OPEN",
-        "IN PLANNING",
-    ],
-    "active": [
-        "SCOPING",
-        "IN DESIGN",
-        "DEV",
-        "IN DEVELOPMENT",
-        "DEVELOPMENT",
-        "REVIEW",
-        "IN REVIEW",
-        "TESTING",
-        "QA",
-        "BUG",
-        "BLOCKED",
-        "WAITING",
-        "STAGING DEPLOY",
-        "READY FOR DEVELOPMENT",
-        "READY FOR PRODUCTION",
-        "IN PROGRESS",
-        "ON HOLD",
-    ],
-    "done": [
-        "SHIPPED",
-        "RELEASE",
-        "COMPLETE",
-        "DONE",
-        "RESOLVED",
-        "PROD",
-        "QC CHECK",
-    ],
-    "closed": ["CANCELLED", "CLOSED"],
-}
-
-STATUS_OVERRIDE_MAP = {
-    s.upper(): cat for cat, statuses in STATUS_NAME_OVERRIDES.items() for s in statuses
-}
+from clickup_mcp.api_client import client as _client
+from clickup_mcp.project_configuration import TRACKED_PROJECTS
+from clickup_mcp.clickup_shared import (
+    STATUS_NAME_OVERRIDES,
+    STATUS_OVERRIDE_MAP,
+    get_status_category,
+    extract_status_name as _extract_status_name,
+    format_duration_short as _fmt,
+    calculate_task_metrics as _calc_time_shared,
+    fetch_missing_parents,
+)
+from clickup_mcp.status_helpers import (
+    extract_status_name,
+    get_effective_statuses,
+    format_status_for_display,
+)
 
 
-def get_status_category(status_name: str, status_type: str = None) -> str:
-    if not status_name:
-        return "other"
-    if cat := STATUS_OVERRIDE_MAP.get(status_name.upper()):
-        return cat
-    if status_type:
-        type_map = {
-            "open": "not_started",
-            "done": "done",
-            "closed": "closed",
-            "custom": "active",
-        }
-        return type_map.get(status_type.lower(), "other")
-    return "other"
-
-
-# --- Helpers ---
+# --- Helpers (delegated to shared client) ---
 
 
 def _api(method, endpoint, params=None):
+    """API call helper — delegates to shared client for connection pooling."""
     try:
-        h = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
-        r = requests.request(method, f"{BASE_URL}{endpoint}", headers=h, params=params)
-        return (
-            (r.json(), r.status_code)
-            if r.status_code in [200, 201]
-            else (None, r.status_code)
+        data, err = (
+            _client.get(endpoint, params=params)
+            if method.upper() == "GET"
+            else (
+                _client.post(endpoint, json=params)
+                if method.upper() == "POST"
+                else _client.put(endpoint, json=params)
+                if method.upper() == "PUT"
+                else _client.delete(endpoint, params=params)
+            )
         )
+        if err:
+            return None, 500
+        return data, 200
     except Exception:
         return None, 500
 
 
 def _get_ids(p_name):
-    # 1. Try to find in tracked projects
+    # 1. Try to find in tracked projects (in-memory)
     p = next((x for x in TRACKED_PROJECTS if x["name"] == p_name), None)
 
     # 2. If tracked, use that structure
@@ -108,7 +67,42 @@ def _get_ids(p_name):
                 ids.extend([lst["id"] for lst in f.get("lists", [])])
         return ids
 
-    # 3. If not tracked, try to resolve name to a List ID dynamically
+    # 3. Check project_map.json mapped projects
+    try:
+        from .sync_mapping import db
+
+        for alias, data in db.projects.items():
+            alias_name = data.get("alias", alias)
+            if alias.lower() == p_name.lower() or alias_name.lower() == p_name.lower():
+                mapped_id = data["clickup_id"]
+                mapped_type = data["clickup_type"]
+
+                if mapped_type == "list":
+                    return [mapped_id]
+                elif mapped_type == "folder":
+                    resp, _ = _api("GET", f"/folder/{mapped_id}/list")
+                    ids = [lst["id"] for lst in (resp or {}).get("lists", [])]
+                    if not ids:
+                        # Fallback: use cached structure
+                        structure = data.get("structure", {})
+                        ids = [
+                            c["id"]
+                            for c in structure.get("children", [])
+                            if c.get("type") == "list"
+                        ]
+                    return ids
+                elif mapped_type == "space":
+                    ids = []
+                    resp, _ = _api("GET", f"/space/{mapped_id}/list")
+                    ids = [lst["id"] for lst in (resp or {}).get("lists", [])]
+                    f_data, _ = _api("GET", f"/space/{mapped_id}/folder")
+                    for f in (f_data or {}).get("folders", []):
+                        ids.extend([lst["id"] for lst in f.get("lists", [])])
+                    return ids
+    except ImportError:
+        pass
+
+    # 4. If not tracked or mapped, try to resolve name to a List ID dynamically
     found_id, _ = _resolve_name_to_list_id(p_name)
     if found_id:
         return [found_id]
@@ -117,74 +111,20 @@ def _get_ids(p_name):
 
 
 def _fetch_deep(list_ids):
-    tasks, seen = [], set()
-    for lid in list_ids:
-        for arch in ["false", "true"]:
-            p = 0
-            while True:
-                d, _ = _api(
-                    "GET",
-                    f"/list/{lid}/task",
-                    {"page": p, "subtasks": "true", "archived": arch},
-                )
-                ts = d.get("tasks", []) if d else []
-                if not ts:
-                    break
-                for t in ts:
-                    if t["id"] not in seen:
-                        seen.add(t["id"])
-                        tasks.append(t)
-                if len(ts) < 100:
-                    break
-                p += 1
-    exist = {t["id"] for t in tasks}
-    for pid in {
-        t["parent"] for t in tasks if t.get("parent") and t["parent"] not in exist
-    }:
-        t, _ = _api("GET", f"/task/{pid}")
-        if t and t["id"] not in exist:
-            tasks.append(t)
-            exist.add(t["id"])
-    return tasks
+    """Fetch all tasks with subtasks — delegates to shared client for concurrency."""
+    tasks = _client.fetch_all_tasks(list_ids, {}, include_archived=True)
+    # Also fetch missing parents via shared helper
+    return fetch_missing_parents(tasks)
 
 
 def _calc_time(tasks):
-    t_map = {t["id"]: t for t in tasks}
-    c_map = {}
-    [
-        c_map.setdefault(t["parent"], []).append(t["id"])
-        for t in tasks
-        if t.get("parent")
-    ]
-    cache = {}
-
-    def get(tid):
-        if tid in cache:
-            return cache[tid]
-        tr, est = 0, 0
-        for cid in c_map.get(tid, []):
-            c_tr, _, c_est, _ = get(cid)
-            tr += c_tr
-            est += c_est
-        raw_t, raw_e = (
-            int(t_map[tid].get("time_spent") or 0),
-            int(t_map[tid].get("time_estimate") or 0),
-        )
-        d_tr, d_est = (
-            max(0, raw_t - tr if raw_t >= tr else raw_t),
-            max(0, raw_e - est if raw_e >= est else raw_e),
-        )
-        res = (d_tr + tr, d_tr, d_est + est, d_est)
-        cache[tid] = res
-        return res
-
-    for t in tasks:
-        get(t["id"])
-    return cache
-
-
-def _fmt(ms):
-    return f"{int(ms) // 3600000}h {(int(ms) // 60000) % 60}m" if ms else "0m"
+    """Bottom-up time calculation — delegates to shared module, returns tuple format for compatibility."""
+    dict_metrics = _calc_time_shared(tasks)
+    # Convert dict format to tuple format: (tracked_total, tracked_direct, est_total, est_direct)
+    return {
+        tid: (v["tracked_total"], v["tracked_direct"], v["est_total"], v["est_direct"])
+        for tid, v in dict_metrics.items()
+    }
 
 
 def _get_finish_date(task):
@@ -237,20 +177,8 @@ def _resolve_name_to_list_id(name: str):
     return None, None
 
 
-def _extract_statuses(data_obj):
-    """Safe extractor for status lists from various object types."""
-    if not data_obj:
-        return []
-    # Try direct list
-    if "statuses" in data_obj:
-        return data_obj["statuses"]
-    # Try wrapped list
-    if "list" in data_obj and "statuses" in data_obj["list"]:
-        return data_obj["list"]["statuses"]
-    # Try wrapped space
-    if "space" in data_obj and "statuses" in data_obj["space"]:
-        return data_obj["space"]["statuses"]
-    return []
+# Use extract_statuses_from_response from status_helpers module
+# Removed local implementation in favor of shared helper
 
 
 # --- Tools ---
@@ -296,56 +224,22 @@ def register_project_intelligence_tools(mcp: FastMCP):
         """
         Fetches the Effective Statuses for a list.
         If the list inherits statuses (returns empty), it automatically fetches from the Parent Space.
+        Uses the centralized get_effective_statuses helper.
         """
-        # 1. Fetch List
-        data, code = _api("GET", f"/list/{list_id}")
-        if not data:
-            return {"error": f"Failed to fetch list {list_id}", "status_code": code}
+        # Use the helper function which handles all the inheritance logic
+        result = get_effective_statuses(list_id)
 
-        # Handle wrapped vs unwrapped response
-        list_obj = data.get("list", data)
-        list_name = list_obj.get("name")
-        statuses = list_obj.get("statuses", [])
-        source = "list_settings"
+        # Check for errors
+        if "error" in result:
+            return result
 
-        # 2. Inheritance Check (If list has no custom statuses)
-        if not statuses:
-            space_obj = list_obj.get("space", {})
-            space_id = space_obj.get("id")
-
-            # If space info is missing in list response, we must fetch it manually
-            if not space_id:
-                # Try finding space via folder if it exists
-                folder_id = list_obj.get("folder", {}).get("id")
-                if folder_id:
-                    f_data, _ = _api("GET", f"/folder/{folder_id}")
-                    f_obj = f_data.get("folder", f_data) if f_data else {}
-                    space_id = f_obj.get("space", {}).get("id")
-
-            # 3. Fetch Space Statuses (The Definition Source)
-            if space_id:
-                s_data, s_code = _api("GET", f"/space/{space_id}")
-                if s_data:
-                    space_obj_full = s_data.get("space", s_data)
-                    statuses = space_obj_full.get("statuses", [])
-                    source = f"inherited_from_space_{space_id}"
-
-        # 4. Format
-        formatted = []
-        for s in statuses:
-            formatted.append(
-                {
-                    "status": s.get("status"),
-                    "type": s.get("type"),
-                    "color": s.get("color"),
-                    "category": get_status_category(s.get("status"), s.get("type")),
-                }
-            )
+        # Format statuses with categories
+        formatted = [format_status_for_display(s) for s in result.get("statuses", [])]
 
         return {
             "list_id": list_id,
-            "list_name": list_name,
-            "definition_source": source,
+            "list_name": result.get("list_name"),
+            "definition_source": result.get("source"),
             "status_count": len(formatted),
             "statuses": formatted,
         }
@@ -523,7 +417,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
         blocked = [
             t
             for t in active
-            if "block" in t["status"]["status"].lower()
+            if "block" in _extract_status_name(t).lower()
             or (t.get("priority") or {}).get("orderindex") == "1"
         ]
         due_today = [
@@ -536,7 +430,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
             return [
                 {
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignees": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl
@@ -608,8 +502,8 @@ def register_project_intelligence_tools(mcp: FastMCP):
             )
             == "active"
         ]
-        blocked = [t for t in active if "block" in t["status"]["status"].lower()]
-        waiting = [t for t in active if "wait" in t["status"]["status"].lower()]
+        blocked = [t for t in active if "block" in _extract_status_name(t).lower()]
+        waiting = [t for t in active if "wait" in _extract_status_name(t).lower()]
         stale = [
             t
             for t in active
@@ -621,7 +515,7 @@ def register_project_intelligence_tools(mcp: FastMCP):
                 {
                     "id": t["id"],
                     "name": t["name"],
-                    "status": t["status"]["status"],
+                    "status": _extract_status_name(t),
                     "assignee": [u["username"] for u in t.get("assignees", [])],
                 }
                 for t in tl

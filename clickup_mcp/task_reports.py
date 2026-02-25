@@ -1,0 +1,1917 @@
+"""
+Task Report Tools for ClickUp MCP Server
+=========================================
+PM-focused daily report tools covering the full reporting suite:
+
+1. get_space_task_report       — Space-wise summary with per-project breakdown
+2. get_project_task_report     — Project-wise with per-team-member breakdown
+3. get_member_task_report      — Individual team member task report
+4. get_low_hours_report        — Employees who tracked < 8 h on any day (with occurrence count)
+5. get_missing_estimation_report — Employees whose tasks have no time estimate
+6. get_overtracked_report       — Employees where tracked time exceeds estimated time
+
+All period-based tools support:
+  today | yesterday | this_week | last_week | this_month | last_month |
+  this_year | last_30_days | rolling (+rolling_days) | custom (+custom_start/end YYYY-MM-DD)
+
+OVERTIME FIX (2025-02-25):
+  Parent tasks now use est_total / tracked_total (rollup-consistent).
+  Subtasks continue to use est_direct / tracked_direct.
+  Per-user overage is proportional share of total task overage,
+  NOT raw (t_ms - split_estimate), which was inflating numbers when
+  time entries included rolled-up subtask time.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+import threading
+import uuid
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Any
+
+from fastmcp import FastMCP
+
+from app.config import BASE_URL
+from .api_client import client as _client
+from .status_helpers import (
+    date_range_to_timestamps,
+    filter_time_entries_by_user_and_date_range,
+    parse_time_period_filter,
+    get_workspace_members,
+)
+from .pm_analytics import (
+    _api_call,
+    _get_team_id,
+    _fetch_all_tasks,
+    _fetch_time_entries_smart,
+    _calculate_task_metrics,
+    _format_duration,
+    _extract_status_name,
+    get_status_category,
+)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+_8H_MS = 8 * 60 * 60 * 1000  # 28 800 000 ms
+
+
+def _ms_to_date_ist(ms: int, tz_offset_hours: float = 5.5) -> str:
+    """Convert epoch-ms to YYYY-MM-DD adjusted for IST (+05:30)."""
+    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc) + timedelta(
+        hours=tz_offset_hours
+    )
+    return dt.strftime("%Y-%m-%d")
+
+
+def _resolve_space_id(space_name: str) -> Optional[str]:
+    team_id = _get_team_id()
+    data, _ = _api_call("GET", f"/team/{team_id}/space")
+    if not data:
+        return None
+    for s in data.get("spaces", []):
+        if s["name"].lower() == space_name.lower():
+            return s["id"]
+    return None
+
+
+def _resolve_space_lists(space_id: str) -> Dict[str, List[str]]:
+    """
+    Returns {"folder_name": [list_id, ...], "Folderless": [list_id, ...]}
+    so callers know which project each list belongs to.
+    """
+    projects: Dict[str, List[str]] = {}
+
+    resp_f, _ = _api_call("GET", f"/space/{space_id}/folder")
+    for folder in (resp_f or {}).get("folders", []):
+        lid_list = [lst["id"] for lst in folder.get("lists", [])]
+        if lid_list:
+            projects[folder["name"]] = lid_list
+
+    resp_l, _ = _api_call("GET", f"/space/{space_id}/list")
+    folderless = [lst["id"] for lst in (resp_l or {}).get("lists", [])]
+    if folderless:
+        projects["Folderless Lists"] = folderless
+
+    return projects
+
+
+# ---------------------------------------------------------------------------
+# Monitoring config — scoped list-ID resolver
+# ---------------------------------------------------------------------------
+import json as _json
+import os as _os
+
+_MONITORING_CONFIG_PATH = _os.path.join(
+    _os.path.dirname(__file__), "..", "monitoring_config.json"
+)
+
+
+def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
+    """
+    Check monitoring_config.json for a matching alias or the special keyword
+    "monitored" (which aggregates ALL monitored projects).
+
+    Returns a list of list IDs if found, or None to fall through to normal
+    ClickUp API resolution.
+    """
+    try:
+        with open(_MONITORING_CONFIG_PATH, "r") as _f:
+            _cfg = _json.load(_f)
+    except FileNotFoundError:
+        return None
+
+    _projects = _cfg.get("monitored_projects", [])
+    _name_lower = project_name.strip().lower()
+
+    # Special keyword: aggregate every monitored project
+    if _name_lower == "monitored":
+        _all_ids: List[str] = []
+        for _p in _projects:
+            if _p.get("list_ids"):
+                _all_ids.extend(_p["list_ids"])
+            elif _p.get("clickup_id") and _p.get("type") == "folder":
+                _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
+                _all_ids.extend([_l["id"] for _l in (_resp or {}).get("lists", [])])
+        return _all_ids or None
+
+    # Exact alias match
+    for _p in _projects:
+        if _p["alias"].strip().lower() == _name_lower:
+            if _p.get("list_ids"):
+                return _p["list_ids"]
+            elif _p.get("clickup_id") and _p.get("type") == "folder":
+                _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
+                return [_l["id"] for _l in (_resp or {}).get("lists", [])]
+    return None
+
+
+def _list_ids_for_project(project_name: str) -> List[str]:
+    """Resolve a project name (space/folder/list) → flat list of list IDs.
+
+    Checks monitoring_config.json first; falls back to full ClickUp resolution.
+    """
+    _monitored = _load_monitored_list_ids(project_name)
+    if _monitored is not None:
+        return _monitored
+
+    from .pm_analytics import _resolve_to_list_ids
+
+    return _resolve_to_list_ids(project_name, None)
+
+
+def _fetch_entries_by_period(
+    task_ids: List[str],
+    period_type: str,
+    custom_start: Optional[str],
+    custom_end: Optional[str],
+    rolling_days: Optional[int],
+):
+    """Fetch time entries restricted to the requested period."""
+    start_date, end_date = parse_time_period_filter(
+        period_type=period_type,
+        custom_start=custom_start,
+        custom_end=custom_end,
+        rolling_days=rolling_days,
+    )
+    start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+    entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+    return entries_map, start_date, end_date, start_ms, end_ms
+
+
+# ---------------------------------------------------------------------------
+# Registration function
+# ---------------------------------------------------------------------------
+
+
+def register_task_report_tools(mcp: FastMCP):
+    """Register all task-report tools on the provided FastMCP instance."""
+
+    JOBS: Dict[str, Dict] = {}
+
+    # -------------------------------------------------------------------------
+    # Unified dispatcher — used by every report tool.
+    # -------------------------------------------------------------------------
+    def _dispatch(
+        fn, async_job: bool = False, poll_interval: float = 5.0, max_wait: float = 360.0
+    ) -> dict:
+        """
+        Run fn() in a background thread.
+
+        async_job=True  (default for all public report tools):
+            Starts the job and returns a job_id dict IMMEDIATELY so the MCP
+            tool handler finishes within the transport timeout window.
+            The LLM must call get_task_report_job_result(job_id=...) once
+            the job is complete (typically 60-120 s for large spaces).
+
+        async_job=False (used internally by _bg_ sub-calls):
+            Blocks the calling thread, sleep-polls every poll_interval seconds,
+            and returns the full result directly once done.
+            Falls back to a human-readable message if max_wait seconds elapse.
+        """
+        jid = str(uuid.uuid4())
+        JOBS[jid] = {"status": "queued", "result": None, "error": None}
+
+        def _bg() -> None:
+            try:
+                JOBS[jid]["status"] = "running"
+                JOBS[jid]["result"] = fn()
+                JOBS[jid]["status"] = "finished"
+            except Exception as exc:
+                import traceback
+
+                traceback.print_exc()
+                JOBS[jid]["error"] = str(exc)
+                JOBS[jid]["status"] = "failed"
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+        # --- async_job=True: return immediately so MCP transport doesn't timeout ---
+        if async_job:
+            return {
+                "job_id": jid,
+                "status": "queued",
+                "message": (
+                    f"Job started in background. "
+                    f"Call get_task_report_job_result(job_id='{jid}') after 60-90 s "
+                    "to retrieve the full result. "
+                    "Use get_task_report_job_status(job_id=...) to check progress."
+                ),
+            }
+
+        # --- async_job=False: block and return result inline ---
+        elapsed = 0.0
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            status = JOBS[jid]["status"]
+            if status == "finished":
+                return JOBS[jid]["result"]
+            if status == "failed":
+                return {"error": JOBS[jid].get("error", "Unknown error in report job")}
+
+        return {
+            "error": (
+                "Report did not complete within the time limit. "
+                f"Use get_task_report_job_result(job_id='{jid}') to retrieve it when ready."
+            ),
+            "job_id": jid,
+        }
+
+    # =========================================================================
+    # 1. SPACE-WISE TASK REPORT
+    # =========================================================================
+
+    @mcp.tool()
+    def get_space_task_report(
+        space_name: str,
+        period_type: str = "yesterday",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_archived: bool = True,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Space-Wise Task Report.
+
+        For every project (folder/list) inside the space, shows who worked on
+        it, how many tasks they touched, and time tracked vs. estimated — all
+        in the selected period.
+
+        Args:
+            space_name:     Name of the ClickUp space
+            period_type:    today | yesterday | this_week | last_week |
+                            this_month | last_month | this_year | last_30_days |
+                            rolling | custom
+            custom_start:   YYYY-MM-DD (required when period_type="custom")
+            custom_end:     YYYY-MM-DD (required when period_type="custom")
+            rolling_days:   Number of days for rolling window (1-365)
+            include_archived: Include archived tasks (default True)
+
+        Returns:
+            {
+              space_name, period,
+              grand_total_time_tracked, grand_total_time_estimate,
+              projects: [
+                {
+                  project_name, project_type,
+                  tasks_worked_on, time_tracked, time_estimate,
+                  team_breakdown: {
+                    member_name: {tasks, time_tracked, time_estimate}
+                  }
+                }
+              ],
+              formatted_output: <ready-to-display markdown>
+            }
+        """
+        try:
+            print(f"⌛ Space task report: '{space_name}' / {period_type}")
+            sys.stdout.flush()
+
+            if not job_id:
+
+                def _work():
+                    return get_space_task_report(
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            start_date, end_date = parse_time_period_filter(
+                period_type=period_type,
+                custom_start=custom_start,
+                custom_end=custom_end,
+                rolling_days=rolling_days,
+            )
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            sid = _resolve_space_id(space_name)
+            if not sid:
+                return {"error": f"Space '{space_name}' not found"}
+
+            project_map = _resolve_space_lists(sid)
+            if not project_map:
+                return {"error": f"No lists found in space '{space_name}'"}
+
+            list_to_project = {
+                lid: pname for pname, lids in project_map.items() for lid in lids
+            }
+            all_list_ids = list(list_to_project.keys())
+
+            all_tasks = _fetch_all_tasks(
+                all_list_ids, {}, include_archived=include_archived
+            )
+
+            # --- Fetch time entries ---
+            timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
+            metrics = _calculate_task_metrics(all_tasks)
+
+            # --- Build per-project report ---
+            project_reports: Dict[str, Dict] = {
+                pname: {
+                    "project_name": pname,
+                    "project_type": "folder" if pname != "Folderless Lists" else "list",
+                    "tasks_worked_on": 0,
+                    "time_tracked_ms": 0,
+                    "time_estimate_ms": 0,
+                    "team_members": defaultdict(
+                        lambda: {
+                            "tasks": 0,
+                            "time_tracked_ms": 0,
+                            "time_estimate_ms": 0,
+                        }
+                    ),
+                }
+                for pname in project_map
+            }
+
+            for task in all_tasks:
+                task_id = task["id"]
+                list_id = task.get("list", {}).get("id", "")
+                pname = list_to_project.get(list_id)
+                if not pname:
+                    continue
+
+                user_time = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(task_id, []), start_ms, end_ms
+                )
+                total_ms = sum(user_time.values())
+                if total_ms == 0:
+                    continue
+
+                pr = project_reports[pname]
+                pr["tasks_worked_on"] += 1
+                pr["time_tracked_ms"] += total_ms
+                est = metrics.get(task_id, {}).get("est_direct", 0)
+                pr["time_estimate_ms"] += est
+
+                for username, t_ms in user_time.items():
+                    mb = pr["team_members"][username]
+                    mb["tasks"] += 1
+                    mb["time_tracked_ms"] += t_ms
+                    mb["time_estimate_ms"] += est // len(user_time) if user_time else 0
+
+            # Format output
+            formatted_projects = []
+            grand_tracked = 0
+            grand_est = 0
+
+            for pname, pr in project_reports.items():
+                if pr["tasks_worked_on"] == 0:
+                    continue
+                grand_tracked += pr["time_tracked_ms"]
+                grand_est += pr["time_estimate_ms"]
+
+                team_breakdown = {
+                    mb: {
+                        "tasks": d["tasks"],
+                        "time_tracked": _format_duration(d["time_tracked_ms"]),
+                        "time_estimate": _format_duration(d["time_estimate_ms"]),
+                    }
+                    for mb, d in pr["team_members"].items()
+                    if d["time_tracked_ms"] > 0
+                }
+
+                formatted_projects.append(
+                    {
+                        "project_name": pname,
+                        "project_type": pr["project_type"],
+                        "tasks_worked_on": pr["tasks_worked_on"],
+                        "time_tracked": _format_duration(pr["time_tracked_ms"]),
+                        "time_estimate": _format_duration(pr["time_estimate_ms"]),
+                        "team_breakdown": team_breakdown,
+                    }
+                )
+
+            formatted_projects.sort(
+                key=lambda x: _duration_to_ms(x["time_tracked"]), reverse=True
+            )
+
+            # --- Markdown formatted_output ---
+            lines = [
+                f"## Space Report: {space_name}",
+                f"**Period:** {start_date} → {end_date}",
+                f"**Total Tracked:** {_format_duration(grand_tracked)}  |  "
+                f"**Total Estimated:** {_format_duration(grand_est)}",
+                "",
+            ]
+            for fp in formatted_projects:
+                lines.append(f"### {fp['project_name']} ({fp['project_type']})")
+                lines.append(
+                    f"Tasks worked on: **{fp['tasks_worked_on']}**  |  "
+                    f"Tracked: **{fp['time_tracked']}**  |  "
+                    f"Estimated: **{fp['time_estimate']}**"
+                )
+                if fp["team_breakdown"]:
+                    lines.append("")
+                    lines.append("| Member | Tasks | Time Tracked | Time Estimate |")
+                    lines.append("|--------|------:|-------------:|--------------:|")
+                    for mb, d in sorted(fp["team_breakdown"].items()):
+                        lines.append(
+                            f"| {mb} | {d['tasks']} | {d['time_tracked']} | {d['time_estimate']} |"
+                        )
+                    lines.append("")
+
+            return {
+                "space_name": space_name,
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "grand_total_time_tracked": _format_duration(grand_tracked),
+                "grand_total_time_estimate": _format_duration(grand_est),
+                "total_projects": len(project_map),
+                "active_projects": len(formatted_projects),
+                "projects": formatted_projects,
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # 2. PROJECT-WISE TASK REPORT
+    # =========================================================================
+
+    @mcp.tool()
+    def get_project_task_report(
+        project_name: str,
+        period_type: str = "yesterday",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_archived: bool = True,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Project-Wise Task Report.
+
+        For every team member who worked on this project in the selected period,
+        shows:
+          • How many tasks they completed / worked on
+          • Total time they tracked
+          • Total time estimated for those tasks
+          • List of specific tasks with individual time breakdown
+
+        Args:
+            project_name:   Project name — can be a space, folder, or list
+            period_type:    today | yesterday | this_week | last_week |
+                            this_month | last_month | this_year | last_30_days |
+                            rolling | custom
+            custom_start:   YYYY-MM-DD (required when period_type="custom")
+            custom_end:     YYYY-MM-DD (required when period_type="custom")
+            rolling_days:   Number of days for rolling window (1-365)
+            include_archived: Include archived tasks (default True)
+            async_job:      Run in background (recommended for 300+ tasks)
+
+        Returns:
+            {
+              project_name, period,
+              total_members, total_tasks_worked,
+              total_time_tracked, total_time_estimate,
+              team_report: {
+                member_name: {
+                  tasks_count, time_tracked, time_estimate,
+                  tasks: [{task_name, status, time_tracked, time_estimate}]
+                }
+              },
+              formatted_output: <ready-to-display markdown table>
+            }
+        """
+        try:
+            print(f"⌛ Project task report: '{project_name}' / {period_type}")
+            sys.stdout.flush()
+
+            if not job_id:
+
+                def _work():
+                    return get_project_task_report(
+                        project_name=project_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            start_date, end_date = parse_time_period_filter(
+                period_type=period_type,
+                custom_start=custom_start,
+                custom_end=custom_end,
+                rolling_days=rolling_days,
+            )
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            list_ids = _list_ids_for_project(project_name)
+            if not list_ids:
+                return {"error": f"Project '{project_name}' not found"}
+
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            if not all_tasks:
+                return {
+                    "project_name": project_name,
+                    "period": f"{start_date} to {end_date}",
+                    "message": "No tasks found",
+                }
+
+            # Auto-promote to async for large datasets
+            if len(all_tasks) >= 300 and not job_id and not async_job:
+                return get_project_task_report(
+                    project_name=project_name,
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    include_archived=include_archived,
+                    async_job=True,
+                )
+
+            timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
+            metrics = _calculate_task_metrics(all_tasks)
+
+            # Build per-member report with task detail
+            team_report: Dict[str, Dict] = {}
+            grand_tracked_ms = 0
+            grand_est_ms = 0
+            total_tasks_worked = 0
+
+            for task in all_tasks:
+                task_id = task["id"]
+                user_time = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(task_id, []), start_ms, end_ms
+                )
+                total_ms = sum(user_time.values())
+                if total_ms == 0:
+                    continue
+
+                total_tasks_worked += 1
+                grand_tracked_ms += total_ms
+                est = metrics.get(task_id, {}).get("est_direct", 0)
+                grand_est_ms += est
+
+                status = _extract_status_name(task)
+                task_est_str = _format_duration(est)
+
+                for username, t_ms in user_time.items():
+                    if username not in team_report:
+                        team_report[username] = {
+                            "tasks_count": 0,
+                            "time_tracked_ms": 0,
+                            "time_estimate_ms": 0,
+                            "tasks": [],
+                        }
+                    mb = team_report[username]
+                    mb["tasks_count"] += 1
+                    mb["time_tracked_ms"] += t_ms
+                    mb["time_estimate_ms"] += est // len(user_time) if user_time else 0
+                    mb["tasks"].append(
+                        {
+                            "task_name": task.get("name", "Unnamed"),
+                            "status": status,
+                            "time_tracked": _format_duration(t_ms),
+                            "time_estimate": task_est_str,
+                        }
+                    )
+
+            # Format final output
+            formatted_team = {}
+            for mb, d in team_report.items():
+                # Sort tasks by time tracked (desc)
+                d["tasks"].sort(
+                    key=lambda x: _duration_to_ms(x["time_tracked"]), reverse=True
+                )
+                formatted_team[mb] = {
+                    "tasks_count": d["tasks_count"],
+                    "time_tracked": _format_duration(d["time_tracked_ms"]),
+                    "time_estimate": _format_duration(d["time_estimate_ms"]),
+                    "tasks": d["tasks"],
+                }
+
+            # --- Markdown formatted_output ---
+            lines = [
+                f"## Project Report: {project_name}",
+                f"**Period:** {start_date} → {end_date}",
+                f"**Tasks worked on:** {total_tasks_worked}  |  "
+                f"**Time Tracked:** {_format_duration(grand_tracked_ms)}  |  "
+                f"**Estimated:** {_format_duration(grand_est_ms)}",
+                "",
+                "| Member | Tasks | Time Tracked | Time Estimate |",
+                "|--------|------:|-------------:|--------------:|",
+            ]
+            for mb, d in sorted(
+                formatted_team.items(),
+                key=lambda x: _duration_to_ms(x[1]["time_tracked"]),
+                reverse=True,
+            ):
+                lines.append(
+                    f"| {mb} | {d['tasks_count']} | {d['time_tracked']} | {d['time_estimate']} |"
+                )
+            lines.append(
+                f"| **Total** | **{total_tasks_worked}** | "
+                f"**{_format_duration(grand_tracked_ms)}** | "
+                f"**{_format_duration(grand_est_ms)}** |"
+            )
+
+            return {
+                "project_name": project_name,
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "total_members": len(formatted_team),
+                "total_tasks_worked": total_tasks_worked,
+                "total_time_tracked": _format_duration(grand_tracked_ms),
+                "total_time_estimate": _format_duration(grand_est_ms),
+                "team_report": formatted_team,
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # 3. TEAM MEMBER-WISE TASK REPORT
+    # =========================================================================
+
+    @mcp.tool()
+    def get_member_task_report(
+        member_name: str,
+        project_name: Optional[str] = None,
+        space_name: Optional[str] = None,
+        period_type: str = "yesterday",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_archived: bool = True,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Team Member-Wise Task Report.
+
+        Shows every task a specific team member worked on during the period,
+        with time tracked, time estimated, and task status — giving the PM a
+        full picture of that individual's day/week.
+
+        Args:
+            member_name:    Exact or partial ClickUp username
+            project_name:   Narrow to a specific project/folder (optional)
+            space_name:     Narrow to a specific space (optional)
+            period_type:    today | yesterday | this_week | last_week |
+                            this_month | last_month | this_year | last_30_days |
+                            rolling | custom
+            custom_start:   YYYY-MM-DD (required when period_type="custom")
+            custom_end:     YYYY-MM-DD (required when period_type="custom")
+            rolling_days:   Number of days for rolling window (1-365)
+            include_archived: Include archived tasks (default True)
+
+        Returns:
+            {
+              member_name, period,
+              summary: {total_tasks, time_tracked, time_estimate, days_active},
+              tasks: [{task_name, status, time_tracked, time_estimate, date}],
+              formatted_output: <markdown>
+            }
+        """
+        try:
+            print(f"⌛ Member task report: '{member_name}' / {period_type}")
+            sys.stdout.flush()
+
+            if not job_id:
+
+                def _work():
+                    return get_member_task_report(
+                        member_name=member_name,
+                        project_name=project_name,
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            start_date, end_date = parse_time_period_filter(
+                period_type=period_type,
+                custom_start=custom_start,
+                custom_end=custom_end,
+                rolling_days=rolling_days,
+            )
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # Resolve list IDs
+            if project_name:
+                list_ids = _list_ids_for_project(project_name)
+                scope = project_name
+            elif space_name:
+                sid = _resolve_space_id(space_name)
+                if not sid:
+                    return {"error": f"Space '{space_name}' not found"}
+                proj_map = _resolve_space_lists(sid)
+                list_ids = [lid for lids in proj_map.values() for lid in lids]
+                scope = space_name
+            else:
+                return {"error": "Provide either project_name or space_name"}
+
+            if not list_ids:
+                return {"error": f"No lists found for scope '{scope}'"}
+
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+            if not all_tasks:
+                return {
+                    "member_name": member_name,
+                    "period": f"{start_date} to {end_date}",
+                    "message": "No tasks found",
+                }
+
+            timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
+            metrics = _calculate_task_metrics(all_tasks)
+
+            member_lower = member_name.lower()
+            total_ms = 0
+            total_est_ms = 0
+            task_list = []
+            days_active = set()
+
+            for task in all_tasks:
+                task_id = task["id"]
+                user_time = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(task_id, []), start_ms, end_ms
+                )
+
+                # Match member (case-insensitive, partial)
+                matched_ms = 0
+                for uname, t_ms in user_time.items():
+                    if member_lower in uname.lower():
+                        matched_ms += t_ms
+
+                if matched_ms == 0:
+                    continue
+
+                total_ms += matched_ms
+                est = metrics.get(task_id, {}).get("est_direct", 0)
+                total_est_ms += est
+
+                # Collect which days the work happened (from raw intervals)
+                raw_entries = entries_map.get(task_id, [])
+                for entry in raw_entries:
+                    uname = (entry.get("user") or {}).get("username", "")
+                    if member_lower not in uname.lower():
+                        continue
+                    for iv in entry.get("intervals", []):
+                        iv_start = int(iv.get("start") or 0)
+                        if start_ms <= iv_start <= end_ms:
+                            days_active.add(_ms_to_date_ist(iv_start))
+
+                task_list.append(
+                    {
+                        "task_name": task.get("name", "Unnamed"),
+                        "status": _extract_status_name(task),
+                        "time_tracked": _format_duration(matched_ms),
+                        "time_estimate": _format_duration(est),
+                        "time_tracked_ms": matched_ms,
+                    }
+                )
+
+            task_list.sort(key=lambda x: x.pop("time_tracked_ms"), reverse=True)
+
+            # --- Markdown formatted_output ---
+            lines = [
+                f"## Member Report: {member_name}",
+                f"**Scope:** {scope}  |  **Period:** {start_date} → {end_date}",
+                f"**Time Tracked:** {_format_duration(total_ms)}  |  "
+                f"**Estimated:** {_format_duration(total_est_ms)}  |  "
+                f"**Tasks:** {len(task_list)}  |  **Days active:** {len(days_active)}",
+                "",
+                "| Task | Status | Tracked | Estimated |",
+                "|------|--------|--------:|----------:|",
+            ]
+            for t in task_list:
+                lines.append(
+                    f"| {t['task_name']} | {t['status']} | "
+                    f"{t['time_tracked']} | {t['time_estimate']} |"
+                )
+
+            return {
+                "member_name": member_name,
+                "scope": scope,
+                "period": f"{start_date} to {end_date}",
+                "summary": {
+                    "total_tasks": len(task_list),
+                    "time_tracked": _format_duration(total_ms),
+                    "time_estimate": _format_duration(total_est_ms),
+                    "days_active": len(days_active),
+                    "active_dates": sorted(days_active),
+                },
+                "tasks": task_list,
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # 4. LOW HOURS REPORT — Employees tracking < 8 hours on any day
+    # =========================================================================
+
+    @mcp.tool()
+    def get_low_hours_report(
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        min_hours: float = 8.0,
+        space_name: Optional[str] = None,
+        project_name: Optional[str] = None,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Low Hours Report — employees who tracked fewer than N hours on any working day.
+
+        Identifies team members who logged under the expected daily hours (default 8h)
+        and shows exactly which days were short, by how much, and how many times this
+        occurred — useful for spotting attendance or time-logging issues.
+
+        Args:
+            period_type:    today | yesterday | this_week | last_week |
+                            this_month | last_month | this_year | last_30_days |
+                            rolling | custom
+            custom_start:   YYYY-MM-DD (required when period_type="custom")
+            custom_end:     YYYY-MM-DD (required when period_type="custom")
+            rolling_days:   Number of days for rolling window (1-365)
+            min_hours:      Threshold in hours (default 8.0).  Days with tracked
+                            time LESS THAN this value are flagged.
+            space_name:     Narrow to a specific space (optional)
+            project_name:   Narrow to a specific project (optional)
+            async_job:      Run in background to avoid timeout
+
+        Returns:
+            {
+              period, threshold_hours,
+              flagged_members: [
+                {
+                  member_name,
+                  total_days_below_threshold,
+                  short_days: [
+                    {date, tracked, shortfall, day_of_week}
+                  ]
+                }
+              ],
+              clean_members: [members with no short days],
+              formatted_output: <markdown>
+            }
+        """
+        try:
+            print(f"⌛ Low hours report / {period_type} / threshold={min_hours}h")
+            sys.stdout.flush()
+
+            if not job_id:
+
+                def _work():
+                    return get_low_hours_report(
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        min_hours=min_hours,
+                        space_name=space_name,
+                        project_name=project_name,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            start_date, end_date = parse_time_period_filter(
+                period_type=period_type,
+                custom_start=custom_start,
+                custom_end=custom_end,
+                rolling_days=rolling_days,
+            )
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+            threshold_ms = int(min_hours * 3600 * 1000)
+
+            # Resolve list IDs
+            if project_name:
+                list_ids = _list_ids_for_project(project_name)
+                scope = project_name
+            elif space_name:
+                sid = _resolve_space_id(space_name)
+                if not sid:
+                    return {"error": f"Space '{space_name}' not found"}
+                proj_map = _resolve_space_lists(sid)
+                list_ids = [lid for lids in proj_map.values() for lid in lids]
+                scope = space_name
+            else:
+                # Entire workspace
+                team_id = _get_team_id()
+                data, _ = _api_call("GET", f"/team/{team_id}/space")
+                list_ids = []
+                for s in (data or {}).get("spaces", []):
+                    pm = _resolve_space_lists(s["id"])
+                    list_ids += [lid for lids in pm.values() for lid in lids]
+                scope = "entire workspace"
+
+            if not list_ids:
+                return {"error": f"No lists found for scope '{scope}'"}
+
+            all_tasks = _fetch_all_tasks(list_ids, {}, include_archived=True)
+
+            if len(all_tasks) >= 300 and not job_id and not async_job:
+                return get_low_hours_report(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    min_hours=min_hours,
+                    space_name=space_name,
+                    project_name=project_name,
+                    async_job=True,
+                )
+
+            timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
+
+            # Build per-member, per-day time map
+            # { username: { "YYYY-MM-DD": total_ms } }
+            member_day: Dict[str, Dict[str, int]] = defaultdict(
+                lambda: defaultdict(int)
+            )
+
+            for task_entries in entries_map.values():
+                for entry in task_entries:
+                    uname = (entry.get("user") or {}).get("username", "")
+                    if not uname:
+                        continue
+                    for iv in entry.get("intervals", []):
+                        iv_start = int(iv.get("start") or 0)
+                        iv_end = int(iv.get("end") or 0)
+                        if not (start_ms <= iv_start <= end_ms):
+                            continue
+                        duration = iv_end - iv_start if iv_end > iv_start else 0
+                        date_str = _ms_to_date_ist(iv_start)
+                        member_day[uname][date_str] += duration
+
+            # Classify days
+            flagged = []
+            clean = []
+
+            for uname, day_map in sorted(member_day.items()):
+                short_days = []
+                for date_str, tracked_ms in sorted(day_map.items()):
+                    if tracked_ms < threshold_ms:
+                        shortfall_ms = threshold_ms - tracked_ms
+                        dt = datetime.strptime(date_str, "%Y-%m-%d")
+                        short_days.append(
+                            {
+                                "date": date_str,
+                                "day_of_week": dt.strftime("%A"),
+                                "tracked": _format_duration(tracked_ms),
+                                "shortfall": _format_duration(shortfall_ms),
+                                "tracked_ms": tracked_ms,
+                            }
+                        )
+
+                if short_days:
+                    short_days.sort(key=lambda x: x.pop("tracked_ms"))
+                    flagged.append(
+                        {
+                            "member_name": uname,
+                            "total_days_below_threshold": len(short_days),
+                            "short_days": short_days,
+                        }
+                    )
+                else:
+                    clean.append(uname)
+
+            flagged.sort(key=lambda x: x["total_days_below_threshold"], reverse=True)
+
+            # --- Markdown formatted_output ---
+            lines = [
+                "## Low Hours Report",
+                f"**Period:** {start_date} → {end_date}  |  "
+                f"**Threshold:** {min_hours}h/day  |  "
+                f"**Scope:** {scope}",
+                f"**{len(flagged)} member(s) with short days** | "
+                f"**{len(clean)} member(s) fully compliant**",
+                "",
+            ]
+            if flagged:
+                lines.append("| Member | Occurrences | Worst Day (tracked) |")
+                lines.append("|--------|------------:|---------------------|")
+                for f in flagged:
+                    worst = min(f["short_days"], key=lambda x: x["tracked"])
+                    lines.append(
+                        f"| {f['member_name']} | {f['total_days_below_threshold']} "
+                        f"| {worst['date']} ({worst['tracked']}) |"
+                    )
+                lines.append("")
+                for f in flagged:
+                    lines.append(
+                        f"### {f['member_name']} — {f['total_days_below_threshold']} short day(s)"
+                    )
+                    lines.append("| Date | Day | Tracked | Shortfall |")
+                    lines.append("|------|-----|--------:|----------:|")
+                    for sd in f["short_days"]:
+                        lines.append(
+                            f"| {sd['date']} | {sd['day_of_week']} | "
+                            f"{sd['tracked']} | {sd['shortfall']} |"
+                        )
+                    lines.append("")
+
+            if clean:
+                lines.append(f"**Compliant members:** {', '.join(clean)}")
+
+            return {
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "scope": scope,
+                "threshold_hours": min_hours,
+                "flagged_members": flagged,
+                "clean_members": clean,
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # 5. MISSING ESTIMATION REPORT
+    # =========================================================================
+
+    @mcp.tool()
+    def get_missing_estimation_report(
+        project_name: Optional[str] = None,
+        space_name: Optional[str] = None,
+        period_type: Optional[str] = None,
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_done: bool = True,
+        include_archived: bool = True,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Missing Time Estimation Report.
+
+        Lists all tasks that have no time estimate set, grouped by the person
+        who tracked time on them.
+
+        When a period_type is given the report finds tasks that had time entries
+        logged within that period and are missing an estimate.  This intentionally
+        uses the TIME-ENTRY DATE (not the task creation date) so that old tasks
+        worked on during the period are correctly included regardless of when
+        they were created.
+
+        When no period_type is given the report falls back to scanning every task
+        in scope and groups them by task assignee instead.
+
+        Args:
+            project_name:   Narrow to a specific project/folder (optional)
+            space_name:     Narrow to a specific space (optional)
+            period_type:    Filter by the date time was TRACKED (not task creation):
+                            today | yesterday | this_week | last_week |
+                            this_month | last_month | this_year | last_30_days |
+                            rolling | custom
+                            Leave None to include all tasks regardless of date.
+            custom_start:   YYYY-MM-DD (required when period_type="custom")
+            custom_end:     YYYY-MM-DD (required when period_type="custom")
+            rolling_days:   Number of days for rolling window (1-365)
+            include_done:   Include tasks in done/closed status (default True)
+            include_archived: Include archived tasks (default True)
+
+        Returns:
+            {
+              scope, period, total_tasks_checked, total_missing_estimate,
+              members: {
+                member_name: {
+                  missing_count,
+                  tasks: [{task_name, status, list_name, task_id}]
+                }
+              },
+              unassigned_tasks: [{task_name, status, list_name}],
+              formatted_output: <markdown>
+            }
+        """
+        try:
+            if not job_id:
+
+                def _work():
+                    return get_missing_estimation_report(
+                        project_name=project_name,
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_done=include_done,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            # --- Parse period filter (optional) ---
+            start_ms: Optional[int] = None
+            end_ms: Optional[int] = None
+            period_label = "all time"
+
+            if period_type:
+                start_date, end_date = parse_time_period_filter(
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                )
+                start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+                period_label = f"{start_date} → {end_date}"
+
+            # --- Resolve scope ---
+            if project_name:
+                list_ids = _list_ids_for_project(project_name)
+                scope = project_name
+            elif space_name:
+                sid = _resolve_space_id(space_name)
+                if not sid:
+                    return {"error": f"Space '{space_name}' not found"}
+                proj_map = _resolve_space_lists(sid)
+                list_ids = [lid for lids in proj_map.values() for lid in lids]
+                scope = space_name
+            else:
+                return {"error": "Provide either project_name or space_name"}
+
+            if not list_ids:
+                return {"error": f"No lists found for scope '{scope}'"}
+
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+
+            # Build a quick id→task lookup
+            task_map: Dict[str, dict] = {t["id"]: t for t in all_tasks}
+
+            # Compute metrics per task (strips rolled-up subtask estimates
+            # that ClickUp bakes into the parent's raw time_estimate API field).
+            metrics = _calculate_task_metrics(all_tasks)
+
+            # Thresholds for ratio-based flagging (TT / TE)
+            RATIO_LOW = 0.25  # tracked < 25% of estimate → inflated / ghost estimate
+            RATIO_HIGH = 2.0  # tracked > 2× estimate     → significant overtime
+
+            members: Dict[str, Dict] = {}
+            unassigned: list = []
+            total_missing = 0
+
+            # Ratio-outlier buckets (tasks that DO have an estimate but TT/TE
+            # falls outside [RATIO_LOW, RATIO_HIGH])
+            ratio_members: Dict[str, Dict] = {}
+            ratio_unassigned: list = []
+            ratio_total = 0
+
+            # ----------------------------------------------------------------
+            # MODE A — period filter provided:
+            #   Fetch time entries logged in the period → find tasks worked on
+            #   in the period that have no estimate → group by tracker
+            # ----------------------------------------------------------------
+            if start_ms is not None:
+                candidate_ids = [
+                    t["id"] for t in all_tasks if int(t.get("time_spent") or 0) > 0
+                ]
+                entries_map = _fetch_time_entries_smart(candidate_ids, start_ms, end_ms)
+
+                # task_id → set of usernames who tracked in this period
+                task_trackers: Dict[str, set] = {}
+                for tid, entries in entries_map.items():
+                    for entry in entries:
+                        uname = (entry.get("user") or {}).get("username", "")
+
+                        intervals = entry.get("intervals") or []
+                        if intervals:
+                            in_range = any(
+                                start_ms <= int(iv.get("start") or 0) <= end_ms
+                                for iv in intervals
+                            )
+                        else:
+                            entry_start = int(entry.get("start") or 0)
+                            in_range = (entry_start == 0) or (
+                                start_ms <= entry_start <= end_ms
+                            )
+
+                        if not in_range:
+                            continue
+
+                        if uname:
+                            task_trackers.setdefault(tid, set()).add(uname)
+                        else:
+                            task = task_map.get(tid)
+                            if task:
+                                for au in task.get("assignees", []):
+                                    au_name = au.get("username", "")
+                                    if au_name:
+                                        task_trackers.setdefault(tid, set()).add(
+                                            au_name
+                                        )
+
+                seen_task_ids: set = set()
+                seen_ratio_ids: set = set()
+                for tid, trackers in task_trackers.items():
+                    task = task_map.get(tid)
+                    if not task:
+                        continue
+
+                    if not include_done:
+                        sname = _extract_status_name(task)
+                        status_obj = (
+                            task.get("status", {})
+                            if isinstance(task.get("status"), dict)
+                            else {}
+                        )
+                        cat = get_status_category(sname, status_obj.get("type"))
+                        if cat in ("done", "closed"):
+                            continue
+
+                    # Main tasks compare against aggregate totals;
+                    # subtasks use their own direct metrics.
+                    is_subtask = bool(task.get("parent"))
+                    m = metrics.get(tid, {})
+                    metric_key = "direct" if is_subtask else "total"
+                    est_ms = m.get(f"est_{metric_key}", 0)
+                    tracked_ms = m.get(f"tracked_{metric_key}", 0)
+
+                    if est_ms > 0:
+                        if tracked_ms > 0 and tid not in seen_ratio_ids:
+                            seen_ratio_ids.add(tid)
+                            ratio = tracked_ms / est_ms
+                            if ratio < RATIO_LOW or ratio > RATIO_HIGH:
+                                ratio_total += 1
+                                ratio_entry = {
+                                    "task_name": task.get("name", "Unnamed"),
+                                    "status": _extract_status_name(task),
+                                    "list_name": task.get("list", {}).get(
+                                        "name", "Unknown"
+                                    ),
+                                    "task_id": tid,
+                                    "tracked": _format_duration(tracked_ms),
+                                    "estimated": _format_duration(est_ms),
+                                    "ratio": round(ratio, 2),
+                                    "flag": "over" if ratio > RATIO_HIGH else "under",
+                                }
+                                if not trackers:
+                                    ratio_unassigned.append(ratio_entry)
+                                else:
+                                    for uname in trackers:
+                                        if uname not in ratio_members:
+                                            ratio_members[uname] = {
+                                                "count": 0,
+                                                "tasks": [],
+                                            }
+                                        ratio_members[uname]["count"] += 1
+                                        ratio_members[uname]["tasks"].append(
+                                            ratio_entry
+                                        )
+                        continue  # has estimate → not in missing-estimate list
+
+                    if tid in seen_task_ids:
+                        continue
+                    seen_task_ids.add(tid)
+
+                    total_missing += 1
+                    task_entry = {
+                        "task_name": task.get("name", "Unnamed"),
+                        "status": _extract_status_name(task),
+                        "list_name": task.get("list", {}).get("name", "Unknown"),
+                        "task_id": tid,
+                    }
+
+                    if not trackers:
+                        unassigned.append(task_entry)
+                    else:
+                        for uname in trackers:
+                            if uname not in members:
+                                members[uname] = {"missing_count": 0, "tasks": []}
+                            members[uname]["missing_count"] += 1
+                            members[uname]["tasks"].append(task_entry)
+
+                checked_count = len(task_trackers)
+
+            # ----------------------------------------------------------------
+            # MODE B — no period filter: scan every task, group by assignee
+            # ----------------------------------------------------------------
+            else:
+                for task in all_tasks:
+                    if not include_done:
+                        sname = _extract_status_name(task)
+                        status_obj = (
+                            task.get("status", {})
+                            if isinstance(task.get("status"), dict)
+                            else {}
+                        )
+                        cat = get_status_category(sname, status_obj.get("type"))
+                        if cat in ("done", "closed"):
+                            continue
+
+                    task_id_b = task["id"]
+                    is_subtask = bool(task.get("parent"))
+                    m = metrics.get(task_id_b, {})
+                    metric_key = "direct" if is_subtask else "total"
+                    est_ms = m.get(f"est_{metric_key}", 0)
+                    tracked_ms = m.get(f"tracked_{metric_key}", 0)
+
+                    assignees = task.get("assignees", [])
+                    assignee_names = [u.get("username", "Unknown") for u in assignees]
+
+                    if est_ms > 0:
+                        if tracked_ms > 0:
+                            ratio = tracked_ms / est_ms
+                            if ratio < RATIO_LOW or ratio > RATIO_HIGH:
+                                ratio_total += 1
+                                ratio_entry = {
+                                    "task_name": task.get("name", "Unnamed"),
+                                    "status": _extract_status_name(task),
+                                    "list_name": task.get("list", {}).get(
+                                        "name", "Unknown"
+                                    ),
+                                    "task_id": task_id_b,
+                                    "tracked": _format_duration(tracked_ms),
+                                    "estimated": _format_duration(est_ms),
+                                    "ratio": round(ratio, 2),
+                                    "flag": "over" if ratio > RATIO_HIGH else "under",
+                                }
+                                if not assignee_names:
+                                    ratio_unassigned.append(ratio_entry)
+                                else:
+                                    for uname in assignee_names:
+                                        if uname not in ratio_members:
+                                            ratio_members[uname] = {
+                                                "count": 0,
+                                                "tasks": [],
+                                            }
+                                        ratio_members[uname]["count"] += 1
+                                        ratio_members[uname]["tasks"].append(
+                                            ratio_entry
+                                        )
+                        continue  # has estimate → not in missing-estimate list
+
+                    total_missing += 1
+                    task_entry = {
+                        "task_name": task.get("name", "Unnamed"),
+                        "status": _extract_status_name(task),
+                        "list_name": task.get("list", {}).get("name", "Unknown"),
+                        "task_id": task_id_b,
+                    }
+
+                    if not assignee_names:
+                        unassigned.append(task_entry)
+                    else:
+                        for uname in assignee_names:
+                            if uname not in members:
+                                members[uname] = {"missing_count": 0, "tasks": []}
+                            members[uname]["missing_count"] += 1
+                            members[uname]["tasks"].append(task_entry)
+
+                checked_count = len(all_tasks)
+
+            # Sort members by missing_count desc
+            sorted_members = dict(
+                sorted(
+                    members.items(), key=lambda x: x[1]["missing_count"], reverse=True
+                )
+            )
+            sorted_ratio_members = dict(
+                sorted(ratio_members.items(), key=lambda x: x[1]["count"], reverse=True)
+            )
+
+            # --- Markdown formatted_output ---
+            lines = [
+                "## Missing Estimation Report",
+                f"**Scope:** {scope}  |  **Period:** {period_label}  |  "
+                f"**Tasks without estimate:** {total_missing}  |  "
+                f"**Ratio-flagged tasks:** {ratio_total}  |  "
+                f"**Checked:** {checked_count}",
+                "",
+                "### Missing Time Estimate  _(TE = 0, all assignees)_",
+                "",
+                "| Member | Tasks Without Estimate |",
+                "|--------|----------------------:|",
+            ]
+            for mb, d in sorted_members.items():
+                lines.append(f"| {mb} | {d['missing_count']} |")
+            if unassigned:
+                lines.append(f"| *(Unassigned)* | {len(unassigned)} |")
+            lines.append(f"| **Total** | **{total_missing}** |")
+
+            # --- Ratio-outlier table ---
+            if ratio_total > 0:
+                lines += [
+                    "",
+                    f"### Suspicious TT/TE Ratio  "
+                    f"_(outside {RATIO_LOW}\u00d7\u2013{RATIO_HIGH}\u00d7 band)_",
+                    "",
+                    "| Member | Tasks | Over-Budget (>2\u00d7) | Under-Budget (<0.25\u00d7) |",
+                    "|--------|------:|-------------------:|---------------------:|",
+                ]
+                grand_over = grand_under = 0
+                for mb, d in sorted_ratio_members.items():
+                    over_count = sum(1 for t in d["tasks"] if t.get("flag") == "over")
+                    under_count = sum(1 for t in d["tasks"] if t.get("flag") == "under")
+                    grand_over += over_count
+                    grand_under += under_count
+                    lines.append(
+                        f"| {mb} | {d['count']} | {over_count} | {under_count} |"
+                    )
+                if ratio_unassigned:
+                    ru_over = sum(
+                        1 for t in ratio_unassigned if t.get("flag") == "over"
+                    )
+                    ru_under = sum(
+                        1 for t in ratio_unassigned if t.get("flag") == "under"
+                    )
+                    grand_over += ru_over
+                    grand_under += ru_under
+                    lines.append(
+                        f"| *(Unassigned)* | {len(ratio_unassigned)} | {ru_over} | {ru_under} |"
+                    )
+                lines.append(
+                    f"| **Total** | **{ratio_total}** | **{grand_over}** | **{grand_under}** |"
+                )
+
+            return {
+                "scope": scope,
+                "period": period_label,
+                "total_tasks_checked": checked_count,
+                "total_missing_estimate": total_missing,
+                "total_ratio_flagged": ratio_total,
+                "ratio_band": {"low": RATIO_LOW, "high": RATIO_HIGH},
+                "members": {
+                    mb: {"missing_count": d["missing_count"]}
+                    for mb, d in sorted_members.items()
+                },
+                "unassigned_count": len(unassigned),
+                "ratio_members": {
+                    mb: {
+                        "count": d["count"],
+                        "over": sum(1 for t in d["tasks"] if t.get("flag") == "over"),
+                        "under": sum(1 for t in d["tasks"] if t.get("flag") == "under"),
+                    }
+                    for mb, d in sorted_ratio_members.items()
+                },
+                "ratio_unassigned_count": len(ratio_unassigned),
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # 6. OVERTIME REPORT — Tracked > Estimated
+    #
+    # FIX (2025-02-25): Use rollup-consistent metric pair:
+    #   • Parent task (no parent field): est_total vs tracked_total
+    #   • Subtask (has parent field):    est_direct vs tracked_direct
+    #
+    # Per-user overage is proportional share of total task overage,
+    # NOT (user_t_ms - split_estimate). The old formula inflated numbers
+    # because _fetch_time_entries_smart returns ALL entries including
+    # subtask time, while est_direct only covered the parent's own estimate.
+    # =========================================================================
+
+    @mcp.tool()
+    def get_overtracked_report(
+        project_name: Optional[str] = None,
+        space_name: Optional[str] = None,
+        period_type: str = "this_week",
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None,
+        rolling_days: Optional[int] = None,
+        include_archived: bool = True,
+        async_job: bool = True,
+        job_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Overtracked Report
+
+        Employees where tracked time exceeds estimated time.
+
+        Identifies tasks and team members where actual time logged exceeded the
+        estimate, showing how much over they went. Only tasks with both an
+        estimate AND logged time are included.
+
+        ESTIMATION CONSISTENCY RULE:
+          Parent task (no parent): uses est_total / tracked_total (subtask rollup included)
+          Subtask (has parent):    uses est_direct / tracked_direct (independent)
+        This mirrors get_missing_estimation_report logic and prevents false
+        overtime when subtask time is rolled into parent time entries.
+
+        Args:
+            project_name:        Narrow to a specific project (optional)
+            space_name:          Narrow to a specific space (optional)
+            period_type:         today | yesterday | this_week | last_week |
+                                 this_month | last_month | this_year | last_30_days |
+                                 rolling | custom
+            custom_start:        YYYY-MM-DD (required when period_type="custom")
+            custom_end:          YYYY-MM-DD (required when period_type="custom")
+            rolling_days:        Number of days for rolling window (1-365)
+            include_archived:    Include archived tasks (default True)
+            async_job:           Run in background (recommended for spaces)
+
+        Returns:
+            {
+              scope, period, total_overtime_tasks,
+              members: {
+                member_name: {
+                  overtime_tasks, total_overtime,
+                  tasks: [{task_name, estimated, tracked, overage, status}]
+                }
+              },
+              summary_table: [{member, tasks, total_overtime}],
+              formatted_output: <markdown>
+            }
+        """
+        try:
+            print(f"⌛ Overtime report / {period_type}")
+            sys.stdout.flush()
+
+            if not job_id:
+
+                def _work():
+                    return get_overtracked_report(
+                        project_name=project_name,
+                        space_name=space_name,
+                        period_type=period_type,
+                        custom_start=custom_start,
+                        custom_end=custom_end,
+                        rolling_days=rolling_days,
+                        include_archived=include_archived,
+                        async_job=False,
+                        job_id="_bg_",
+                    )
+
+                return _dispatch(_work, async_job)
+
+            start_date, end_date = parse_time_period_filter(
+                period_type=period_type,
+                custom_start=custom_start,
+                custom_end=custom_end,
+                rolling_days=rolling_days,
+            )
+            start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
+
+            # Resolve scope
+            if project_name:
+                list_ids = _list_ids_for_project(project_name)
+                scope = project_name
+            elif space_name:
+                sid = _resolve_space_id(space_name)
+                if not sid:
+                    return {"error": f"Space '{space_name}' not found"}
+                proj_map = _resolve_space_lists(sid)
+                list_ids = [lid for lids in proj_map.values() for lid in lids]
+                scope = space_name
+            else:
+                return {"error": "Provide either project_name or space_name"}
+
+            if not list_ids:
+                return {"error": f"No lists found for scope '{scope}'"}
+
+            all_tasks = _fetch_all_tasks(
+                list_ids, {}, include_archived=include_archived
+            )
+
+            if len(all_tasks) >= 300 and not job_id and not async_job:
+                return get_overtracked_report(
+                    project_name=project_name,
+                    space_name=space_name,
+                    period_type=period_type,
+                    custom_start=custom_start,
+                    custom_end=custom_end,
+                    rolling_days=rolling_days,
+                    include_archived=include_archived,
+                    async_job=True,
+                )
+
+            timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
+            metrics = _calculate_task_metrics(all_tasks)
+
+            members: Dict[str, Dict] = {}
+            total_overtime_tasks = 0
+
+            for task in all_tasks:
+                task_id = task["id"]
+
+                # -------------------------------------------------------
+                # FIX: Use rollup-consistent metric pair.
+                #   Parent task → est_total / tracked_total
+                #   Subtask     → est_direct / tracked_direct
+                # This prevents inflated overage when subtask time is
+                # included in the parent's time entries but the estimate
+                # comparison was only against the parent's direct estimate.
+                # -------------------------------------------------------
+                is_subtask = bool(task.get("parent"))
+                metric_key = "direct" if is_subtask else "total"
+                m = metrics.get(task_id, {})
+                est_ms = m.get(f"est_{metric_key}", 0)
+                rollup_tracked_ms = m.get(f"tracked_{metric_key}", 0)
+
+                # Only tasks with an estimate
+                if est_ms == 0:
+                    continue
+
+                # Only tasks with tracked time in the period
+                # We still fetch per-user actual entries for display,
+                # but use the rollup-consistent tracked_ms for the gate check.
+                user_time = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(task_id, []), start_ms, end_ms
+                )
+                period_tracked_ms = sum(user_time.values())
+
+                if period_tracked_ms == 0:
+                    continue
+
+                # Gate check: raw overage only (tracked must exceed estimate).
+                # Use rollup_tracked_ms for a consistent comparison against est_ms.
+                # For subtasks, rollup_tracked_ms == period_tracked_ms (direct only).
+                # For parents, rollup_tracked_ms includes subtask contributions.
+                #
+                # We compare rollup_tracked_ms vs est_ms for the flag decision,
+                # but use period_tracked_ms (actual entries in range) for display.
+                overage_ms = rollup_tracked_ms - est_ms
+                if overage_ms <= 0:
+                    continue
+
+                total_overtime_tasks += 1
+                status = _extract_status_name(task)
+
+                # Distribute overage proportionally across users who tracked
+                # in the period. This avoids attributing full task overage to
+                # a single user when multiple users worked on the same task.
+                total_period_ms = sum(user_time.values()) or 1
+                for username, t_ms in user_time.items():
+                    proportion = t_ms / total_period_ms
+                    per_user_overage = int(overage_ms * proportion)
+                    if per_user_overage <= 0:
+                        continue
+
+                    if username not in members:
+                        members[username] = {
+                            "overtime_tasks": 0,
+                            "total_overtime_ms": 0,
+                            "tasks": [],
+                        }
+                    mb = members[username]
+                    mb["overtime_tasks"] += 1
+                    mb["total_overtime_ms"] += per_user_overage
+                    mb["tasks"].append(
+                        {
+                            "task_name": task.get("name", "Unnamed"),
+                            "status": status,
+                            # Show the rollup-consistent estimate (total for parent, direct for subtask)
+                            "estimated": _format_duration(est_ms),
+                            # Show what the user actually tracked in the period
+                            "tracked": _format_duration(t_ms),
+                            "overage": _format_duration(per_user_overage),
+                            "overage_ms": per_user_overage,
+                        }
+                    )
+
+            # Format output
+            formatted_members = {}
+            for mb, d in sorted(
+                members.items(),
+                key=lambda x: x[1]["total_overtime_ms"],
+                reverse=True,
+            ):
+                d["tasks"].sort(key=lambda x: x.pop("overage_ms"), reverse=True)
+                formatted_members[mb] = {
+                    "overtime_tasks": d["overtime_tasks"],
+                    "total_overtime": _format_duration(d["total_overtime_ms"]),
+                    "tasks": d["tasks"],
+                }
+
+            summary_table = [
+                {
+                    "member": mb,
+                    "overtime_tasks": d["overtime_tasks"],
+                    "total_overtime": d["total_overtime"],
+                }
+                for mb, d in formatted_members.items()
+            ]
+
+            # --- Markdown formatted_output ---
+            lines = [
+                "## Overtime Report (Tracked > Estimated)",
+                f"**Scope:** {scope}  |  **Period:** {start_date} → {end_date}",
+                f"**Flagged tasks:** {total_overtime_tasks}  |  "
+                f"**Overage mode:** raw (tracked > estimated)",
+                "",
+                "| Member | Overtime Tasks | Total Overtime |",
+                "|--------|---------------:|---------------:|",
+            ]
+            for row in summary_table:
+                lines.append(
+                    f"| {row['member']} | {row['overtime_tasks']} | {row['total_overtime']} |"
+                )
+            lines.append("")
+
+            for mb, d in formatted_members.items():
+                lines.append(f"### {mb} — {d['total_overtime']} over")
+                lines.append("| Task | Status | Estimated | Tracked | Overage |")
+                lines.append("|------|--------|----------:|--------:|--------:|")
+                for t in d["tasks"]:
+                    lines.append(
+                        f"| {t['task_name']} | {t['status']} | "
+                        f"{t['estimated']} | {t['tracked']} | {t['overage']} |"
+                    )
+                lines.append("")
+
+            return {
+                "scope": scope,
+                "period": f"{start_date} to {end_date}",
+                "period_type": period_type,
+                "total_overtime_tasks": total_overtime_tasks,
+                "members": formatted_members,
+                "summary_table": summary_table,
+                "formatted_output": "\n".join(lines),
+            }
+
+        except Exception as e:
+            import traceback
+
+            print(traceback.format_exc())
+            return {"error": str(e)}
+
+    # =========================================================================
+    # ASYNC STATUS/RESULT (shared pool — reuses JOBS dict defined above)
+    # =========================================================================
+
+    @mcp.tool()
+    def get_task_report_job_status(job_id: str) -> dict:
+        """
+        Check status of a background task-report job (max 5 polls).
+
+        Returns status, poll count, and result when finished.
+        Stop polling when STOP_POLLING is True or status is 'finished'/'failed'.
+        """
+        j = JOBS.get(job_id)
+        if not j:
+            return {
+                "error": "job_id not found — it may have been created by a different tool"
+            }
+
+        poll_count = j.get("_poll_count", 0) + 1
+        j["_poll_count"] = poll_count
+        max_polls = 5
+        status = j.get("status")
+
+        if status in ("finished", "failed"):
+            resp = {
+                "job_id": job_id,
+                "status": status,
+                "error": j.get("error"),
+                "poll_count": poll_count,
+                "polls_remaining": 0,
+            }
+            if status == "finished":
+                resp["result"] = j.get("result")
+                resp["message"] = "Job complete! Result included."
+            return resp
+
+        if poll_count >= max_polls:
+            return {
+                "job_id": job_id,
+                "status": status,
+                "poll_count": poll_count,
+                "STOP_POLLING": True,
+                "message": (
+                    f"Max polls reached. Job still {status}. "
+                    f"Use get_task_report_job_result(job_id='{job_id}') later."
+                ),
+            }
+
+        return {
+            "job_id": job_id,
+            "status": status,
+            "poll_count": poll_count,
+            "polls_remaining": max_polls - poll_count,
+            "message": f"Job still {status}. Wait 50-60s, then poll again.",
+        }
+
+    @mcp.tool()
+    def get_task_report_job_result(job_id: str) -> dict:
+        """Retrieve result of a finished background task-report job."""
+        j = JOBS.get(job_id)
+        if not j:
+            return {"error": "job_id not found"}
+        if j.get("status") != "finished":
+            return {"status": j.get("status"), "message": "Not ready yet."}
+        return {"status": "finished", "result": j.get("result")}
+
+
+# ---------------------------------------------------------------------------
+# Small helper used inside this module only
+# ---------------------------------------------------------------------------
+
+
+def _duration_to_ms(human: str) -> int:
+    """Convert '2h 30m' back to milliseconds for sorting."""
+    try:
+        parts = human.replace("h", "").replace("m", "").split()
+        hours = int(parts[0]) if len(parts) > 0 else 0
+        mins = int(parts[1]) if len(parts) > 1 else 0
+        return (hours * 60 + mins) * 60000
+    except Exception:
+        return 0
