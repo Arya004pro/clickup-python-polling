@@ -1,10 +1,747 @@
 {
   "mapped_projects": {
-    "Linkutm": {
-      "alias": "Linkutm",
+    "AI_Projects": {
+      "alias": "AI_Projects",
+      "clickup_id": "90165507588",
+      "clickup_type": "space",
+      "last_sync": 1772022602.2316163,
+      "structure": {
+        "id": "90165507588",
+        "type": "space",
+        "children": [
+          {
+            "id": "901611904283",
+            "name": "List",
+            "type": "list"
+          }
+        ],
+        "name": "AI Projects"
+      }
+    },
+    "AI": {
+      "alias": "AI",
+      "clickup_id": "90161321203",
+      "clickup_type": "space",
+      "last_sync": 1772022627.5738866,
+      "structure": {
+        "id": "90161321203",
+        "type": "space",
+        "children": [
+          {
+            "id": "90161798576",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901602877576",
+                "name": "AI Business Ideas",
+                "type": "list"
+              },
+              {
+                "id": "901603063857",
+                "name": "Models ",
+                "type": "list"
+              },
+              {
+                "id": "901603251244",
+                "name": "Datasets",
+                "type": "list"
+              },
+              {
+                "id": "901603095426",
+                "name": "GPTs",
+                "type": "list"
+              }
+            ],
+            "name": "Strategy"
+          },
+          {
+            "id": "90161839987",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901602946004",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Meeting Documents"
+          },
+          {
+            "id": "90161842350",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901602949062",
+                "name": "Scope",
+                "type": "list"
+              },
+              {
+                "id": "901602949064",
+                "name": "Dataset",
+                "type": "list"
+              },
+              {
+                "id": "901602949065",
+                "name": "Pipeline",
+                "type": "list"
+              },
+              {
+                "id": "901602949069",
+                "name": "Model",
+                "type": "list"
+              },
+              {
+                "id": "901602949067",
+                "name": "QC",
+                "type": "list"
+              },
+              {
+                "id": "901602949063",
+                "name": "Access Interfaces",
+                "type": "list"
+              },
+              {
+                "id": "901602949066",
+                "name": "Deployment",
+                "type": "list"
+              },
+              {
+                "id": "901602949068",
+                "name": "UI UX",
+                "type": "list"
+              }
+            ],
+            "name": "MindsDB RnD"
+          },
+          {
+            "id": "90161920325",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603067732",
+                "name": "AI Sprint 1 (24/6 - 30/6)",
+                "type": "list"
+              },
+              {
+                "id": "901603147948",
+                "name": "AI Sprint 2 (1/7 - 8/7)",
+                "type": "list"
+              },
+              {
+                "id": "901603218597",
+                "name": "AI Sprint 3 (8/7 - 15/7)",
+                "type": "list"
+              },
+              {
+                "id": "901603309094",
+                "name": "AI Sprint 4 (15/7 - 21/7)",
+                "type": "list"
+              },
+              {
+                "id": "901603429314",
+                "name": "AI Sprint 5 (22/7 - 28/7)",
+                "type": "list"
+              },
+              {
+                "id": "901603552488",
+                "name": "AI Sprint 6 (29/7 - 4/8)",
+                "type": "list"
+              },
+              {
+                "id": "901603658677",
+                "name": "AI Sprint 7 (5/8 - 11/8)",
+                "type": "list"
+              },
+              {
+                "id": "901603772521",
+                "name": "AI Sprint 8 (12/8 - 18/8)",
+                "type": "list"
+              },
+              {
+                "id": "901603839999",
+                "name": "AI Sprint 9 (19/8 - 25/8)",
+                "type": "list"
+              },
+              {
+                "id": "901603932610",
+                "name": "AI Sprint 10 (26/8 - 1/9)",
+                "type": "list"
+              },
+              {
+                "id": "901603994462",
+                "name": "AI Sprint 11 (2/9 - 8/9)",
+                "type": "list"
+              },
+              {
+                "id": "901604101562",
+                "name": "AI Sprint 12 (9/9 - 15/9)",
+                "type": "list"
+              },
+              {
+                "id": "901604182785",
+                "name": "AI Sprint 13 (16/9 - 22/9)",
+                "type": "list"
+              }
+            ],
+            "name": "Sprint Folder"
+          },
+          {
+            "id": "90161961342",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603128626",
+                "name": "Scope",
+                "type": "list"
+              },
+              {
+                "id": "901603128628",
+                "name": "Dataset",
+                "type": "list"
+              },
+              {
+                "id": "901603128629",
+                "name": "Pipeline",
+                "type": "list"
+              },
+              {
+                "id": "901603128633",
+                "name": "Model",
+                "type": "list"
+              },
+              {
+                "id": "901603128631",
+                "name": "QC",
+                "type": "list"
+              },
+              {
+                "id": "901603128627",
+                "name": "Access Interfaces",
+                "type": "list"
+              },
+              {
+                "id": "901603128630",
+                "name": "Deployment",
+                "type": "list"
+              },
+              {
+                "id": "901603128632",
+                "name": "UI UX",
+                "type": "list"
+              }
+            ],
+            "name": "Chatbot for eCommerce - Support"
+          },
+          {
+            "id": "90161961351",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603128642",
+                "name": "Apple style marketing copy",
+                "type": "list"
+              },
+              {
+                "id": "901603128644",
+                "name": "Hr Assistant",
+                "type": "list"
+              },
+              {
+                "id": "901603663609",
+                "name": "CV Shortlist - Custome GPT ",
+                "type": "list"
+              },
+              {
+                "id": "901603128645",
+                "name": "Prompt Generator",
+                "type": "list"
+              },
+              {
+                "id": "901603128647",
+                "name": "Amazon SEO",
+                "type": "list"
+              },
+              {
+                "id": "901603128643",
+                "name": "Access Interfaces",
+                "type": "list"
+              },
+              {
+                "id": "901603128646",
+                "name": "Deployment",
+                "type": "list"
+              },
+              {
+                "id": "901603128648",
+                "name": "UI UX",
+                "type": "list"
+              },
+              {
+                "id": "901604486585",
+                "name": "Prompt",
+                "type": "list"
+              }
+            ],
+            "name": "Custome GPTs"
+          },
+          {
+            "id": "90162259916",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603607749",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Shorts AI "
+          },
+          {
+            "id": "90161961356",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603128654",
+                "name": "Sales AI Task list",
+                "type": "list"
+              },
+              {
+                "id": "901603128657",
+                "name": "Dataset",
+                "type": "list"
+              },
+              {
+                "id": "901603128660",
+                "name": "QC",
+                "type": "list"
+              },
+              {
+                "id": "901603128655",
+                "name": "Access Interfaces",
+                "type": "list"
+              },
+              {
+                "id": "901603706536",
+                "name": "Sales AI Bugs 1.0 ",
+                "type": "list"
+              }
+            ],
+            "name": "Sales Data Analysis and Prediction"
+          },
+          {
+            "id": "90162226516",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603554741",
+                "name": "Amazon AI Task List",
+                "type": "list"
+              }
+            ],
+            "name": "Amazon AI "
+          },
+          {
+            "id": "90162235068",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603569536",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "DP - Face swapping "
+          },
+          {
+            "id": "90162235472",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603570100",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "IFC Parser"
+          },
+          {
+            "id": "90162259948",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603607789",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Windmills"
+          },
+          {
+            "id": "90162277348",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603635536",
+                "name": "Assistant AI Task List",
+                "type": "list"
+              },
+              {
+                "id": "901603793243",
+                "name": "Assistant AI 1.0 Bugs",
+                "type": "list"
+              }
+            ],
+            "name": "AI Assistant "
+          },
+          {
+            "id": "90162293553",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603661243",
+                "name": "Model AI Task List",
+                "type": "list"
+              }
+            ],
+            "name": "Model Generator"
+          },
+          {
+            "id": "90162235169",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603303178",
+                "name": "Launch week ",
+                "type": "list"
+              },
+              {
+                "id": "901603260928",
+                "name": "Avinashi AI Website",
+                "type": "list"
+              },
+              {
+                "id": "901603913643",
+                "name": "Avinashi.ai Bugs",
+                "type": "list"
+              }
+            ],
+            "name": "Avinashi Ai Website"
+          },
+          {
+            "id": "90161798577",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901602884140",
+                "name": "Scope",
+                "type": "list"
+              },
+              {
+                "id": "901602883904",
+                "name": "Dataset",
+                "type": "list"
+              },
+              {
+                "id": "901602884150",
+                "name": "Pipeline",
+                "type": "list"
+              },
+              {
+                "id": "901602884069",
+                "name": "Model",
+                "type": "list"
+              },
+              {
+                "id": "901602884139",
+                "name": "QC",
+                "type": "list"
+              },
+              {
+                "id": "901602884143",
+                "name": "Access Interfaces",
+                "type": "list"
+              },
+              {
+                "id": "901602884149",
+                "name": "Deployment",
+                "type": "list"
+              },
+              {
+                "id": "901602884158",
+                "name": "UI UX",
+                "type": "list"
+              }
+            ],
+            "name": "AI Project Template"
+          },
+          {
+            "id": "90162460252",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901603913757",
+                "name": "Fresher's Training Template",
+                "type": "list"
+              },
+              {
+                "id": "901603959977",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901603971795",
+                "name": "Chirali's Training",
+                "type": "list"
+              }
+            ],
+            "name": "AI Training "
+          },
+          {
+            "id": "90162858846",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901604601962",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "SummitSync"
+          },
+          {
+            "id": "901603009387",
+            "name": "Ongoing RnD",
+            "type": "list"
+          }
+        ],
+        "name": "AI"
+      }
+    },
+    "JewelleryOS": {
+      "alias": "JewelleryOS",
+      "clickup_id": "90165613766",
+      "clickup_type": "space",
+      "last_sync": 1772022634.7585444,
+      "structure": {
+        "id": "90165613766",
+        "type": "space",
+        "children": [
+          {
+            "id": "90167907863",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612742608",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613177446",
+                "name": "Store Front",
+                "type": "list"
+              },
+              {
+                "id": "901613241141",
+                "name": "Research",
+                "type": "list"
+              },
+              {
+                "id": "901613241313",
+                "name": "Backlog",
+                "type": "list"
+              },
+              {
+                "id": "901613241170",
+                "name": "In Queue",
+                "type": "list"
+              },
+              {
+                "id": "901613241189",
+                "name": "Development",
+                "type": "list"
+              },
+              {
+                "id": "901613241286",
+                "name": "Testing",
+                "type": "list"
+              },
+              {
+                "id": "901613465754",
+                "name": "Bugs - Mehul",
+                "type": "list"
+              }
+            ],
+            "name": "Luminique"
+          },
+          {
+            "id": "90167917115",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612754980",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613241336",
+                "name": "Research",
+                "type": "list"
+              },
+              {
+                "id": "901613241350",
+                "name": "Backlog",
+                "type": "list"
+              },
+              {
+                "id": "901613241370",
+                "name": "In Queue",
+                "type": "list"
+              },
+              {
+                "id": "901613241381",
+                "name": "Development",
+                "type": "list"
+              },
+              {
+                "id": "901613241394",
+                "name": "Testing",
+                "type": "list"
+              }
+            ],
+            "name": "MYOJ"
+          },
+          {
+            "id": "90168131464",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613050493",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Aarshhmi"
+          },
+          {
+            "id": "90168266809",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612488442",
+                "name": "queue",
+                "type": "list"
+              },
+              {
+                "id": "901613162207",
+                "name": "Explore the flow of Jewellery website",
+                "type": "list"
+              },
+              {
+                "id": "901612488457",
+                "name": "backlog list",
+                "type": "list"
+              },
+              {
+                "id": "901612488452",
+                "name": "R1 - Reach PIM",
+                "type": "list"
+              },
+              {
+                "id": "901612488478",
+                "name": "scope",
+                "type": "list"
+              },
+              {
+                "id": "901612488612",
+                "name": "design",
+                "type": "list"
+              },
+              {
+                "id": "901612860872",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Scrap "
+          },
+          {
+            "id": "90168359093",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613335816",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Indian Demo"
+          }
+        ],
+        "name": "JewelleryOS"
+      }
+    },
+    "Avinashi Chat": {
+      "alias": "Avinashi Chat",
+      "clickup_id": "90165717669",
+      "clickup_type": "space",
+      "last_sync": 1772022639.0636868,
+      "structure": {
+        "id": "90165717669",
+        "type": "space",
+        "children": [
+          {
+            "id": "90167775426",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612560523",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "QA Team R&D, Learning"
+          },
+          {
+            "id": "90168280795",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613240750",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Leaders Meeting "
+          },
+          {
+            "id": "901613264511",
+            "name": "Developer Learning",
+            "type": "list"
+          },
+          {
+            "id": "901612299680",
+            "name": "Common Task",
+            "type": "list"
+          },
+          {
+            "id": "901613164012",
+            "name": "Activities",
+            "type": "list"
+          },
+          {
+            "id": "901613164026",
+            "name": "Avinashi General Meeting",
+            "type": "list"
+          }
+        ],
+        "name": "Avinashi Chat"
+      }
+    },
+    "linkutm": {
+      "alias": "linkutm",
       "clickup_id": "90165243069",
       "clickup_type": "space",
-      "last_sync": 1769834437.5727012,
+      "last_sync": 1772022645.5030596,
       "structure": {
         "id": "90165243069",
         "type": "space",
@@ -36,7 +773,7 @@
                 "type": "list"
               }
             ],
-            "name": "Website"
+            "name": "linkutm Website"
           },
           {
             "id": "90166891480",
@@ -86,6 +823,26 @@
                 "id": "901613202974",
                 "name": "Sprint 19 (26/1 - 1/2)",
                 "type": "list"
+              },
+              {
+                "id": "901613323874",
+                "name": "Sprint 20 (2/2 - 8/2)",
+                "type": "list"
+              },
+              {
+                "id": "901613532828",
+                "name": "Sprint 21 (9/2 - 15/2)",
+                "type": "list"
+              },
+              {
+                "id": "901613546075",
+                "name": "Sprint 22 (16/2 - 22/2)",
+                "type": "list"
+              },
+              {
+                "id": "901613665340",
+                "name": "Sprint 23 (23/2 - 1/3)",
+                "type": "list"
               }
             ],
             "name": "linkutm Sprints"
@@ -94,34 +851,807 @@
         "name": "linkutm"
       }
     },
-    "Prabhupada Library": {
-      "alias": "Prabhupada Library",
-      "clickup_id": "901613097715",
-      "clickup_type": "list",
-      "last_sync": 1769834445.6374767,
+    "AIX": {
+      "alias": "AIX",
+      "clickup_id": "90165253762",
+      "clickup_type": "space",
+      "last_sync": 1772022675.6825569,
       "structure": {
-        "id": "901613097715",
-        "type": "list",
-        "children": [],
-        "name": "Prabhupada's Library"
-      }
-    },
-    "Taxation -CPA Assistant": {
-      "alias": "Taxation -CPA Assistant",
-      "clickup_id": "90167885908",
-      "clickup_type": "folder",
-      "last_sync": 1769834533.49933,
-      "structure": {
-        "id": "90167885908",
-        "type": "folder",
+        "id": "90165253762",
+        "type": "space",
         "children": [
           {
-            "id": "901612709931",
+            "id": "90166912255",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901611401530",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "R1"
+          },
+          {
+            "id": "90167640140",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612384564",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613067323",
+                "name": "R1",
+                "type": "list"
+              },
+              {
+                "id": "901613708967",
+                "name": "Holi",
+                "type": "list"
+              },
+              {
+                "id": "901613708971",
+                "name": "Valentines",
+                "type": "list"
+              },
+              {
+                "id": "901613719186",
+                "name": "Mothers Day",
+                "type": "list"
+              }
+            ],
+            "name": "AI Headshots"
+          },
+          {
+            "id": "90167640931",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385488",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Welcome Cure AI Agent"
+          },
+          {
+            "id": "90167640951",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385512",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AyuRAG Agent"
+          },
+          {
+            "id": "90167641115",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385713",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI for Image playground"
+          },
+          {
+            "id": "90167641034",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385620",
+                "name": "Clear this list FAST",
+                "type": "list"
+              },
+              {
+                "id": "901613067292",
+                "name": "R1",
+                "type": "list"
+              },
+              {
+                "id": "901613708650",
+                "name": "Release 1",
+                "type": "list"
+              }
+            ],
+            "name": "RealEstate Voice Agent"
+          },
+          {
+            "id": "90167641054",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385642",
+                "name": "Other task",
+                "type": "list"
+              },
+              {
+                "id": "901613721698",
+                "name": "R1 [Without using LLM]",
+                "type": "list"
+              }
+            ],
+            "name": "Bank Statement Model"
+          },
+          {
+            "id": "90167641072",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385663",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": " AI Video Ad Generator"
+          },
+          {
+            "id": "90167641102",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385699",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Ad Plus"
+          },
+          {
+            "id": "90167641117",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385717",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Conversation AI"
+          },
+          {
+            "id": "90167641141",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612385739",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Remover AI"
+          },
+          {
+            "id": "90167726806",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612495694",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "BizIntel: Corporate Intelligence Engine"
+          },
+          {
+            "id": "90167735477",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612507760",
+                "name": "R1",
+                "type": "list"
+              },
+              {
+                "id": "901613067456",
+                "name": "Other task",
+                "type": "list"
+              }
+            ],
+            "name": "AI Photo Manager"
+          },
+          {
+            "id": "90167738032",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612510835",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "OTP Listener"
+          },
+          {
+            "id": "90167738054",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612510862",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Visiting card scanner"
+          },
+          {
+            "id": "90167828942",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612631911",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Fin Memory"
+          },
+          {
+            "id": "90167870295",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612689082",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Mobile App R&D Tasks"
+          },
+          {
+            "id": "90167885908",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612709931",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613709026",
+                "name": "W2",
+                "type": "list"
+              },
+              {
+                "id": "901613720075",
+                "name": "1098",
+                "type": "list"
+              }
+            ],
+            "name": "Taxation - CPA Assistant "
+          },
+          {
+            "id": "90167898809",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612728366",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Product Showcase"
+          },
+          {
+            "id": "90168226581",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613173669",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Sales Analysis"
+          },
+          {
+            "id": "90168229095",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613176583",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Clickup Analysis & Report"
+          },
+          {
+            "id": "90168238889",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613188020",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI/ML Deep Search"
+          },
+          {
+            "id": "90168304271",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613268407",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "AI RAG Agent"
+          }
+        ],
+        "name": "AIX"
+      }
+    },
+    "MindTech": {
+      "alias": "MindTech",
+      "clickup_id": "90165634163",
+      "clickup_type": "space",
+      "last_sync": 1772022677.3070526,
+      "structure": {
+        "id": "90165634163",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612488404",
+            "name": "Hompath web",
+            "type": "list"
+          },
+          {
+            "id": "901612488381",
+            "name": "EEPL list",
+            "type": "list"
+          },
+          {
+            "id": "901612384830",
+            "name": "Zomeo_android_app",
+            "type": "list"
+          },
+          {
+            "id": "901612647045",
+            "name": "Zomeo desktop",
+            "type": "list"
+          },
+          {
+            "id": "901612647111",
+            "name": "WC-Mail server",
+            "type": "list"
+          },
+          {
+            "id": "901612632307",
+            "name": "Hooc",
+            "type": "list"
+          },
+          {
+            "id": "901612146369",
+            "name": "Welcomecure web",
+            "type": "list"
+          },
+          {
+            "id": "901613268365",
+            "name": "Welcomecure_Patient_android_app",
+            "type": "list"
+          }
+        ],
+        "name": "MindTech"
+      }
+    },
+    "Venture Studio": {
+      "alias": "Venture Studio",
+      "clickup_id": "90165763632",
+      "clickup_type": "space",
+      "last_sync": 1772022681.1215715,
+      "structure": {
+        "id": "90165763632",
+        "type": "space",
+        "children": [
+          {
+            "id": "90168013801",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612888686",
+                "name": "Venture Cards",
+                "type": "list"
+              },
+              {
+                "id": "901612385101",
+                "name": "List",
+                "type": "list"
+              },
+              {
+                "id": "901613180858",
+                "name": "GTM Team Meeting & Tasks",
+                "type": "list"
+              }
+            ],
+            "name": "Ventures"
+          },
+          {
+            "id": "90168230127",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613177791",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "Venture Studio Website Templates"
+          }
+        ],
+        "name": "Venture Studio"
+      }
+    },
+    "Avinashi Leaders": {
+      "alias": "Avinashi Leaders",
+      "clickup_id": "90165752782",
+      "clickup_type": "space",
+      "last_sync": 1772022686.3500288,
+      "structure": {
+        "id": "90165752782",
+        "type": "space",
+        "children": [
+          {
+            "id": "90167624187",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612363935",
+                "name": "Week (01-06)",
+                "type": "list"
+              },
+              {
+                "id": "901612476276",
+                "name": "Week-2 (08-13)",
+                "type": "list"
+              },
+              {
+                "id": "901612583077",
+                "name": "week-3 (15-19)",
+                "type": "list"
+              }
+            ],
+            "name": "Dec 2025"
+          },
+          {
+            "id": "90168041134",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612925617",
+                "name": "Week-2",
+                "type": "list"
+              },
+              {
+                "id": "901613240885",
+                "name": "week 3",
+                "type": "list"
+              },
+              {
+                "id": "901613240897",
+                "name": "week 4",
+                "type": "list"
+              }
+            ],
+            "name": "Jan 2026"
+          },
+          {
+            "id": "90168280936",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613240934",
+                "name": "Week 1",
+                "type": "list"
+              },
+              {
+                "id": "901613405991",
+                "name": "Week 2",
+                "type": "list"
+              },
+              {
+                "id": "901613557904",
+                "name": "Week 3",
+                "type": "list"
+              }
+            ],
+            "name": "Feb 2026"
+          }
+        ],
+        "name": "Avinashi Leaders"
+      }
+    },
+    "BlogManager": {
+      "alias": "BlogManager",
+      "clickup_id": "90165866900",
+      "clickup_type": "space",
+      "last_sync": 1772022689.279852,
+      "structure": {
+        "id": "90165866900",
+        "type": "space",
+        "children": [
+          {
+            "id": "90167808198",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612596416",
+                "name": "List",
+                "type": "list"
+              }
+            ],
+            "name": "BlogManager"
+          }
+        ],
+        "name": "BlogManager"
+      }
+    },
+    "3D Team": {
+      "alias": "3D Team",
+      "clickup_id": "90165683323",
+      "clickup_type": "space",
+      "last_sync": 1772022691.2010071,
+      "structure": {
+        "id": "90165683323",
+        "type": "space",
+        "children": [
+          {
+            "id": "901613173367",
+            "name": "3D Jewellery Website",
+            "type": "list"
+          },
+          {
+            "id": "901612236598",
+            "name": "3D Configurator",
+            "type": "list"
+          }
+        ],
+        "name": "3D Team"
+      }
+    },
+    "UP-BOCW": {
+      "alias": "UP-BOCW",
+      "clickup_id": "90165885558",
+      "clickup_type": "space",
+      "last_sync": 1772022692.8077395,
+      "structure": {
+        "id": "90165885558",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612634357",
+            "name": "Global Tele Medicine List",
+            "type": "list"
+          }
+        ],
+        "name": "UP-BOCW"
+      }
+    },
+    "General Task Management": {
+      "alias": "General Task Management",
+      "clickup_id": "90165811501",
+      "clickup_type": "space",
+      "last_sync": 1772022694.41853,
+      "structure": {
+        "id": "90165811501",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612476530",
+            "name": "File Management Task List",
+            "type": "list"
+          }
+        ],
+        "name": "General Task Management"
+      }
+    },
+    "Nidan.ai": {
+      "alias": "Nidan.ai",
+      "clickup_id": "90165934294",
+      "clickup_type": "space",
+      "last_sync": 1772021675.1234603,
+      "structure": {
+        "id": "90165934294",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612741103",
+            "name": "Homepath",
+            "type": "list"
+          }
+        ],
+        "name": "Homepath"
+      }
+    },
+    "WC-Corporate": {
+      "alias": "WC-Corporate",
+      "clickup_id": "90165634091",
+      "clickup_type": "space",
+      "last_sync": 1772021678.9477744,
+      "structure": {
+        "id": "90165634091",
+        "type": "space",
+        "children": [
+          {
+            "id": "90167538703",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901612256455",
+                "name": "Sprint 1 (11/25 - 12/1)",
+                "type": "list"
+              }
+            ],
+            "name": "VFS & Onevasco Sprint"
+          },
+          {
+            "id": "90168558170",
+            "type": "folder",
+            "children": [
+              {
+                "id": "901613575761",
+                "name": "Sprint 1 (2/23 - 3/8)",
+                "type": "list"
+              }
+            ],
+            "name": "V2 Development"
+          },
+          {
+            "id": "901612146218",
+            "name": "WC-corporate-list",
+            "type": "list"
+          }
+        ],
+        "name": "WC-Corporate"
+      }
+    },
+    "VibeScorer": {
+      "alias": "VibeScorer",
+      "clickup_id": "90165953185",
+      "clickup_type": "space",
+      "last_sync": 1772021680.823992,
+      "structure": {
+        "id": "90165953185",
+        "type": "space",
+        "children": [
+          {
+            "id": "901613173455",
+            "name": "GTM Team Tasklist",
+            "type": "list"
+          },
+          {
+            "id": "901612778953",
+            "name": "Backlog",
+            "type": "list"
+          },
+          {
+            "id": "901613067515",
+            "name": "R1",
+            "type": "list"
+          },
+          {
+            "id": "901613624735",
+            "name": "Interview Feedback",
+            "type": "list"
+          }
+        ],
+        "name": "VibeScorer"
+      }
+    },
+    "AI WorksheetPro": {
+      "alias": "AI WorksheetPro",
+      "clickup_id": "90165974124",
+      "clickup_type": "space",
+      "last_sync": 1772021683.228359,
+      "structure": {
+        "id": "90165974124",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612826385",
             "name": "List",
             "type": "list"
           }
         ],
-        "name": "Taxation - CPA Assistant "
+        "name": "AI WorksheetPro"
+      }
+    },
+    "Gold Jewellers": {
+      "alias": "Gold Jewellers",
+      "clickup_id": "90165977016",
+      "clickup_type": "space",
+      "last_sync": 1772021684.812054,
+      "structure": {
+        "id": "90165977016",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612832514",
+            "name": "Gold Jewellers",
+            "type": "list"
+          }
+        ],
+        "name": "Gold Jewellers"
+      }
+    },
+    "NidanAI": {
+      "alias": "NidanAI",
+      "clickup_id": "90165717312",
+      "clickup_type": "space",
+      "last_sync": 1772021686.322272,
+      "structure": {
+        "id": "90165717312",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612299149",
+            "name": "Nidan.ai-list",
+            "type": "list"
+          }
+        ],
+        "name": "Nidan.ai"
+      }
+    },
+    "DevOps & Networking": {
+      "alias": "DevOps & Networking",
+      "clickup_id": "90165941160",
+      "clickup_type": "space",
+      "last_sync": 1772021687.8895738,
+      "structure": {
+        "id": "90165941160",
+        "type": "space",
+        "children": [
+          {
+            "id": "901612755596",
+            "name": "DevOps & Networking",
+            "type": "list"
+          }
+        ],
+        "name": "DevOps & Networking"
+      }
+    },
+    "BRC": {
+      "alias": "BRC",
+      "clickup_id": "90166096218",
+      "clickup_type": "space",
+      "last_sync": 1772021689.663677,
+      "structure": {
+        "id": "90166096218",
+        "type": "space",
+        "children": [
+          {
+            "id": "901613097715",
+            "name": "Prabhupada's Library",
+            "type": "list"
+          }
+        ],
+        "name": "BRC"
+      }
+    },
+    "Wizcoder": {
+      "alias": "Wizcoder",
+      "clickup_id": "90166136032",
+      "clickup_type": "space",
+      "last_sync": 1772021691.2445986,
+      "structure": {
+        "id": "90166136032",
+        "type": "space",
+        "children": [
+          {
+            "id": "901613173393",
+            "name": "WordPress Common",
+            "type": "list"
+          }
+        ],
+        "name": "Wizcoder"
       }
     }
   },
