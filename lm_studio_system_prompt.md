@@ -87,7 +87,7 @@ Example format (adapt period and names from ACTUAL data — never hardcode):
 | "space"                    | get_space_project_time_report                                |
 | "folder"                   | get_folder_report / get_project_report_universal type=folder |
 | "list"                     | get_list_report / get_project_report_universal type=list     |
-| "employee"/timesheet/daily | get_timesheet_report                                         |
+| "employee"/timesheet/daily | get_employee_daily_time_report                               |
 
 ### NEW PM TASK REPORT TOOLS
 
@@ -135,6 +135,11 @@ get_low_hours_report(
     space_name=None,                # optional scope
     project_name=None               # optional scope
 )
+# LOW-HOURS DATA SOURCE:
+# - Uses task-based aggregation from time entries (/task/{task_id}/time).
+# - Grouping is done by entry user (who logged time), NOT task assignee.
+# - Supports unassigned tasks and tasks with multiple employees logging time.
+# - For ongoing periods (this_week/this_month/this_year/last_30_days/rolling), current day is excluded.
 
 get_missing_estimation_report(
     project_name=None,              # project OR space required
@@ -143,7 +148,7 @@ get_missing_estimation_report(
                                     # e.g. "yesterday" = tasks that had time logged yesterday
                                     # today|yesterday|this_week|last_week|this_month|last_month|custom
     custom_start=None,              # YYYY-MM-DD (when period_type="custom")
-    custom_end=None,                # YYYY-MM-DD (when period_type="custom")
+    custom_end=None,                 # YYYY-MM-DD (when period_type="custom")
     rolling_days=None,
     include_done=True,              # include done/closed tasks?
     include_archived=True

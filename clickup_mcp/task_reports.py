@@ -984,8 +984,23 @@ def register_task_report_tools(mcp: FastMCP):
             )
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
             threshold_ms = int(min_hours * 3600 * 1000)
+            period_norm = (period_type or "").strip().lower()
+            exclude_today_for_ongoing = period_norm in {
+                "this_week",
+                "current_week",
+                "this_month",
+                "current_month",
+                "this_year",
+                "current_year",
+                "last_30_days",
+                "rolling",
+            }
+            today_ist = (datetime.now(timezone.utc) + timedelta(hours=5.5)).strftime(
+                "%Y-%m-%d"
+            )
+            effective_end_date = end_date
 
-            # Resolve list IDs
+            # Resolve list IDs for scope
             if project_name:
                 list_ids = _list_ids_for_project(project_name)
                 scope = project_name
@@ -1028,25 +1043,53 @@ def register_task_report_tools(mcp: FastMCP):
                 [t["id"] for t in timed], start_ms, end_ms
             )
 
-            # Build per-member, per-day time map
-            # { username: { "YYYY-MM-DD": total_ms } }
-            member_day: Dict[str, Dict[str, int]] = defaultdict(
-                lambda: defaultdict(int)
-            )
+            # Build per-member, per-day time map from ACTUAL entry user.
+            # Works for unassigned tasks and multi-employee tasks naturally.
+            member_day: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            seen_interval_by_user: Dict[str, set] = defaultdict(set)
 
             for task_entries in entries_map.values():
                 for entry in task_entries:
-                    uname = (entry.get("user") or {}).get("username", "")
+                    user_obj = entry.get("user") or {}
+                    uname = user_obj.get("username") or user_obj.get("email") or ""
                     if not uname:
                         continue
-                    for iv in entry.get("intervals", []):
+
+                    intervals = entry.get("intervals", []) or []
+                    # Fallback shape: interval data may be on the entry itself.
+                    if not intervals:
+                        e_start = entry.get("start")
+                        e_time = entry.get("duration") or entry.get("time") or 0
+                        if e_start:
+                            intervals = [
+                                {"start": e_start, "end": entry.get("end"), "time": e_time}
+                            ]
+
+                    for iv in intervals:
                         iv_start = int(iv.get("start") or 0)
-                        iv_end = int(iv.get("end") or 0)
                         if not (start_ms <= iv_start <= end_ms):
                             continue
-                        duration = iv_end - iv_start if iv_end > iv_start else 0
+
+                        iv_end = int(iv.get("end") or 0)
+                        iv_time = int(iv.get("time") or 0)
+                        if iv_time <= 0:
+                            iv_time = iv_end - iv_start if iv_end > iv_start else 0
+                        if iv_time <= 0:
+                            continue
+
+                        # Deduplicate by interval id per user across all tasks to avoid rollup double-counting.
+                        iv_id = iv.get("id")
+                        fp = (
+                            f"id:{iv_id}"
+                            if iv_id
+                            else f"tuple:{iv_start}:{iv_end}:{iv_time}"
+                        )
+                        if fp in seen_interval_by_user[uname]:
+                            continue
+                        seen_interval_by_user[uname].add(fp)
+
                         date_str = _ms_to_date_ist(iv_start)
-                        member_day[uname][date_str] += duration
+                        member_day[uname][date_str] += iv_time
 
             # Classify days
             flagged = []
@@ -1055,6 +1098,10 @@ def register_task_report_tools(mcp: FastMCP):
             for uname, day_map in sorted(member_day.items()):
                 short_days = []
                 for date_str, tracked_ms in sorted(day_map.items()):
+                    # Ongoing periods should evaluate complete days only.
+                    # Excluding current IST date avoids false low-hour flags mid-day.
+                    if exclude_today_for_ongoing and date_str == today_ist:
+                        continue
                     if tracked_ms < threshold_ms:
                         shortfall_ms = threshold_ms - tracked_ms
                         dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -1069,7 +1116,7 @@ def register_task_report_tools(mcp: FastMCP):
                         )
 
                 if short_days:
-                    short_days.sort(key=lambda x: x.pop("tracked_ms"))
+                    short_days.sort(key=lambda x: x["tracked_ms"])
                     flagged.append(
                         {
                             "member_name": uname,
@@ -1085,18 +1132,23 @@ def register_task_report_tools(mcp: FastMCP):
             # --- Markdown formatted_output ---
             lines = [
                 "## Low Hours Report",
-                f"**Period:** {start_date} → {end_date}  |  "
+                f"**Period:** {start_date} → {effective_end_date}  |  "
                 f"**Threshold:** {min_hours}h/day  |  "
                 f"**Scope:** {scope}",
                 f"**{len(flagged)} member(s) with short days** | "
                 f"**{len(clean)} member(s) fully compliant**",
                 "",
             ]
+            if exclude_today_for_ongoing:
+                lines.append(
+                    f"_Note: Current day ({today_ist}) excluded to avoid partial-day false positives._"
+                )
+                lines.append("")
             if flagged:
                 lines.append("| Member | Occurrences | Worst Day (tracked) |")
                 lines.append("|--------|------------:|---------------------|")
                 for f in flagged:
-                    worst = min(f["short_days"], key=lambda x: x["tracked"])
+                    worst = min(f["short_days"], key=lambda x: x["tracked_ms"])
                     lines.append(
                         f"| {f['member_name']} | {f['total_days_below_threshold']} "
                         f"| {worst['date']} ({worst['tracked']}) |"
@@ -1119,10 +1171,11 @@ def register_task_report_tools(mcp: FastMCP):
                 lines.append(f"**Compliant members:** {', '.join(clean)}")
 
             return {
-                "period": f"{start_date} to {end_date}",
+                "period": f"{start_date} to {effective_end_date}",
                 "period_type": period_type,
                 "scope": scope,
                 "threshold_hours": min_hours,
+                "excluded_current_day": exclude_today_for_ongoing,
                 "flagged_members": flagged,
                 "clean_members": clean,
                 "formatted_output": "\n".join(lines),
