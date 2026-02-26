@@ -1569,14 +1569,14 @@ def register_task_report_tools(mcp: FastMCP):
     # =========================================================================
     # 6. OVERTIME REPORT — Tracked > Estimated
     #
-    # FIX (2025-02-25): Use rollup-consistent metric pair:
-    #   • Parent task (no parent field): est_total vs tracked_total
-    #   • Subtask (has parent field):    est_direct vs tracked_direct
+    # FIX (2025-02-26): Use hierarchy-level metric pair:
+    #   • Main task (no parent): est_total vs tracked_total
+    #   • Subtask (any depth):   est_direct vs tracked_direct
     #
     # Per-user overage is proportional share of total task overage,
     # NOT (user_t_ms - split_estimate). The old formula inflated numbers
     # because _fetch_time_entries_smart returns ALL entries including
-    # subtask time, while est_direct only covered the parent's own estimate.
+    # child-subtask time, while est_direct only covered a subtask's own estimate.
     # =========================================================================
 
     @mcp.tool()
@@ -1601,10 +1601,10 @@ def register_task_report_tools(mcp: FastMCP):
         estimate AND logged time are included.
 
         ESTIMATION CONSISTENCY RULE:
-          Parent task (no parent): uses est_total / tracked_total (subtask rollup included)
-          Subtask (has parent):    uses est_direct / tracked_direct (independent)
-        This mirrors get_missing_estimation_report logic and prevents false
-        overtime when subtask time is rolled into parent time entries.
+          Main task (no parent): uses est_total / tracked_total
+          Subtask (any depth):   uses est_direct / tracked_direct
+        This keeps top-level oversight rollup-aware while evaluating execution
+        subtasks by their own direct effort.
 
         Args:
             project_name:        Narrow to a specific project (optional)
@@ -1628,6 +1628,7 @@ def register_task_report_tools(mcp: FastMCP):
                 }
               },
               summary_table: [{member, tasks, total_overtime}],
+              flagged_task_hierarchy: [tree-like lines],
               formatted_output: <markdown>
             }
         """
@@ -1698,55 +1699,86 @@ def register_task_report_tools(mcp: FastMCP):
                 [t["id"] for t in timed], start_ms, end_ms
             )
             metrics = _calculate_task_metrics(all_tasks)
+            task_by_id = {str(t["id"]): t for t in all_tasks}
+            children_map: Dict[str, List[str]] = {}
+            for t in all_tasks:
+                pid = t.get("parent")
+                if pid and str(pid) in task_by_id:
+                    children_map.setdefault(str(pid), []).append(str(t["id"]))
+
+            period_user_time_by_task: Dict[str, Dict[str, int]] = {}
+            for t in all_tasks:
+                tid = str(t["id"])
+                period_user_time_by_task[tid] = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(tid, []), start_ms, end_ms
+                )
+
+            # Fallback for main tasks with no direct entries in range:
+            # aggregate descendant entries so pure-rollup parents can still be evaluated.
+            subtree_user_cache: Dict[str, Dict[str, int]] = {}
+
+            def _subtree_user_time(tid: str) -> Dict[str, int]:
+                if tid in subtree_user_cache:
+                    return subtree_user_cache[tid]
+                agg = dict(period_user_time_by_task.get(tid, {}) or {})
+                for cid in children_map.get(tid, []):
+                    for uname, ms in _subtree_user_time(cid).items():
+                        agg[uname] = agg.get(uname, 0) + ms
+                subtree_user_cache[tid] = agg
+                return agg
 
             members: Dict[str, Dict] = {}
             total_overtime_tasks = 0
+            flagged_tasks: Dict[str, Dict[str, Any]] = {}
 
             for task in all_tasks:
-                task_id = task["id"]
+                task_id = str(task["id"])
 
                 # -------------------------------------------------------
-                # FIX: Use rollup-consistent metric pair.
-                #   Parent task → est_total / tracked_total
-                #   Subtask     → est_direct / tracked_direct
-                # This prevents inflated overage when subtask time is
-                # included in the parent's time entries but the estimate
-                # comparison was only against the parent's direct estimate.
+                # Main tasks are checked with rollup totals.
+                # Subtasks (including nested) are checked with direct values.
                 # -------------------------------------------------------
-                is_subtask = bool(task.get("parent"))
-                metric_key = "direct" if is_subtask else "total"
+                is_main_task = not task.get("parent")
+                metric_key = "total" if is_main_task else "direct"
                 m = metrics.get(task_id, {})
                 est_ms = m.get(f"est_{metric_key}", 0)
-                rollup_tracked_ms = m.get(f"tracked_{metric_key}", 0)
+                metric_tracked_ms = m.get(f"tracked_{metric_key}", 0)
 
                 # Only tasks with an estimate
                 if est_ms == 0:
                     continue
 
                 # Only tasks with tracked time in the period
-                # We still fetch per-user actual entries for display,
-                # but use the rollup-consistent tracked_ms for the gate check.
-                user_time = filter_time_entries_by_user_and_date_range(
-                    entries_map.get(task_id, []), start_ms, end_ms
-                )
+                # Main task fallback: include descendant period entries if direct map is empty.
+                user_time = dict(period_user_time_by_task.get(task_id, {}) or {})
+                if is_main_task and not user_time:
+                    user_time = _subtree_user_time(task_id)
                 period_tracked_ms = sum(user_time.values())
 
                 if period_tracked_ms == 0:
                     continue
 
                 # Gate check: raw overage only (tracked must exceed estimate).
-                # Use rollup_tracked_ms for a consistent comparison against est_ms.
-                # For subtasks, rollup_tracked_ms == period_tracked_ms (direct only).
-                # For parents, rollup_tracked_ms includes subtask contributions.
-                #
-                # We compare rollup_tracked_ms vs est_ms for the flag decision,
-                # but use period_tracked_ms (actual entries in range) for display.
-                overage_ms = rollup_tracked_ms - est_ms
+                # Main tasks use rollup totals; subtasks use direct values.
+                overage_ms = metric_tracked_ms - est_ms
                 if overage_ms <= 0:
                     continue
 
                 total_overtime_tasks += 1
                 status = _extract_status_name(task)
+                flagged_tasks[task_id] = {
+                    "task_id": task_id,
+                    "parent_id": task.get("parent"),
+                    "task_name": task.get("name", "Unnamed"),
+                    "status": status,
+                    "metric_basis": metric_key,
+                    "estimated_ms": est_ms,
+                    "tracked_ms": metric_tracked_ms,
+                    "overage_ms": overage_ms,
+                    "estimated": _format_duration(est_ms),
+                    "tracked": _format_duration(metric_tracked_ms),
+                    "overage": _format_duration(overage_ms),
+                }
 
                 # Distribute overage proportionally across users who tracked
                 # in the period. This avoids attributing full task overage to
@@ -1771,12 +1803,17 @@ def register_task_report_tools(mcp: FastMCP):
                         {
                             "task_name": task.get("name", "Unnamed"),
                             "status": status,
-                            # Show the rollup-consistent estimate (total for parent, direct for subtask)
+                            # Show the rollup-consistent estimate.
                             "estimated": _format_duration(est_ms),
-                            # Show what the user actually tracked in the period
+                            # Metric-basis tracked used for gate check (total for main, direct for subtask)
+                            "tracked_basis": _format_duration(metric_tracked_ms),
+                            # User's own tracked time in the selected period (used for share split)
+                            "tracked_period": _format_duration(t_ms),
+                            # Backward-compatible alias
                             "tracked": _format_duration(t_ms),
                             "overage": _format_duration(per_user_overage),
                             "overage_ms": per_user_overage,
+                            "metric_basis": metric_key,
                         }
                     )
 
@@ -1803,12 +1840,81 @@ def register_task_report_tools(mcp: FastMCP):
                 for mb, d in formatted_members.items()
             ]
 
+            # Build hierarchy-only view of flagged tasks.
+            flagged_ids = set(flagged_tasks.keys())
+            has_flagged_cache: Dict[str, bool] = {}
+            root_cache: Dict[str, str] = {}
+
+            def _has_flagged_subtree(tid: str) -> bool:
+                if tid in has_flagged_cache:
+                    return has_flagged_cache[tid]
+                has_any = tid in flagged_ids
+                if not has_any:
+                    for cid in children_map.get(tid, []):
+                        if _has_flagged_subtree(cid):
+                            has_any = True
+                            break
+                has_flagged_cache[tid] = has_any
+                return has_any
+
+            def _root_id(tid: str) -> str:
+                if tid in root_cache:
+                    return root_cache[tid]
+                seen = set()
+                cur = tid
+                while True:
+                    node = task_by_id.get(cur, {})
+                    pid = node.get("parent")
+                    if not pid or str(pid) not in task_by_id or cur in seen:
+                        break
+                    seen.add(cur)
+                    cur = str(pid)
+                root_cache[tid] = cur
+                return cur
+
+            hierarchy_lines: List[str] = []
+
+            def _render_children(parent_id: str, prefix: str = "") -> None:
+                for cid in children_map.get(parent_id, []):
+                    if not _has_flagged_subtree(cid):
+                        continue
+                    info = flagged_tasks.get(cid)
+                    child_name = task_by_id.get(cid, {}).get("name", "Unnamed")
+                    if info:
+                        hierarchy_lines.append(
+                            f"{prefix}|- {child_name} ({info['tracked']} > {info['estimated']}, "
+                            f"over {info['overage']}, basis={info['metric_basis']})"
+                        )
+                    else:
+                        hierarchy_lines.append(f"{prefix}|- {child_name} (context)")
+                    _render_children(cid, prefix + "|  ")
+
+            root_ids = sorted(
+                {_root_id(tid) for tid in flagged_ids},
+                key=lambda rid: task_by_id.get(rid, {}).get("name", "").lower(),
+            )
+            for rid in root_ids:
+                root_name = task_by_id.get(rid, {}).get("name", "Unnamed")
+                root_info = flagged_tasks.get(rid)
+                if root_info:
+                    hierarchy_lines.append(
+                        f"Main Task: {root_name} ({root_info['tracked']} > {root_info['estimated']}, "
+                        f"over {root_info['overage']}, basis={root_info['metric_basis']})"
+                    )
+                else:
+                    hierarchy_lines.append(
+                        f"Main Task: {root_name} (context: flagged descendants)"
+                    )
+                hierarchy_lines.append("|")
+                _render_children(rid)
+                hierarchy_lines.append("")
+
             # --- Markdown formatted_output ---
             lines = [
                 "## Overtime Report (Tracked > Estimated)",
                 f"**Scope:** {scope}  |  **Period:** {start_date} → {end_date}",
                 f"**Flagged tasks:** {total_overtime_tasks}  |  "
-                f"**Overage mode:** raw (tracked > estimated)",
+                f"**Overage mode:** main=total, subtasks=direct",
                 "",
                 "| Member | Overtime Tasks | Total Overtime |",
                 "|--------|---------------:|---------------:|",
@@ -1821,14 +1927,29 @@ def register_task_report_tools(mcp: FastMCP):
 
             for mb, d in formatted_members.items():
                 lines.append(f"### {mb} — {d['total_overtime']} over")
-                lines.append("| Task | Status | Estimated | Tracked | Overage |")
-                lines.append("|------|--------|----------:|--------:|--------:|")
+                lines.append(
+                    "| Task | Status | Basis | Estimated | Tracked (Basis) | Tracked in Period | Overage |"
+                )
+                lines.append(
+                    "|------|--------|------:|----------:|----------------:|------------------:|--------:|"
+                )
                 for t in d["tasks"]:
                     lines.append(
                         f"| {t['task_name']} | {t['status']} | "
-                        f"{t['estimated']} | {t['tracked']} | {t['overage']} |"
+                        f"{t['metric_basis']} | {t['estimated']} | {t['tracked_basis']} | "
+                        f"{t['tracked_period']} | {t['overage']} |"
                     )
                 lines.append("")
+
+            if hierarchy_lines:
+                lines.append("## Flagged Task Hierarchy")
+                lines.append(
+                    "Main tasks are checked with total metrics; subtasks and nested subtasks are checked with direct metrics."
+                )
+                lines.append("")
+                lines.append("```text")
+                lines.extend(hierarchy_lines)
+                lines.append("```")
 
             return {
                 "scope": scope,
@@ -1837,6 +1958,7 @@ def register_task_report_tools(mcp: FastMCP):
                 "total_overtime_tasks": total_overtime_tasks,
                 "members": formatted_members,
                 "summary_table": summary_table,
+                "flagged_task_hierarchy": hierarchy_lines,
                 "formatted_output": "\n".join(lines),
             }
 

@@ -4,7 +4,7 @@
       "alias": "AI_Projects",
       "clickup_id": "90165507588",
       "clickup_type": "space",
-      "last_sync": 1772023996.7987316,
+      "last_sync": 1772088003.6892762,
       "structure": {
         "id": "90165507588",
         "type": "space",
@@ -22,7 +22,7 @@
       "alias": "AI",
       "clickup_id": "90161321203",
       "clickup_type": "space",
-      "last_sync": 1772024019.2661107,
+      "last_sync": 1772088029.9115305,
       "structure": {
         "id": "90161321203",
         "type": "space",
@@ -521,7 +521,7 @@
       "alias": "JewelleryOS",
       "clickup_id": "90165613766",
       "clickup_type": "space",
-      "last_sync": 1772024027.1867366,
+      "last_sync": 1772088039.891681,
       "structure": {
         "id": "90165613766",
         "type": "space",
@@ -684,7 +684,7 @@
       "alias": "Avinashi Chat",
       "clickup_id": "90165717669",
       "clickup_type": "space",
-      "last_sync": 1772024031.1043184,
+      "last_sync": 1772088044.964751,
       "structure": {
         "id": "90165717669",
         "type": "space",
@@ -741,7 +741,7 @@
       "alias": "linkutm",
       "clickup_id": "90165243069",
       "clickup_type": "space",
-      "last_sync": 1772024035.8503175,
+      "last_sync": 1772088050.7116458,
       "structure": {
         "id": "90165243069",
         "type": "space",
@@ -855,7 +855,7 @@
       "alias": "AIX",
       "clickup_id": "90165253762",
       "clickup_type": "space",
-      "last_sync": 1772024063.806844,
+      "last_sync": 1772088083.0054781,
       "structure": {
         "id": "90165253762",
         "type": "space",
@@ -1194,7 +1194,7 @@
       "alias": "MindTech",
       "clickup_id": "90165634163",
       "clickup_type": "space",
-      "last_sync": 1772024065.6568756,
+      "last_sync": 1772088084.7141938,
       "structure": {
         "id": "90165634163",
         "type": "space",
@@ -1247,7 +1247,7 @@
       "alias": "Venture Studio",
       "clickup_id": "90165763632",
       "clickup_type": "space",
-      "last_sync": 1772024069.7876282,
+      "last_sync": 1772088089.1512449,
       "structure": {
         "id": "90165763632",
         "type": "space",
@@ -1294,7 +1294,7 @@
       "alias": "Avinashi Leaders",
       "clickup_id": "90165752782",
       "clickup_type": "space",
-      "last_sync": 1772024074.926682,
+      "last_sync": 1772088094.5148613,
       "structure": {
         "id": "90165752782",
         "type": "space",
@@ -1361,6 +1361,11 @@
                 "id": "901613557904",
                 "name": "Week 3",
                 "type": "list"
+              },
+              {
+                "id": "901613741528",
+                "name": "Week 4",
+                "type": "list"
               }
             ],
             "name": "Feb 2026"
@@ -1373,7 +1378,7 @@
       "alias": "BlogManager",
       "clickup_id": "90165866900",
       "clickup_type": "space",
-      "last_sync": 1772024077.5950947,
+      "last_sync": 1772088097.7040343,
       "structure": {
         "id": "90165866900",
         "type": "space",
@@ -1398,7 +1403,7 @@
       "alias": "3D Team",
       "clickup_id": "90165683323",
       "clickup_type": "space",
-      "last_sync": 1772024079.1377153,
+      "last_sync": 1772088099.4600954,
       "structure": {
         "id": "90165683323",
         "type": "space",
@@ -1421,7 +1426,7 @@
       "alias": "UP-BOCW",
       "clickup_id": "90165885558",
       "clickup_type": "space",
-      "last_sync": 1772024080.7112105,
+      "last_sync": 1772088101.269012,
       "structure": {
         "id": "90165885558",
         "type": "space",
@@ -1439,7 +1444,7 @@
       "alias": "General Task Management",
       "clickup_id": "90165811501",
       "clickup_type": "space",
-      "last_sync": 1772024082.4202938,
+      "last_sync": 1772088103.1881845,
       "structure": {
         "id": "90165811501",
         "type": "space",
@@ -1457,7 +1462,7 @@
       "alias": "Nidan.ai",
       "clickup_id": "90165934294",
       "clickup_type": "space",
-      "last_sync": 1772024083.9015605,
+      "last_sync": 1772088104.8633034,
       "structure": {
         "id": "90165934294",
         "type": "space",
@@ -1475,7 +1480,7 @@
       "alias": "WC-Corporate",
       "clickup_id": "90165634091",
       "clickup_type": "space",
-      "last_sync": 1772024087.9043658,
+      "last_sync": 1772088109.3487086,
       "structure": {
         "id": "90165634091",
         "type": "space",
@@ -1517,7 +1522,7 @@
       "alias": "VibeScorer",
       "clickup_id": "90165953185",
       "clickup_type": "space",
-      "last_sync": 1772024089.5371404,
+      "last_sync": 1772088111.0796404,
       "structure": {
         "id": "90165953185",
         "type": "space",
@@ -1550,7 +1555,7 @@
       "alias": "AI WorksheetPro",
       "clickup_id": "90165974124",
       "clickup_type": "space",
-      "last_sync": 1772024091.4203374,
+      "last_sync": 1772088112.779943,
       "structure": {
         "id": "90165974124",
         "type": "space",
@@ -1568,7 +1573,7 @@
       "alias": "Gold Jewellers",
       "clickup_id": "90165977016",
       "clickup_type": "space",
-      "last_sync": 1772024093.6416752,
+      "last_sync": 1772088114.753251,
       "structure": {
         "id": "90165977016",
         "type": "space",
@@ -1586,7 +1591,7 @@
       "alias": "NidanAI",
       "clickup_id": "90165717312",
       "clickup_type": "space",
-      "last_sync": 1772024095.2544696,
+      "last_sync": 1772088116.4466317,
       "structure": {
         "id": "90165717312",
         "type": "space",
@@ -1604,7 +1609,7 @@
       "alias": "DevOps & Networking",
       "clickup_id": "90165941160",
       "clickup_type": "space",
-      "last_sync": 1772024096.9361947,
+      "last_sync": 1772088118.3216617,
       "structure": {
         "id": "90165941160",
         "type": "space",
@@ -1622,7 +1627,7 @@
       "alias": "BRC",
       "clickup_id": "90166096218",
       "clickup_type": "space",
-      "last_sync": 1772024099.6524642,
+      "last_sync": 1772088120.611537,
       "structure": {
         "id": "90166096218",
         "type": "space",
@@ -1640,7 +1645,7 @@
       "alias": "Wizcoder",
       "clickup_id": "90166136032",
       "clickup_type": "space",
-      "last_sync": 1772024101.306719,
+      "last_sync": 1772088122.3834825,
       "structure": {
         "id": "90166136032",
         "type": "space",

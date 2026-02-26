@@ -178,13 +178,12 @@ get_overtracked_report(
     include_archived=True
 )
 # OVERTIME LOGIC — ESTIMATION CONSISTENCY RULE:
-#   • Main task (no parent): uses est_total / tracked_total (subtask rollup included)
-#   • Subtask (has parent):  uses est_direct / tracked_direct (independent)
+#   • Main task (no parent): uses est_total / tracked_total
+#   • Subtask (any depth):   uses est_direct / tracked_direct
 #
 # WHY THIS MATTERS:
-#   ClickUp rolls subtask time into the parent's time entries.
-#   Using est_direct on a parent while fetched entries include subtask time
-#   produces false overtime. Always compare total vs total OR direct vs direct.
+#   Main tasks should reflect delivery-level rollup; execution subtasks should
+#   be judged by their own direct effort. This avoids mixing hierarchy levels.
 #
 # PER-USER OVERAGE DISPLAY:
 #   Each user's overage = their proportional share of total task overage
@@ -197,7 +196,15 @@ get_overtracked_report(
 # RETURNS:
 #   formatted_output  → markdown table (render verbatim)
 #   members           → {member: {overtime_tasks, total_overtime, tasks[...]}}
+#   member task rows include:
+#       metric_basis      → total (main task) OR direct (subtask)
+#       tracked_basis     → tracked value used for overage gate
+#       tracked_period    → user's tracked time in selected period
 #   summary_table     → [{member, overtime_tasks, total_overtime}]
+#   flagged_task_hierarchy → tree-style lines:
+#       Main Task
+#       |
+#       |- Subtask
 #   total_overtime_tasks, scope, period
 ```
 
