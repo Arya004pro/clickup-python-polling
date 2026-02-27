@@ -1116,7 +1116,7 @@ def register_task_report_tools(mcp: FastMCP):
                         )
 
                 if short_days:
-                    short_days.sort(key=lambda x: x["tracked_ms"])
+                    short_days.sort(key=lambda x: x["date"])
                     flagged.append(
                         {
                             "member_name": uname,
@@ -1145,8 +1145,8 @@ def register_task_report_tools(mcp: FastMCP):
                 )
                 lines.append("")
             if flagged:
-                lines.append("| Member | Occurrences | Worst Day (tracked) |")
-                lines.append("|--------|------------:|---------------------|")
+                lines.append("| Member | Days Below Target | Lowest Hours Day |")
+                lines.append("|--------|------------------:|------------------|")
                 for f in flagged:
                     worst = min(f["short_days"], key=lambda x: x["tracked_ms"])
                     lines.append(
@@ -1156,10 +1156,10 @@ def register_task_report_tools(mcp: FastMCP):
                 lines.append("")
                 for f in flagged:
                     lines.append(
-                        f"### {f['member_name']} — {f['total_days_below_threshold']} short day(s)"
+                        f"### {f['member_name']} — {f['total_days_below_threshold']} day(s) below target"
                     )
-                    lines.append("| Date | Day | Tracked | Shortfall |")
-                    lines.append("|------|-----|--------:|----------:|")
+                    lines.append("| Date | Day | Hours Logged | Hours Missing To Reach Target |")
+                    lines.append("|------|-----|-------------:|------------------------------:|")
                     for sd in f["short_days"]:
                         lines.append(
                             f"| {sd['date']} | {sd['day_of_week']} | "

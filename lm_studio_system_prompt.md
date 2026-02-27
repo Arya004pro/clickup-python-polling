@@ -62,7 +62,7 @@ When `formatted_output` contains both sections, render **both** verbatim:
 
 ## REPORT SUMMARY RULE (CRITICAL)
 
-After displaying any report table, ALWAYS add a 2-4 sentence **Summary** section using the ACTUAL period from the report (not assumed):
+Only when no `formatted_output` field is present, add a 2-4 sentence **Summary** section using the ACTUAL period from the report (not assumed):
 
 - State the report period exactly as returned (e.g. "this month", "2026-02-01 → 2026-02-23", "yesterday")
 - What the data shows overall (tasks count, time totals)
@@ -140,6 +140,11 @@ get_low_hours_report(
 # - Grouping is done by entry user (who logged time), NOT task assignee.
 # - Supports unassigned tasks and tasks with multiple employees logging time.
 # - For ongoing periods (this_week/this_month/this_year/last_30_days/rolling), current day is excluded.
+# LOW-HOURS RENDERING RULE:
+# - If low-hours result contains `formatted_output`, print it EXACTLY as-is in markdown.
+# - Do NOT convert to bullets, prose, or partial sections.
+# - Do NOT reorder employees/rows/columns.
+# - Do NOT add/remove headings before the verbatim block.
 
 get_missing_estimation_report(
     project_name=None,              # project OR space required
