@@ -604,6 +604,12 @@ def register_task_report_tools(mcp: FastMCP):
                     "tasks_worked_on": 0,
                     "time_tracked_ms": 0,
                     "time_estimate_ms": 0,
+                    "status_counts": {
+                        "not_started": 0,
+                        "active": 0,
+                        "done": 0,
+                        "cancelled": 0,
+                    },
                     "team_members": defaultdict(
                         lambda: {
                             "tasks": 0,
@@ -638,6 +644,19 @@ def register_task_report_tools(mcp: FastMCP):
 
                 task_name = task.get("name", "Unnamed")
                 task_status = _extract_status_name(task)
+                status_obj = task.get("status")
+                status_type = (
+                    status_obj.get("type") if isinstance(status_obj, dict) else None
+                )
+                status_category = get_status_category(task_status, status_type)
+                if status_category == "not_started":
+                    pr["status_counts"]["not_started"] += 1
+                elif status_category == "done":
+                    pr["status_counts"]["done"] += 1
+                elif status_category == "closed":
+                    pr["status_counts"]["cancelled"] += 1
+                else:
+                    pr["status_counts"]["active"] += 1
 
                 for username, t_ms in user_time.items():
                     mb = pr["team_members"][username]
@@ -711,6 +730,7 @@ def register_task_report_tools(mcp: FastMCP):
                         "tasks_worked_on": pr["tasks_worked_on"],
                         "time_tracked": _format_duration(pr["time_tracked_ms"]),
                         "time_estimate": _format_duration(pr["time_estimate_ms"]),
+                        "status_summary": pr["status_counts"],
                         "team_breakdown": team_breakdown,
                     }
                 )
@@ -718,6 +738,16 @@ def register_task_report_tools(mcp: FastMCP):
             formatted_projects.sort(
                 key=lambda x: _duration_to_ms(x["time_tracked"]), reverse=True
             )
+
+            show_cancelled_column = any(
+                int(fp.get("status_summary", {}).get("cancelled", 0)) > 0
+                for fp in formatted_projects
+            )
+
+            if not show_cancelled_column:
+                for fp in formatted_projects:
+                    status_summary = fp.get("status_summary") or {}
+                    status_summary.pop("cancelled", None)
 
             ai_summary = _build_space_ai_summary(
                 display_space_name=display_space_name,
@@ -744,6 +774,25 @@ def register_task_report_tools(mcp: FastMCP):
                 [f"- {line}" for line in ai_summary.split("\n") if line.strip()]
             )
             lines.append("")
+            lines.append("### Status Summary by Project")
+            if show_cancelled_column:
+                lines.append("| Project | Not Started | Active | Done | Cancelled |")
+                lines.append("|---------|------------:|-------:|-----:|----------:|")
+            else:
+                lines.append("| Project | Not Started | Active | Done |")
+                lines.append("|---------|------------:|-------:|-----:|")
+            for fp in formatted_projects:
+                sc = fp.get("status_summary", {})
+                if show_cancelled_column:
+                    lines.append(
+                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | {sc.get('done', 0)} | {sc.get('cancelled', 0)} |"
+                    )
+                else:
+                    lines.append(
+                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | {sc.get('done', 0)} |"
+                    )
+            lines.append("")
+
             for fp in formatted_projects:
                 lines.append(f"### {fp['project_name']} ({fp['project_type']})")
                 lines.append(
@@ -778,6 +827,31 @@ def register_task_report_tools(mcp: FastMCP):
                 "total_projects": len(project_map or {}),
                 "active_projects": len(formatted_projects),
                 "projects": formatted_projects,
+                "status_summary_table": [
+                    (
+                        {
+                            "project_name": fp["project_name"],
+                            "not_started": fp.get("status_summary", {}).get(
+                                "not_started", 0
+                            ),
+                            "active": fp.get("status_summary", {}).get("active", 0),
+                            "done": fp.get("status_summary", {}).get("done", 0),
+                            "cancelled": fp.get("status_summary", {}).get(
+                                "cancelled", 0
+                            ),
+                        }
+                        if show_cancelled_column
+                        else {
+                            "project_name": fp["project_name"],
+                            "not_started": fp.get("status_summary", {}).get(
+                                "not_started", 0
+                            ),
+                            "active": fp.get("status_summary", {}).get("active", 0),
+                            "done": fp.get("status_summary", {}).get("done", 0),
+                        }
+                    )
+                    for fp in formatted_projects
+                ],
                 "ai_summary": ai_summary,
                 "formatted_output": "\n".join(lines),
             }

@@ -44,6 +44,17 @@ The `formatted_output` from `get_space_task_report` renders per-project sections
 **Period:** 2026-02-26 → 2026-02-26
 **Total Tracked:** 24h 15m  |  **Total Estimated:** 30h
 
+### AI Summary
+- From 2026-02-26 to 2026-02-26, AIX logged 24h 15m against 30h (81% of estimate) across 4 active project(s).
+
+### Status Summary by Project
+| Project | Not Started | Active | Done |
+|---------|------------:|-------:|-----:|
+| AI Headshots | 2 | 4 | 2 |
+| RealEstate Voice Agent | 1 | 3 | 0 |
+
+> Include `Cancelled` column only when at least one project has cancelled/closed tasks in this report period.
+
 ### AI Headshots (folder)
 Tasks worked on: **8**  |  Tracked: **10h 30m**  |  Estimated: **12h**
 
@@ -148,9 +159,11 @@ get_space_task_report(
 #   grand_total_time_tracked, grand_total_time_estimate   (formatted strings)
 #   total_projects           → total folders/lists in space
 #   active_projects          → projects with tracked time in period
+#   status_summary_table     → [{project_name, not_started, active, done, (optional) cancelled}]
 #   projects[]               → list of active projects, sorted by tracked time desc
 #     .project_name, .project_type ("folder" | "list")
 #     .tasks_worked_on, .time_tracked, .time_estimate     (formatted strings)
+#     .status_summary        → {not_started, active, done, (optional) cancelled}
 #     .team_breakdown         → {member_name: {...}} — only members with tracked>0
 #       .tasks               → task count
 #       .time_tracked        → formatted string
@@ -167,6 +180,16 @@ get_space_task_report(
 #     ## Space Report: <space_name>
 #     **Period:** <start> → <end>
 #     **Total Tracked:** Xh Ym  |  **Total Estimated:** Xh Ym
+#
+#     ### AI Summary
+#     - <2-4 bullets>
+#
+#     ### Status Summary by Project
+#     | Project | Not Started | Active | Done |
+#     |---------|------------:|-------:|-----:|
+#     | ... |
+#
+#     (Show `Cancelled` column only when at least one project has cancelled/closed tasks.)
 #
 #     ### <project_name> (folder|list)
 #     Tasks worked on: N  |  Tracked: Xh Ym  |  Estimated: Xh Ym
