@@ -680,7 +680,7 @@ def register_task_report_tools(mcp: FastMCP):
             grand_est = 0
             project_highlights: List[Dict[str, Any]] = []
             member_rollup: Dict[str, Dict[str, int]] = defaultdict(
-                lambda: {"tracked_ms": 0, "tasks": 0}
+                lambda: {"tracked_ms": 0, "tasks": 0, "estimate_ms": 0}
             )
 
             for pname, pr in project_reports.items():
@@ -703,6 +703,7 @@ def register_task_report_tools(mcp: FastMCP):
                         continue
                     member_rollup[mb]["tracked_ms"] += d["time_tracked_ms"]
                     member_rollup[mb]["tasks"] += d["tasks"]
+                    member_rollup[mb]["estimate_ms"] += d["time_estimate_ms"]
                     sorted_tasks = sorted(
                         d["task_list"], key=lambda x: x["time_tracked_ms"], reverse=True
                     )
@@ -749,6 +750,20 @@ def register_task_report_tools(mcp: FastMCP):
                     status_summary = fp.get("status_summary") or {}
                     status_summary.pop("cancelled", None)
 
+            employee_summary_table = [
+                {
+                    "member_name": member_name,
+                    "tasks": data.get("tasks", 0),
+                    "time_tracked": _format_duration(data.get("tracked_ms", 0)),
+                    "time_estimate": _format_duration(data.get("estimate_ms", 0)),
+                }
+                for member_name, data in sorted(
+                    member_rollup.items(),
+                    key=lambda item: item[1].get("tracked_ms", 0),
+                    reverse=True,
+                )
+            ]
+
             ai_summary = _build_space_ai_summary(
                 display_space_name=display_space_name,
                 start_date=start_date,
@@ -793,6 +808,15 @@ def register_task_report_tools(mcp: FastMCP):
                     )
             lines.append("")
 
+            lines.append("### Employee Summary")
+            lines.append("| Member | Tasks | Time Tracked | Time Estimate |")
+            lines.append("|--------|------:|-------------:|--------------:|")
+            for row in employee_summary_table:
+                lines.append(
+                    f"| {row['member_name']} | {row['tasks']} | {row['time_tracked']} | {row['time_estimate']} |"
+                )
+            lines.append("")
+
             for fp in formatted_projects:
                 lines.append(f"### {fp['project_name']} ({fp['project_type']})")
                 lines.append(
@@ -827,6 +851,7 @@ def register_task_report_tools(mcp: FastMCP):
                 "total_projects": len(project_map or {}),
                 "active_projects": len(formatted_projects),
                 "projects": formatted_projects,
+                "employee_summary_table": employee_summary_table,
                 "status_summary_table": [
                     (
                         {
