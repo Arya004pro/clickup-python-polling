@@ -115,12 +115,11 @@ def _fetch_time_entries_smart(
     Fetch time entries for all tasks concurrently.
 
     Uses _client's pooled requests.Session (pool_connections=60,
-    pool_maxsize=60) and _client's rate limiter — the same stack optimized
+    pool_maxsize=80) and _client's rate limiter — the same stack optimized
     in api_client.py — so TCP/TLS connections are reused across all workers.
 
-    Worker count is capped at 60 to match pool_connections.  Using more
-    workers than pool slots causes urllib3 to open extra TCP connections
-    that ClickUp's server closes mid-handshake with an SSL EOF error.
+    Worker count stays capped at 60, leaving pool headroom for retries and
+    occasional concurrent background API calls.
 
     start_ms / end_ms are forwarded to the ClickUp API when provided so that
     only entries inside the requested period are returned, greatly reducing
@@ -143,9 +142,8 @@ def _fetch_time_entries_smart(
     if end_ms:
         time_params["end_date"] = end_ms
 
-    # Workers are capped at 60 to match pool_connections=60 in api_client.
-    # Using more workers than pool slots forces urllib3 to open extra TCP
-    # connections that ClickUp's server closes mid-handshake with an SSL EOF.
+    # Workers are capped at 60; api_client keeps a larger pool (80) so
+    # retries/background calls do not force overflow/discard behavior.
     workers = min(60, total)
 
     print(

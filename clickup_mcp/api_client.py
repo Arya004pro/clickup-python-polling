@@ -168,7 +168,10 @@ class ClickUpClient:
         )
         adapter = HTTPAdapter(
             pool_connections=60,
-            pool_maxsize=60,  # match worker cap (60) so every thread reuses a pooled socket
+            # Keep modest headroom beyond worker cap for retries/background calls.
+            pool_maxsize=80,
+            # Block instead of creating/discarding overflow sockets when pool is busy.
+            pool_block=True,
             max_retries=retry_strategy,
         )
         self.session.mount("https://", adapter)
@@ -387,8 +390,8 @@ class ClickUpClient:
     ) -> Dict[str, List]:
         """
         Per-task concurrent fetch with connection pooling.
-        pool_connections=60 matches max_workers so every thread reuses an
-        existing pooled socket — no new TLS handshakes, no SSL EOF errors.
+        Uses 60 workers with an 80-slot pool so retries/background calls have
+        headroom while worker threads still reuse pooled sockets.
         """
         if not task_ids:
             return {}
@@ -402,7 +405,7 @@ class ClickUpClient:
         log_every = max(100, total // 20)
 
         print(f"\n⏳ Fetching time entries for {total:,} tasks (pooled connections)...")
-        print(f"🚀 {workers} concurrent workers (pool_maxsize=60)")
+        print(f"🚀 {workers} concurrent workers (pool_maxsize=80)")
         sys.stdout.flush()
 
         def _is_ssl_error(exc: Exception) -> bool:

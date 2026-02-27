@@ -30,7 +30,9 @@ import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
+import json as _json
+import os as _os
 
 from fastmcp import FastMCP
 
@@ -110,12 +112,32 @@ def _resolve_space_lists(space_id: str) -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 # Monitoring config — scoped list-ID resolver
 # ---------------------------------------------------------------------------
-import json as _json
-import os as _os
+
 
 _MONITORING_CONFIG_PATH = _os.path.join(
     _os.path.dirname(__file__), "..", "monitoring_config.json"
 )
+
+
+def _split_monitored_scope(raw_name: str):
+    """
+    Parse monitored scope expressions.
+
+    Examples:
+      "monitored" -> (True, "")
+      "Monitored AIX" -> (True, "AIX")
+      "monitored:AIX" -> (True, "AIX")
+      "AIX" -> (False, "AIX")
+    """
+    name = (raw_name or "").strip()
+    lower = name.lower()
+    if lower == "monitored":
+        return True, ""
+    if lower.startswith("monitored:"):
+        return True, name.split(":", 1)[1].strip()
+    if lower.startswith("monitored "):
+        return True, name[len("monitored ") :].strip()
+    return False, name
 
 
 def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
@@ -133,18 +155,16 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
         return None
 
     _projects = _cfg.get("monitored_projects", [])
-    _name_lower = project_name.strip().lower()
+    _name = project_name.strip()
+    _name_lower = _name.lower()
+    _is_monitored_scope, _monitored_target = _split_monitored_scope(_name)
 
     def _collect_project_list_ids(_p: Dict[str, Any]) -> List[str]:
         _ids: List[str] = [str(_id) for _id in (_p.get("list_ids") or []) if _id]
         if _p.get("clickup_id") and _p.get("type") == "folder":
             _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
             _ids.extend(
-                [
-                    str(_l["id"])
-                    for _l in (_resp or {}).get("lists", [])
-                    if _l.get("id")
-                ]
+                [str(_l["id"]) for _l in (_resp or {}).get("lists", []) if _l.get("id")]
             )
         return list(dict.fromkeys(_ids))
 
@@ -153,13 +173,32 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
         _all_ids: List[str] = []
         for _p in _projects:
             _all_ids.extend(_collect_project_list_ids(_p))
-        return _all_ids or None
+        return list(dict.fromkeys(_all_ids))
+
+    # "Monitored <SpaceName>" / "monitored:<SpaceName>"
+    # Example: "Monitored AIX" -> union of monitored projects in space AIX.
+    if _is_monitored_scope and _monitored_target:
+        _target_lower = _monitored_target.lower()
+
+        # Exact monitored alias match first.
+        for _p in _projects:
+            if _p.get("alias", "").strip().lower() == _target_lower:
+                return _collect_project_list_ids(_p)
+
+        # Otherwise resolve as monitored SPACE scope.
+        _all_ids: List[str] = []
+        for _p in _projects:
+            if str(_p.get("space", "")).strip().lower() == _target_lower:
+                _all_ids.extend(_collect_project_list_ids(_p))
+
+        # Return [] (not None) so callers do NOT fall back to broad API scope.
+        return list(dict.fromkeys(_all_ids))
 
     # Exact alias match
     for _p in _projects:
         if _p["alias"].strip().lower() == _name_lower:
             _ids = _collect_project_list_ids(_p)
-            return _ids or None
+            return _ids
     return None
 
 
@@ -175,6 +214,99 @@ def _list_ids_for_project(project_name: str) -> List[str]:
     from .pm_analytics import _resolve_to_list_ids
 
     return _resolve_to_list_ids(project_name, None)
+
+
+def _resolve_space_project_map_for_reports(
+    space_name: str, auto_monitored: bool = True
+) -> Tuple[Optional[Dict[str, List[str]]], str, bool, Optional[str]]:
+    """
+    Resolve a space name into project->list mapping for reports.
+
+    Supports explicit monitored scopes like "Monitored AIX" and can
+    auto-apply monitored filtering when the space is present in
+    monitoring_config.json.
+    """
+    requested_space_name = (space_name or "").strip()
+    monitored_scope, monitored_target = _split_monitored_scope(requested_space_name)
+    resolved_space_name = requested_space_name
+
+    if monitored_scope:
+        if not monitored_target:
+            return (
+                None,
+                requested_space_name,
+                False,
+                "For monitored scope, provide a space name like 'Monitored AIX'.",
+            )
+        resolved_space_name = monitored_target
+
+    sid = _resolve_space_id(resolved_space_name)
+    if not sid:
+        return (
+            None,
+            resolved_space_name,
+            False,
+            f"Space '{resolved_space_name}' not found",
+        )
+
+    project_map = _resolve_space_lists(sid)
+    if not project_map:
+        return (
+            None,
+            resolved_space_name,
+            False,
+            f"No lists found in space '{resolved_space_name}'",
+        )
+
+    monitored_ids = set(
+        _load_monitored_list_ids(f"monitored {resolved_space_name}") or []
+    )
+    monitored_applied = monitored_scope or (auto_monitored and bool(monitored_ids))
+
+    if monitored_applied:
+        if not monitored_ids:
+            return (
+                None,
+                resolved_space_name,
+                True,
+                f"No monitored list IDs configured for space '{resolved_space_name}'.",
+            )
+
+        filtered_map: Dict[str, List[str]] = {}
+        for pname, lids in project_map.items():
+            scoped_lids = [lid for lid in lids if lid in monitored_ids]
+            if scoped_lids:
+                filtered_map[pname] = scoped_lids
+        project_map = filtered_map
+
+        if not project_map:
+            return (
+                None,
+                resolved_space_name,
+                True,
+                f"No monitored projects found in resolved space '{resolved_space_name}'.",
+            )
+
+    return project_map, resolved_space_name, monitored_applied, None
+
+
+def _resolve_space_list_ids_for_reports(
+    space_name: str, auto_monitored: bool = True
+) -> Tuple[List[str], str, bool, Optional[str]]:
+    """
+    Resolve a space name into de-duplicated list IDs with monitoring safeguards.
+    """
+    project_map, resolved_space_name, monitored_applied, scope_error = (
+        _resolve_space_project_map_for_reports(
+            space_name=space_name, auto_monitored=auto_monitored
+        )
+    )
+    if scope_error:
+        return [], resolved_space_name, monitored_applied, scope_error
+
+    all_list_ids = [lid for lids in (project_map or {}).values() for lid in lids]
+    deduped = list(dict.fromkeys(str(lid) for lid in all_list_ids if lid))
+    return deduped, resolved_space_name, monitored_applied, None
 
 
 def _fetch_entries_by_period(
@@ -194,6 +326,87 @@ def _fetch_entries_by_period(
     start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
     entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
     return entries_map, start_date, end_date, start_ms, end_ms
+
+
+def _build_space_ai_summary(
+    display_space_name: str,
+    start_date: str,
+    end_date: str,
+    total_projects: int,
+    active_projects: int,
+    grand_tracked_ms: int,
+    grand_est_ms: int,
+    project_highlights: List[Dict[str, Any]],
+    member_rollup: Dict[str, Dict[str, int]],
+) -> str:
+    if active_projects == 0:
+        return (
+            f"No tracked work was recorded in {display_space_name} from {start_date} to {end_date}. "
+            "This likely indicates either no activity or delayed time logging, so project health cannot be inferred yet."
+        )
+
+    utilization_pct = (
+        int(round((grand_tracked_ms / grand_est_ms) * 100))
+        if grand_est_ms > 0
+        else None
+    )
+
+    top_project = max(
+        project_highlights,
+        key=lambda item: item.get("tracked_ms", 0),
+        default=None,
+    )
+    top_member = max(
+        member_rollup.items(),
+        key=lambda item: item[1].get("tracked_ms", 0),
+        default=None,
+    )
+
+    overloaded_projects = [
+        p
+        for p in project_highlights
+        if p.get("est_ms", 0) > 0 and p.get("tracked_ms", 0) > p.get("est_ms", 0)
+    ]
+    no_estimate_projects = [p for p in project_highlights if p.get("est_ms", 0) == 0]
+    idle_projects = max(total_projects - active_projects, 0)
+
+    lines: List[str] = []
+    if utilization_pct is None:
+        lines.append(
+            f"From {start_date} to {end_date}, {display_space_name} logged {_format_duration(grand_tracked_ms)} across {active_projects} active project(s), but estimates are missing for the active scope."
+        )
+    else:
+        lines.append(
+            f"From {start_date} to {end_date}, {display_space_name} logged {_format_duration(grand_tracked_ms)} against {_format_duration(grand_est_ms)} ({utilization_pct}% of estimate) across {active_projects} active project(s)."
+        )
+
+    if top_project:
+        lines.append(
+            f"Work is most concentrated in {top_project['name']} with {_format_duration(top_project['tracked_ms'])} across {top_project['tasks']} task(s)."
+        )
+
+    if top_member:
+        member_name, member_data = top_member
+        lines.append(
+            f"Top contributor is {member_name} with {_format_duration(member_data['tracked_ms'])} across {member_data['tasks']} task touch(es)."
+        )
+
+    risk_parts: List[str] = []
+    if overloaded_projects:
+        risk_parts.append(
+            f"{len(overloaded_projects)} project(s) are over tracked versus estimate"
+        )
+    if no_estimate_projects:
+        risk_parts.append(
+            f"{len(no_estimate_projects)} active project(s) have no time estimate"
+        )
+    if idle_projects:
+        risk_parts.append(f"{idle_projects} project(s) had no logged activity")
+
+    if risk_parts:
+        lines.append("Attention areas: " + "; ".join(risk_parts) + ".")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +495,7 @@ def register_task_report_tools(mcp: FastMCP):
     @mcp.tool()
     def get_space_task_report(
         space_name: str,
-        period_type: str = "yesterday",
+        period_type: str = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -324,9 +537,6 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
-            print(f"⌛ Space task report: '{space_name}' / {period_type}")
-            sys.stdout.flush()
-
             if not job_id:
 
                 def _work():
@@ -342,6 +552,11 @@ def register_task_report_tools(mcp: FastMCP):
                     )
 
                 return _dispatch(_work, async_job)
+            print(f"⌛ Space task report: '{space_name}' / {period_type}")
+            sys.stdout.flush()
+
+            requested_space_name = space_name.strip()
+            monitored_scope, _ = _split_monitored_scope(requested_space_name)
 
             start_date, end_date = parse_time_period_filter(
                 period_type=period_type,
@@ -351,16 +566,22 @@ def register_task_report_tools(mcp: FastMCP):
             )
             start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
 
-            sid = _resolve_space_id(space_name)
-            if not sid:
-                return {"error": f"Space '{space_name}' not found"}
+            project_map, resolved_space_name, monitored_applied, scope_error = (
+                _resolve_space_project_map_for_reports(
+                    requested_space_name, auto_monitored=True
+                )
+            )
+            if scope_error:
+                return {"error": scope_error}
 
-            project_map = _resolve_space_lists(sid)
-            if not project_map:
-                return {"error": f"No lists found in space '{space_name}'"}
+            display_space_name = requested_space_name
+            if monitored_applied and not monitored_scope:
+                display_space_name = f"Monitored {resolved_space_name}"
 
             list_to_project = {
-                lid: pname for pname, lids in project_map.items() for lid in lids
+                lid: pname
+                for pname, lids in (project_map or {}).items()
+                for lid in lids
             }
             all_list_ids = list(list_to_project.keys())
 
@@ -388,6 +609,7 @@ def register_task_report_tools(mcp: FastMCP):
                             "tasks": 0,
                             "time_tracked_ms": 0,
                             "time_estimate_ms": 0,
+                            "task_list": [],
                         }
                     ),
                 }
@@ -414,32 +636,73 @@ def register_task_report_tools(mcp: FastMCP):
                 est = metrics.get(task_id, {}).get("est_direct", 0)
                 pr["time_estimate_ms"] += est
 
+                task_name = task.get("name", "Unnamed")
+                task_status = _extract_status_name(task)
+
                 for username, t_ms in user_time.items():
                     mb = pr["team_members"][username]
                     mb["tasks"] += 1
                     mb["time_tracked_ms"] += t_ms
-                    mb["time_estimate_ms"] += est // len(user_time) if user_time else 0
+                    member_est = est // len(user_time) if user_time else 0
+                    mb["time_estimate_ms"] += member_est
+                    mb["task_list"].append(
+                        {
+                            "task_name": task_name,
+                            "status": task_status,
+                            "time_tracked_ms": t_ms,
+                            "time_tracked": _format_duration(t_ms),
+                            "time_estimate": _format_duration(member_est),
+                        }
+                    )
 
             # Format output
             formatted_projects = []
             grand_tracked = 0
             grand_est = 0
+            project_highlights: List[Dict[str, Any]] = []
+            member_rollup: Dict[str, Dict[str, int]] = defaultdict(
+                lambda: {"tracked_ms": 0, "tasks": 0}
+            )
 
             for pname, pr in project_reports.items():
                 if pr["tasks_worked_on"] == 0:
                     continue
                 grand_tracked += pr["time_tracked_ms"]
                 grand_est += pr["time_estimate_ms"]
+                project_highlights.append(
+                    {
+                        "name": pname,
+                        "tracked_ms": pr["time_tracked_ms"],
+                        "est_ms": pr["time_estimate_ms"],
+                        "tasks": pr["tasks_worked_on"],
+                    }
+                )
 
-                team_breakdown = {
-                    mb: {
+                team_breakdown = {}
+                for mb, d in pr["team_members"].items():
+                    if d["time_tracked_ms"] == 0:
+                        continue
+                    member_rollup[mb]["tracked_ms"] += d["time_tracked_ms"]
+                    member_rollup[mb]["tasks"] += d["tasks"]
+                    sorted_tasks = sorted(
+                        d["task_list"], key=lambda x: x["time_tracked_ms"], reverse=True
+                    )
+                    # Strip internal ms key from public output
+                    public_tasks = [
+                        {
+                            "task_name": t["task_name"],
+                            "status": t["status"],
+                            "time_tracked": t["time_tracked"],
+                            "time_estimate": t["time_estimate"],
+                        }
+                        for t in sorted_tasks
+                    ]
+                    team_breakdown[mb] = {
                         "tasks": d["tasks"],
                         "time_tracked": _format_duration(d["time_tracked_ms"]),
                         "time_estimate": _format_duration(d["time_estimate_ms"]),
+                        "task_list": public_tasks,
                     }
-                    for mb, d in pr["team_members"].items()
-                    if d["time_tracked_ms"] > 0
-                }
 
                 formatted_projects.append(
                     {
@@ -456,14 +719,31 @@ def register_task_report_tools(mcp: FastMCP):
                 key=lambda x: _duration_to_ms(x["time_tracked"]), reverse=True
             )
 
+            ai_summary = _build_space_ai_summary(
+                display_space_name=display_space_name,
+                start_date=start_date,
+                end_date=end_date,
+                total_projects=len(project_map or {}),
+                active_projects=len(formatted_projects),
+                grand_tracked_ms=grand_tracked,
+                grand_est_ms=grand_est,
+                project_highlights=project_highlights,
+                member_rollup=member_rollup,
+            )
+
             # --- Markdown formatted_output ---
             lines = [
-                f"## Space Report: {space_name}",
+                f"## Space Report: {display_space_name}",
                 f"**Period:** {start_date} → {end_date}",
                 f"**Total Tracked:** {_format_duration(grand_tracked)}  |  "
                 f"**Total Estimated:** {_format_duration(grand_est)}",
                 "",
+                "### AI Summary",
             ]
+            lines.extend(
+                [f"- {line}" for line in ai_summary.split("\n") if line.strip()]
+            )
+            lines.append("")
             for fp in formatted_projects:
                 lines.append(f"### {fp['project_name']} ({fp['project_type']})")
                 lines.append(
@@ -472,24 +752,33 @@ def register_task_report_tools(mcp: FastMCP):
                     f"Estimated: **{fp['time_estimate']}**"
                 )
                 if fp["team_breakdown"]:
-                    lines.append("")
-                    lines.append("| Member | Tasks | Time Tracked | Time Estimate |")
-                    lines.append("|--------|------:|-------------:|--------------:|")
                     for mb, d in sorted(fp["team_breakdown"].items()):
+                        lines.append("")
                         lines.append(
-                            f"| {mb} | {d['tasks']} | {d['time_tracked']} | {d['time_estimate']} |"
+                            f"**{mb}** — {d['tasks']} task(s)  |  "
+                            f"Tracked: {d['time_tracked']}  |  "
+                            f"Estimated: {d['time_estimate']}"
                         )
+                        lines.append("")
+                        lines.append("| Task | Status | Tracked | Estimated |")
+                        lines.append("|------|--------|--------:|----------:|")
+                        for t in d["task_list"]:
+                            lines.append(
+                                f"| {t['task_name']} | {t['status']} "
+                                f"| {t['time_tracked']} | {t['time_estimate']} |"
+                            )
                     lines.append("")
 
             return {
-                "space_name": space_name,
+                "space_name": display_space_name,
                 "period": f"{start_date} to {end_date}",
                 "period_type": period_type,
                 "grand_total_time_tracked": _format_duration(grand_tracked),
                 "grand_total_time_estimate": _format_duration(grand_est),
-                "total_projects": len(project_map),
+                "total_projects": len(project_map or {}),
                 "active_projects": len(formatted_projects),
                 "projects": formatted_projects,
+                "ai_summary": ai_summary,
                 "formatted_output": "\n".join(lines),
             }
 
@@ -789,12 +1078,16 @@ def register_task_report_tools(mcp: FastMCP):
                 list_ids = _list_ids_for_project(project_name)
                 scope = project_name
             elif space_name:
-                sid = _resolve_space_id(space_name)
-                if not sid:
-                    return {"error": f"Space '{space_name}' not found"}
-                proj_map = _resolve_space_lists(sid)
-                list_ids = [lid for lids in proj_map.values() for lid in lids]
-                scope = space_name
+                list_ids, resolved_space_name, monitored_applied, scope_error = (
+                    _resolve_space_list_ids_for_reports(space_name, auto_monitored=True)
+                )
+                if scope_error:
+                    return {"error": scope_error}
+                scope = (
+                    f"Monitored {resolved_space_name}"
+                    if monitored_applied and not _split_monitored_scope(space_name)[0]
+                    else space_name
+                )
             else:
                 return {"error": "Provide either project_name or space_name"}
 
@@ -1005,12 +1298,16 @@ def register_task_report_tools(mcp: FastMCP):
                 list_ids = _list_ids_for_project(project_name)
                 scope = project_name
             elif space_name:
-                sid = _resolve_space_id(space_name)
-                if not sid:
-                    return {"error": f"Space '{space_name}' not found"}
-                proj_map = _resolve_space_lists(sid)
-                list_ids = [lid for lids in proj_map.values() for lid in lids]
-                scope = space_name
+                list_ids, resolved_space_name, monitored_applied, scope_error = (
+                    _resolve_space_list_ids_for_reports(space_name, auto_monitored=True)
+                )
+                if scope_error:
+                    return {"error": scope_error}
+                scope = (
+                    f"Monitored {resolved_space_name}"
+                    if monitored_applied and not _split_monitored_scope(space_name)[0]
+                    else space_name
+                )
             else:
                 # Entire workspace
                 team_id = _get_team_id()
@@ -1045,7 +1342,9 @@ def register_task_report_tools(mcp: FastMCP):
 
             # Build per-member, per-day time map from ACTUAL entry user.
             # Works for unassigned tasks and multi-employee tasks naturally.
-            member_day: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            member_day: Dict[str, Dict[str, int]] = defaultdict(
+                lambda: defaultdict(int)
+            )
             seen_interval_by_user: Dict[str, set] = defaultdict(set)
 
             for task_entries in entries_map.values():
@@ -1062,7 +1361,11 @@ def register_task_report_tools(mcp: FastMCP):
                         e_time = entry.get("duration") or entry.get("time") or 0
                         if e_start:
                             intervals = [
-                                {"start": e_start, "end": entry.get("end"), "time": e_time}
+                                {
+                                    "start": e_start,
+                                    "end": entry.get("end"),
+                                    "time": e_time,
+                                }
                             ]
 
                     for iv in intervals:
@@ -1158,8 +1461,12 @@ def register_task_report_tools(mcp: FastMCP):
                     lines.append(
                         f"### {f['member_name']} — {f['total_days_below_threshold']} day(s) below target"
                     )
-                    lines.append("| Date | Day | Hours Logged | Hours Missing To Reach Target |")
-                    lines.append("|------|-----|-------------:|------------------------------:|")
+                    lines.append(
+                        "| Date | Day | Hours Logged | Hours Missing To Reach Target |"
+                    )
+                    lines.append(
+                        "|------|-----|-------------:|------------------------------:|"
+                    )
                     for sd in f["short_days"]:
                         lines.append(
                             f"| {sd['date']} | {sd['day_of_week']} | "
@@ -1285,12 +1592,16 @@ def register_task_report_tools(mcp: FastMCP):
                 list_ids = _list_ids_for_project(project_name)
                 scope = project_name
             elif space_name:
-                sid = _resolve_space_id(space_name)
-                if not sid:
-                    return {"error": f"Space '{space_name}' not found"}
-                proj_map = _resolve_space_lists(sid)
-                list_ids = [lid for lids in proj_map.values() for lid in lids]
-                scope = space_name
+                list_ids, resolved_space_name, monitored_applied, scope_error = (
+                    _resolve_space_list_ids_for_reports(space_name, auto_monitored=True)
+                )
+                if scope_error:
+                    return {"error": scope_error}
+                scope = (
+                    f"Monitored {resolved_space_name}"
+                    if monitored_applied and not _split_monitored_scope(space_name)[0]
+                    else space_name
+                )
             else:
                 return {"error": "Provide either project_name or space_name"}
 
@@ -1719,12 +2030,16 @@ def register_task_report_tools(mcp: FastMCP):
                 list_ids = _list_ids_for_project(project_name)
                 scope = project_name
             elif space_name:
-                sid = _resolve_space_id(space_name)
-                if not sid:
-                    return {"error": f"Space '{space_name}' not found"}
-                proj_map = _resolve_space_lists(sid)
-                list_ids = [lid for lids in proj_map.values() for lid in lids]
-                scope = space_name
+                list_ids, resolved_space_name, monitored_applied, scope_error = (
+                    _resolve_space_list_ids_for_reports(space_name, auto_monitored=True)
+                )
+                if scope_error:
+                    return {"error": scope_error}
+                scope = (
+                    f"Monitored {resolved_space_name}"
+                    if monitored_applied and not _split_monitored_scope(space_name)[0]
+                    else space_name
+                )
             else:
                 return {"error": "Provide either project_name or space_name"}
 
@@ -1762,8 +2077,10 @@ def register_task_report_tools(mcp: FastMCP):
             period_user_time_by_task: Dict[str, Dict[str, int]] = {}
             for t in all_tasks:
                 tid = str(t["id"])
-                period_user_time_by_task[tid] = filter_time_entries_by_user_and_date_range(
-                    entries_map.get(tid, []), start_ms, end_ms
+                period_user_time_by_task[tid] = (
+                    filter_time_entries_by_user_and_date_range(
+                        entries_map.get(tid, []), start_ms, end_ms
+                    )
                 )
 
             # Fallback for main tasks with no direct entries in range:
@@ -2051,6 +2368,8 @@ def register_task_report_tools(mcp: FastMCP):
                 "error": j.get("error"),
                 "poll_count": poll_count,
                 "polls_remaining": 0,
+                "STOP_POLLING": True,
+                "result_available": status == "finished",
             }
             if status == "finished":
                 resp["result"] = j.get("result")
@@ -2074,6 +2393,8 @@ def register_task_report_tools(mcp: FastMCP):
             "status": status,
             "poll_count": poll_count,
             "polls_remaining": max_polls - poll_count,
+            "STOP_POLLING": False,
+            "result_available": False,
             "message": f"Job still {status}. Wait 50-60s, then poll again.",
         }
 
@@ -2084,8 +2405,22 @@ def register_task_report_tools(mcp: FastMCP):
         if not j:
             return {"error": "job_id not found"}
         if j.get("status") != "finished":
-            return {"status": j.get("status"), "message": "Not ready yet."}
-        return {"status": "finished", "result": j.get("result")}
+            return {
+                "status": j.get("status"),
+                "result_available": False,
+                "STOP_POLLING": False,
+                "message": "Not ready yet.",
+            }
+        result = j.get("result")
+        payload = {
+            "status": "finished",
+            "result_available": True,
+            "STOP_POLLING": True,
+            "result": result,
+        }
+        if isinstance(result, dict) and result.get("formatted_output"):
+            payload["formatted_output"] = result.get("formatted_output")
+        return payload
 
 
 # ---------------------------------------------------------------------------
