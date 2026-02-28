@@ -1079,6 +1079,27 @@ def register_task_report_tools(mcp: FastMCP):
                 f"**{_format_duration(grand_tracked_ms)}** | "
                 f"**{_format_duration(grand_est_ms)}** |"
             )
+            lines.append("")
+            
+            for mb, d in sorted(
+                formatted_team.items(),
+                key=lambda x: x[0]
+            ):
+                lines.append(
+                    f"**{mb}** — {d['tasks_count']} task(s)  |  "
+                    f"Tracked: {d['time_tracked']}  |  "
+                    f"Estimated: {d['time_estimate']}"
+                )
+                lines.append("")
+                lines.append("| Task | Status | Tracked | Estimated |")
+                lines.append("|------|--------|--------:|----------:|")
+                for t in d["tasks"]:
+                    lines.append(
+                        f"| {t['task_name']} | {t['status']} "
+                        f"| {t['time_tracked']} | {t['time_estimate']} |"
+                    )
+                lines.append("")
+
 
             return {
                 "project_name": project_name,
