@@ -26,7 +26,7 @@ register_project_configuration_tools(mcp)
 register_project_intelligence_tools(mcp)
 register_sync_mapping_tools(mcp)
 register_task_report_tools(mcp)
-start_mapping_maintenance_scheduler(hour=18, minute=0)
+start_mapping_maintenance_scheduler()
 
 
 if __name__ == "__main__":

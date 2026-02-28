@@ -335,14 +335,15 @@ def run_mapping_maintenance_once() -> dict:
         _maintenance_running = False
 
 
+from typing import List, Tuple
+
 def start_mapping_maintenance_scheduler(
     timezone: str = DEFAULT_MAINTENANCE_TIMEZONE,
-    hour: int = 18,
-    minute: int = 0,
-    run_on_startup: bool = True,
+    run_times: List[Tuple[int, int]] = [(13, 0), (18, 0)],
+    run_on_startup: bool = False,
 ) -> bool:
     """
-    Start daily maintenance scheduler. Returns False if already running.
+    Start maintenance scheduler. Returns False if already running.
     """
     global _maintenance_scheduler
     if _maintenance_scheduler and _maintenance_scheduler.running:
@@ -350,16 +351,18 @@ def start_mapping_maintenance_scheduler(
 
     tz = ZoneInfo(timezone)
     _maintenance_scheduler = BackgroundScheduler(timezone=tz)
-    _maintenance_scheduler.add_job(
-        run_mapping_maintenance_once,
-        trigger="cron",
-        hour=hour,
-        minute=minute,
-        id="mapping_maintenance_daily",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
+    
+    for idx, (hour, minute) in enumerate(run_times):
+        _maintenance_scheduler.add_job(
+            run_mapping_maintenance_once,
+            trigger="cron",
+            hour=hour,
+            minute=minute,
+            id=f"mapping_maintenance_{idx}",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     _maintenance_scheduler.start()
 
     if run_on_startup:
@@ -825,3 +828,13 @@ def register_sync_mapping_tools(mcp: FastMCP):
                 "raw_clickup": "Use raw fetch tools only for discovery or unmapped entities.",
             },
         }
+
+    @mcp.tool()
+    def trigger_mapping_maintenance() -> dict:
+        """
+        Manually trigger the mapping maintenance routine to update all mapped 
+        project structures and monitoring configs with the latest data from ClickUp.
+        """
+        from typing import Dict, Any
+        result: Dict[str, Any] = run_mapping_maintenance_once()
+        return result
