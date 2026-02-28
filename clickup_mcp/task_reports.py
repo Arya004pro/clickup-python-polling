@@ -82,12 +82,12 @@ def _resolve_space_id(space_name: str) -> Optional[str]:
     return None
 
 
-def _resolve_space_lists(space_id: str) -> Dict[str, List[str]]:
+def _resolve_space_lists(space_id: str) -> Dict[str, Dict]:
     """
-    Returns {"folder_name": [list_id, ...], "Folderless": [list_id, ...]}
+    Returns {"project_name": {"type": "folder|list", "lists": [list_ids]}, ...}
     so callers know which project each list belongs to.
     """
-    projects: Dict[str, List[str]] = {}
+    projects: Dict[str, Dict] = {}
 
     resp_f, _ = _api_call("GET", f"/space/{space_id}/folder")
     for folder in (resp_f or {}).get("folders", []):
@@ -95,16 +95,18 @@ def _resolve_space_lists(space_id: str) -> Dict[str, List[str]]:
         lid_list: List[str] = []
         live_lists, _ = _api_call("GET", f"/folder/{folder['id']}/list")
         if live_lists and live_lists.get("lists"):
-            lid_list = [lst["id"] for lst in live_lists.get("lists", [])]
+            lid_list = [str(lst["id"]) for lst in live_lists.get("lists", [])]
         else:
-            lid_list = [lst["id"] for lst in folder.get("lists", [])]
+            lid_list = [str(lst["id"]) for lst in folder.get("lists", [])]
         if lid_list:
-            projects[folder["name"]] = lid_list
+            projects[folder["name"]] = {"type": "folder", "lists": lid_list}
 
     resp_l, _ = _api_call("GET", f"/space/{space_id}/list")
-    folderless = [lst["id"] for lst in (resp_l or {}).get("lists", [])]
-    if folderless:
-        projects["Folderless Lists"] = folderless
+    for lst in (resp_l or {}).get("lists", []):
+        lname = lst["name"]
+        if lname not in projects:
+            projects[lname] = {"type": "list", "lists": []}
+        projects[lname]["lists"].append(str(lst["id"]))
 
     return projects
 
@@ -218,7 +220,7 @@ def _list_ids_for_project(project_name: str) -> List[str]:
 
 def _resolve_space_project_map_for_reports(
     space_name: str, auto_monitored: bool = True
-) -> Tuple[Optional[Dict[str, List[str]]], str, bool, Optional[str]]:
+) -> Tuple[Optional[Dict[str, Dict]], str, bool, Optional[str]]:
     """
     Resolve a space name into project->list mapping for reports.
 
@@ -272,11 +274,11 @@ def _resolve_space_project_map_for_reports(
                 f"No monitored list IDs configured for space '{resolved_space_name}'.",
             )
 
-        filtered_map: Dict[str, List[str]] = {}
-        for pname, lids in project_map.items():
-            scoped_lids = [lid for lid in lids if lid in monitored_ids]
+        filtered_map: Dict[str, Dict] = {}
+        for pname, pdata in project_map.items():
+            scoped_lids = [lid for lid in pdata["lists"] if lid in monitored_ids]
             if scoped_lids:
-                filtered_map[pname] = scoped_lids
+                filtered_map[pname] = {"type": pdata["type"], "lists": scoped_lids}
         project_map = filtered_map
 
         if not project_map:
@@ -304,7 +306,7 @@ def _resolve_space_list_ids_for_reports(
     if scope_error:
         return [], resolved_space_name, monitored_applied, scope_error
 
-    all_list_ids = [lid for lids in (project_map or {}).values() for lid in lids]
+    all_list_ids = [lid for pdata in (project_map or {}).values() for lid in pdata["lists"]]
     deduped = list(dict.fromkeys(str(lid) for lid in all_list_ids if lid))
     return deduped, resolved_space_name, monitored_applied, None
 
@@ -580,8 +582,8 @@ def register_task_report_tools(mcp: FastMCP):
 
             list_to_project = {
                 lid: pname
-                for pname, lids in (project_map or {}).items()
-                for lid in lids
+                for pname, pdata in (project_map or {}).items()
+                for lid in pdata["lists"]
             }
             all_list_ids = list(list_to_project.keys())
 
@@ -600,7 +602,7 @@ def register_task_report_tools(mcp: FastMCP):
             project_reports: Dict[str, Dict] = {
                 pname: {
                     "project_name": pname,
-                    "project_type": "folder" if pname != "Folderless Lists" else "list",
+                    "project_type": pdata["type"],
                     "tasks_worked_on": 0,
                     "time_tracked_ms": 0,
                     "time_estimate_ms": 0,
@@ -619,7 +621,7 @@ def register_task_report_tools(mcp: FastMCP):
                         }
                     ),
                 }
-                for pname in project_map
+                for pname, pdata in project_map.items()
             }
 
             for task in all_tasks:
@@ -629,19 +631,7 @@ def register_task_report_tools(mcp: FastMCP):
                 if not pname:
                     continue
 
-                user_time = filter_time_entries_by_user_and_date_range(
-                    entries_map.get(task_id, []), start_ms, end_ms
-                )
-                total_ms = sum(user_time.values())
-                if total_ms == 0:
-                    continue
-
                 pr = project_reports[pname]
-                pr["tasks_worked_on"] += 1
-                pr["time_tracked_ms"] += total_ms
-                est = metrics.get(task_id, {}).get("est_direct", 0)
-                pr["time_estimate_ms"] += est
-
                 task_name = task.get("name", "Unnamed")
                 task_status = _extract_status_name(task)
                 status_obj = task.get("status")
@@ -657,6 +647,29 @@ def register_task_report_tools(mcp: FastMCP):
                     pr["status_counts"]["cancelled"] += 1
                 else:
                     pr["status_counts"]["active"] += 1
+
+                user_time = filter_time_entries_by_user_and_date_range(
+                    entries_map.get(task_id, []), start_ms, end_ms
+                )
+                # Include tasks completed in this period even if no time was explicitly tracked
+                if not user_time:
+                    done_date = task.get("date_closed") or task.get("date_done")
+                    if done_date and start_ms <= int(done_date) <= end_ms:
+                        assignees = task.get("assignees", [])
+                        if assignees:
+                            for a in assignees:
+                                user_time[a.get("username", "Unknown")] = 0
+                        else:
+                            user_time["Unassigned"] = 0
+
+                if not user_time:
+                    continue
+
+                total_ms = sum(user_time.values())
+                pr["tasks_worked_on"] += 1
+                pr["time_tracked_ms"] += total_ms
+                est = metrics.get(task_id, {}).get("est_direct", 0)
+                pr["time_estimate_ms"] += est
 
                 for username, t_ms in user_time.items():
                     mb = pr["team_members"][username]
@@ -796,8 +809,13 @@ def register_task_report_tools(mcp: FastMCP):
             else:
                 lines.append("| Project | Not Started | Active | Done |")
                 lines.append("|---------|------------:|-------:|-----:|")
-            for fp in formatted_projects:
-                sc = fp.get("status_summary", {})
+            
+            all_reports_sorted_for_status = sorted(
+                project_reports.values(),
+                key=lambda x: x["project_name"]
+            )
+            for fp in all_reports_sorted_for_status:
+                sc = fp.get("status_counts", {})
                 if show_cancelled_column:
                     lines.append(
                         f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | {sc.get('done', 0)} | {sc.get('cancelled', 0)} |"
@@ -842,6 +860,13 @@ def register_task_report_tools(mcp: FastMCP):
                             )
                     lines.append("")
 
+            # Omit giant task lists from JSON response to prevent LM Studio from hitting its 64KB hard truncation
+            # This ensures the LLM receives the full `formatted_output` markdown string flawlessly!
+            for fp in formatted_projects:
+                if fp["team_breakdown"]:
+                    for val in fp["team_breakdown"].values():
+                        val.pop("task_list", None)
+
             return {
                 "space_name": display_space_name,
                 "period": f"{start_date} to {end_date}",
@@ -850,33 +875,6 @@ def register_task_report_tools(mcp: FastMCP):
                 "grand_total_time_estimate": _format_duration(grand_est),
                 "total_projects": len(project_map or {}),
                 "active_projects": len(formatted_projects),
-                "projects": formatted_projects,
-                "employee_summary_table": employee_summary_table,
-                "status_summary_table": [
-                    (
-                        {
-                            "project_name": fp["project_name"],
-                            "not_started": fp.get("status_summary", {}).get(
-                                "not_started", 0
-                            ),
-                            "active": fp.get("status_summary", {}).get("active", 0),
-                            "done": fp.get("status_summary", {}).get("done", 0),
-                            "cancelled": fp.get("status_summary", {}).get(
-                                "cancelled", 0
-                            ),
-                        }
-                        if show_cancelled_column
-                        else {
-                            "project_name": fp["project_name"],
-                            "not_started": fp.get("status_summary", {}).get(
-                                "not_started", 0
-                            ),
-                            "active": fp.get("status_summary", {}).get("active", 0),
-                            "done": fp.get("status_summary", {}).get("done", 0),
-                        }
-                    )
-                    for fp in formatted_projects
-                ],
                 "ai_summary": ai_summary,
                 "formatted_output": "\n".join(lines),
             }
@@ -1002,16 +1000,30 @@ def register_task_report_tools(mcp: FastMCP):
             grand_tracked_ms = 0
             grand_est_ms = 0
             total_tasks_worked = 0
+            
+            overloaded_tasks_count = 0
+            no_estimate_tasks_count = 0
 
             for task in all_tasks:
                 task_id = task["id"]
                 user_time = filter_time_entries_by_user_and_date_range(
                     entries_map.get(task_id, []), start_ms, end_ms
                 )
-                total_ms = sum(user_time.values())
-                if total_ms == 0:
+                # Include tasks completed in this period even if no time was explicitly tracked
+                if not user_time:
+                    done_date = task.get("date_closed") or task.get("date_done")
+                    if done_date and start_ms <= int(done_date) <= end_ms:
+                        assignees = task.get("assignees", [])
+                        if assignees:
+                            for a in assignees:
+                                user_time[a.get("username", "Unknown")] = 0
+                        else:
+                            user_time["Unassigned"] = 0
+
+                if not user_time:
                     continue
 
+                total_ms = sum(user_time.values())
                 total_tasks_worked += 1
                 grand_tracked_ms += total_ms
                 est = metrics.get(task_id, {}).get("est_direct", 0)
@@ -1019,6 +1031,11 @@ def register_task_report_tools(mcp: FastMCP):
 
                 status = _extract_status_name(task)
                 task_est_str = _format_duration(est)
+                
+                if est > 0 and total_ms > est:
+                    overloaded_tasks_count += 1
+                if est == 0:
+                    no_estimate_tasks_count += 1
 
                 for username, t_ms in user_time.items():
                     if username not in team_report:
@@ -1043,6 +1060,7 @@ def register_task_report_tools(mcp: FastMCP):
 
             # Format final output
             formatted_team = {}
+            member_rollup = {}
             for mb, d in team_report.items():
                 # Sort tasks by time tracked (desc)
                 d["tasks"].sort(
@@ -1054,6 +1072,51 @@ def register_task_report_tools(mcp: FastMCP):
                     "time_estimate": _format_duration(d["time_estimate_ms"]),
                     "tasks": d["tasks"],
                 }
+                member_rollup[mb] = {
+                    "tasks": d["tasks_count"],
+                    "tracked_ms": d["time_tracked_ms"],
+                    "estimate_ms": d["time_estimate_ms"],
+                }
+
+            ai_summary_lines = []
+            if total_tasks_worked == 0:
+                ai_summary_lines.append(
+                    f"No tracked work was recorded in {project_name} from {start_date} to {end_date}."
+                )
+            else:
+                utilization_pct = (
+                    int(round((grand_tracked_ms / grand_est_ms) * 100))
+                    if grand_est_ms > 0
+                    else None
+                )
+                if utilization_pct is None:
+                    ai_summary_lines.append(
+                        f"From {start_date} to {end_date}, {project_name} logged {_format_duration(grand_tracked_ms)} across {total_tasks_worked} active task(s), but estimates are missing for the active scope."
+                    )
+                else:
+                    ai_summary_lines.append(
+                        f"From {start_date} to {end_date}, {project_name} logged {_format_duration(grand_tracked_ms)} against {_format_duration(grand_est_ms)} ({utilization_pct}% of estimate) across {total_tasks_worked} active task(s)."
+                    )
+                
+                top_member = max(
+                    member_rollup.items(),
+                    key=lambda item: item[1].get("tracked_ms", 0),
+                    default=None,
+                )
+                if top_member:
+                    mb_name, mb_data = top_member
+                    ai_summary_lines.append(
+                        f"Top contributor is {mb_name} with {_format_duration(mb_data['tracked_ms'])} across {mb_data['tasks']} task touch(es)."
+                    )
+                
+                risk_parts = []
+                if overloaded_tasks_count > 0:
+                    risk_parts.append(f"{overloaded_tasks_count} task(s) are over tracked versus estimate")
+                if no_estimate_tasks_count > 0:
+                    risk_parts.append(f"{no_estimate_tasks_count} active task(s) have no time estimate")
+                
+                if risk_parts:
+                    ai_summary_lines.append("Attention areas: " + "; ".join(risk_parts) + ".")
 
             # --- Markdown formatted_output ---
             lines = [
@@ -1063,9 +1126,15 @@ def register_task_report_tools(mcp: FastMCP):
                 f"**Time Tracked:** {_format_duration(grand_tracked_ms)}  |  "
                 f"**Estimated:** {_format_duration(grand_est_ms)}",
                 "",
+                "### AI Summary",
+            ]
+            lines.extend([f"- {line}" for line in ai_summary_lines])
+            lines.extend([
+                "",
+                "### Employee Summary",
                 "| Member | Tasks | Time Tracked | Time Estimate |",
                 "|--------|------:|-------------:|--------------:|",
-            ]
+            ])
             for mb, d in sorted(
                 formatted_team.items(),
                 key=lambda x: _duration_to_ms(x[1]["time_tracked"]),
@@ -1109,7 +1178,6 @@ def register_task_report_tools(mcp: FastMCP):
                 "total_tasks_worked": total_tasks_worked,
                 "total_time_tracked": _format_duration(grand_tracked_ms),
                 "total_time_estimate": _format_duration(grand_est_ms),
-                "team_report": formatted_team,
                 "formatted_output": "\n".join(lines),
             }
 
@@ -1435,7 +1503,7 @@ def register_task_report_tools(mcp: FastMCP):
                 list_ids = []
                 for s in (data or {}).get("spaces", []):
                     pm = _resolve_space_lists(s["id"])
-                    list_ids += [lid for lids in pm.values() for lid in lids]
+                    list_ids += [lid for pdata in pm.values() for lid in pdata["lists"]]
                 scope = "entire workspace"
 
             if not list_ids:

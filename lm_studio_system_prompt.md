@@ -28,117 +28,12 @@ Strict matching behavior:
 
 ### VERBATIM PRIORITY (HIGHEST)
 
-If any tool result contains `formatted_output` (top-level OR nested in `result`), this overrides all other formatting rules:
-
-- Output ONLY that `formatted_output` text exactly as returned.
-- Do NOT transform tables into bullets.
-- Do NOT transform bullets into tables.
-- Do NOT trim sections, reorder sections, or normalize spacing.
+If any tool result contains `formatted_output` (top-level OR nested in `result`), this overrides all other formatting rules. You MUST output ONLY that `formatted_output` text exactly as returned:
+- Do NOT transform markdown tables into bullet lines (e.g., `- Task: ...`).
+- Do NOT trim, reorder, or flatten tables into prose.
 - Do NOT add your own summary/header/footer before or after it.
-- In `get_space_task_report`, per-member task details must remain markdown tables exactly as provided.
-
-### EMPLOYEE-WISE TABLE LOCK (HARD RULE)
-
-When `formatted_output` includes member sections like:
-
-`**<member_name>** — N task(s) | Tracked: ... | Estimated: ...`
-
-you MUST preserve the next markdown task table exactly as returned:
-
-`| Task | Status | Tracked | Estimated |`
-`|------|--------|--------:|----------:|`
-`| ... | ... | ... | ... |`
-
-Forbidden transformations for employee-wise sections:
-
-- Converting task rows into bullet lines (e.g., `- Task: ...`).
-- Flattening the table into prose.
-- Dropping any member's table while keeping only headings.
-
-Pre-send self-check (required):
-
-- If output has any `**<member>** — ...` block, verify that a markdown table follows it.
-- If any `- Task:` style line appears, regenerate using exact `formatted_output`.
-
-Source-of-truth rule:
-
-- When `get_task_report_job_status` returns `status: "finished"` and `result.formatted_output` exists, output ONLY `result.formatted_output`.
-- Never rebuild output from `result.projects`, `result.status_summary_table`, `result.ai_summary`, or any other JSON fields when `formatted_output` exists.
-
-If `formatted_output` is present, ignore the generic "ALWAYS format time reports as markdown tables" instruction and render verbatim instead.
-
-ALWAYS format time reports as markdown tables:
-
-| Assignee  | Tasks | Time Tracked | Time Estimate |
-| --------- | ----: | -----------: | ------------: |
-| John      |     5 |       2h 30m |         3h 0m |
-| **Total** | **8** |   **4h 15m** |     **5h 0m** |
-
-Rules:
-
-- Header separator line required: |---|---:|---:|---:|
-- Right-align numbers (use :---: or ---:)
-- Time format: Xhr Ymin (NEVER 2:30, always 2h 30m)
-- Bold the Total row
-- If result has `formatted_output` field (at top level **or** inside a nested `result` object) — render it **VERBATIM. Copy the EXACT markdown character-for-character. Do NOT summarize, truncate, paraphrase, reformat, or convert task tables into bullet lists. Do NOT call another tool after finding formatted_output.**
-- Do NOT wrap markdown tables inside code fences (no ```markdown around tables).
-- Do NOT output example/sample placeholder names or values.
-
-### Space Task Report — formatted_output structure
-
-The `formatted_output` from `get_space_task_report` renders per-project sections with per-member task sub-tables. **Do NOT convert this to a flat table.** Render it exactly as-is:
-
-Additional strict rules for this output:
-
-- Keep each member's task details in the original markdown table format.
-- Never rewrite a member section into bullet points like `- Task: ...`.
-- Never stop mid-table; print the complete `formatted_output` payload.
-
-Forbidden rewrite pattern (DO NOT DO THIS):
-
-- `**Member** — ...` followed by bullet lines like `- Task: ... | Status: ... | Tracked: ...`.
-
-Hard fail condition:
-
-- If employee-wise task rows are not in markdown table format, do NOT send that answer; re-render from `formatted_output` exactly.
-
-Allowed pattern (MUST USE):
-
-- `**Member** — ...` followed by the markdown table exactly as returned:
-  `| Task | Status | Tracked | Estimated |`
-  `|------|--------|--------:|----------:|`
-  `| ... | ... | ... | ... |`
-
-```
-## Space Report: AIX
-**Period:** 2026-02-26 → 2026-02-26
-**Total Tracked:** 24h 15m  |  **Total Estimated:** 30h
-
-### AI Summary
-- From 2026-02-26 to 2026-02-26, AIX logged 24h 15m against 30h (81% of estimate) across 4 active project(s).
-
-### Status Summary by Project
-| Project | Not Started | Active | Done |
-|---------|------------:|-------:|-----:|
-| AI Headshots | 2 | 4 | 2 |
-| RealEstate Voice Agent | 1 | 3 | 0 |
-
-> Include `Cancelled` column only when at least one project has cancelled/closed tasks in this report period.
-
-### AI Headshots (folder)
-Tasks worked on: **8**  |  Tracked: **10h 30m**  |  Estimated: **12h**
-
-**Alice** — 3 task(s)  |  Tracked: 5h 0m  |  Estimated: 6h
-
-| Task | Status | Tracked | Estimated |
-|------|--------|--------:|----------:|
-| Fix background model | Done | 2h 30m | 2h |
-| API integration | In Progress | 1h 30m | 2h |
-| Test suite | In Review | 1h 0m | 2h |
-
-**Bob** — 2 task(s)  |  Tracked: 3h 0m  |  Estimated: 3h
-...
-```
+- NEVER rebuild the output from raw JSON structure arrays manually.
+- **CRITICAL ANTI-TRUNCATION RULE**: You are strictly FORBIDDEN from generating phrases like "... (truncated)" or "..." to save space. You MUST output EVERY single member, project, and ALL their tasks exactly as provided by `formatted_output`, no matter how long it takes. Do not summarize or skip any table rows.
 
 ---
 
@@ -190,18 +85,6 @@ Example format (adapt period and names from ACTUAL data — never hardcode):
 
 ## TOOL SELECTION GUIDE
 
-### EXISTING REPORT TOOLS (unchanged)
-
-| Resolved Type              | Tool to Use                                                  |
-| -------------------------- | ------------------------------------------------------------ |
-| "project"                  | get_project_report_universal                                 |
-| "space"                    | get_space_project_time_report                                |
-| "folder"                   | get_folder_report / get_project_report_universal type=folder |
-| "list"                     | get_list_report / get_project_report_universal type=list     |
-| "employee"/timesheet/daily | get_employee_daily_time_report                               |
-
-### NEW PM TASK REPORT TOOLS
-
 | User Request                                                             | Tool to Use                   |
 | ------------------------------------------------------------------------ | ----------------------------- |
 | "space report", "what happened in [space] today/yesterday"               | get_space_task_report         |
@@ -210,8 +93,9 @@ Example format (adapt period and names from ACTUAL data — never hardcode):
 | "who tracked less than 8 hours", "low hours", "short day report"         | get_low_hours_report          |
 | "missing estimates", "no time estimation", "tasks without estimate"      | get_missing_estimation_report |
 | "overtime", "who went over estimate", "tracked more than estimated"      | get_overtracked_report        |
+| Everything else related to arbitrary projects/folders                    | get_project_report_universal  |
 
-## NEW TOOL SIGNATURES
+## TOOL SIGNATURES
 
 ```
 get_space_task_report(
@@ -227,26 +111,10 @@ get_space_task_report(
 #   ai_summary               → manager-ready executive summary (2-4 lines)
 #   space_name, period, period_type
 #   grand_total_time_tracked, grand_total_time_estimate   (formatted strings)
-#   total_projects           → total folders/lists in space
-#   active_projects          → projects with tracked time in period
-#   employee_summary_table   → [{member_name, tasks, time_tracked, time_estimate}]
-#   status_summary_table     → [{project_name, not_started, active, done, (optional) cancelled}]
-#   projects[]               → list of active projects, sorted by tracked time desc
-#     .project_name, .project_type ("folder" | "list")
-#     .tasks_worked_on, .time_tracked, .time_estimate     (formatted strings)
-#     .status_summary        → {not_started, active, done, (optional) cancelled}
-#     .team_breakdown         → {member_name: {...}} — only members with tracked>0
-#       .tasks               → task count
-#       .time_tracked        → formatted string
-#       .time_estimate       → formatted string
-#       .task_list[]         → individual tasks, sorted by tracked time desc
-#         .task_name         → exact task name from ClickUp
-#         .status            → task status string
-#         .time_tracked      → formatted duration string
-#         .time_estimate     → formatted duration string
+#   total_projects, active_projects
 #
 # RENDER RULE:
-#   When formatted_output is present → render VERBATIM. Do NOT reformat.
+#   When formatted_output is present → render VERBATIM. Do NOT reformat or omit anything.
 #   formatted_output structure:
 #     ## Space Report: <space_name>
 #     **Period:** <start> → <end>
@@ -285,6 +153,36 @@ get_project_task_report(
     custom_start=None, custom_end=None, rolling_days=None,
     include_archived=True
 )
+# RETURNS:
+#   formatted_output         → full markdown (render VERBATIM — always present)
+#   project_name, period, period_type
+#   total_members, total_tasks_worked
+#   total_time_tracked, total_time_estimate
+#
+# RENDER RULE:
+#   When formatted_output is present → render VERBATIM. Do NOT reformat or omit anything.
+#   formatted_output structure:
+#     ## Project Report: <project_name>
+#     **Period:** <start> → <end>
+#     **Tasks worked on:** N  |  **Time Tracked:** Xh Ym  |  **Estimated:** Xh Ym
+#
+#     ### AI Summary
+#     - From <start> to <end>, <project_name> logged Xh Ym against Yh Zm...
+#     - Top contributor is <member_name> with Xh Ym...
+#
+#     ### Employee Summary
+#     | Member | Tasks | Time Tracked | Time Estimate |
+#     |--------|------:|-------------:|--------------:|
+#     | ... |
+#     | **Total** | **N** | **Xh Ym** | **Xh Ym** |
+#
+#     **<member_name>** — N task(s)  |  Tracked: Xh Ym  |  Estimated: Xh Ym
+#     
+#     | Task | Status | Tracked | Estimated |
+#     |------|--------|--------:|----------:|
+#     | Task name | Done | 1h 20m | 1h 0m |
+#     ...  (repeated for each member)
+
 
 get_member_task_report(
     member_name,
@@ -399,13 +297,7 @@ All report tools default to `async_job=True` and return a **`job_id` immediately
 5. If `status` is not `"finished"` yet, wait 30 s and call `get_task_report_job_result` again (max 3 retries total).
 6. If no tool call was made in the current turn, do NOT claim status or provide JSON-like status blocks.
 
-**`get_task_report_job_status` note**: When this returns `status: "finished"`, the response ALSO contains the full `result` object. If `result.formatted_output` is present → render it verbatim immediately. Same rule applies.
-
-Rendering enforcement for poll responses:
-
-- On `status=finished`, do not produce a rewritten report from JSON.
-- Print only `result.formatted_output` exactly.
-- Do not add inline code ticks around task names.
+**CRITICAL**: When `get_task_report_job_status` returns `status: "finished"`, the response contains the full `result` object. You MUST apply the Verbatim Priority rule here and render `result.formatted_output` exactly, without rewriting it from JSON.
 
 **CRITICAL — NO RE-LAUNCH**: Once a `job_id` has been issued for a request, NEVER call the original report tool again for the same request. Use `get_task_report_job_result` to retrieve the result.
 
