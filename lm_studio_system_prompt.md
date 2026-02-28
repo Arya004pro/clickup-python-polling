@@ -124,11 +124,11 @@ get_space_task_report(
 #     - <2-4 bullets>
 #
 #     ### Status Summary by Project
-#     | Project | Not Started | Active | Done |
-#     |---------|------------:|-------:|-----:|
+#     | Project | Not Started | Active | Done | Tracked |
+#     |---------|------------:|-------:|-----:|--------:|
 #     | ... |
 #
-#     (Show `Cancelled` column only when at least one project has cancelled/closed tasks.)
+#     (Show `Cancelled` column as 5th column only when at least one project has cancelled/closed tasks.)
 #
 #     ### Employee Summary
 #     | Member | Tasks | Time Tracked | Time Estimate |

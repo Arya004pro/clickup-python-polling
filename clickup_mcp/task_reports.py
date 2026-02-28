@@ -631,23 +631,6 @@ def register_task_report_tools(mcp: FastMCP):
                 if not pname:
                     continue
 
-                pr = project_reports[pname]
-                task_name = task.get("name", "Unnamed")
-                task_status = _extract_status_name(task)
-                status_obj = task.get("status")
-                status_type = (
-                    status_obj.get("type") if isinstance(status_obj, dict) else None
-                )
-                status_category = get_status_category(task_status, status_type)
-                if status_category == "not_started":
-                    pr["status_counts"]["not_started"] += 1
-                elif status_category == "done":
-                    pr["status_counts"]["done"] += 1
-                elif status_category == "closed":
-                    pr["status_counts"]["cancelled"] += 1
-                else:
-                    pr["status_counts"]["active"] += 1
-
                 user_time = filter_time_entries_by_user_and_date_range(
                     entries_map.get(task_id, []), start_ms, end_ms
                 )
@@ -664,6 +647,24 @@ def register_task_report_tools(mcp: FastMCP):
 
                 if not user_time:
                     continue
+
+                # --- Count status for active/worked-on tasks only ---
+                pr = project_reports[pname]
+                task_name = task.get("name", "Unnamed")
+                task_status = _extract_status_name(task)
+                status_obj = task.get("status")
+                status_type = (
+                    status_obj.get("type") if isinstance(status_obj, dict) else None
+                )
+                status_category = get_status_category(task_status, status_type)
+                if status_category == "not_started":
+                    pr["status_counts"]["not_started"] += 1
+                elif status_category == "done":
+                    pr["status_counts"]["done"] += 1
+                elif status_category == "closed":
+                    pr["status_counts"]["cancelled"] += 1
+                else:
+                    pr["status_counts"]["active"] += 1
 
                 total_ms = sum(user_time.values())
                 pr["tasks_worked_on"] += 1
@@ -804,25 +805,29 @@ def register_task_report_tools(mcp: FastMCP):
             lines.append("")
             lines.append("### Status Summary by Project")
             if show_cancelled_column:
-                lines.append("| Project | Not Started | Active | Done | Cancelled |")
-                lines.append("|---------|------------:|-------:|-----:|----------:|")
+                lines.append("| Project | Not Started | Active | Done | Cancelled | Tracked |")
+                lines.append("|---------|------------:|-------:|-----:|----------:|--------:|")
             else:
-                lines.append("| Project | Not Started | Active | Done |")
-                lines.append("|---------|------------:|-------:|-----:|")
+                lines.append("| Project | Not Started | Active | Done | Tracked |")
+                lines.append("|---------|------------:|-------:|-----:|--------:|")
             
+            # Show only projects that had activity in this period
             all_reports_sorted_for_status = sorted(
-                project_reports.values(),
+                [pr for pr in project_reports.values() if pr["tasks_worked_on"] > 0],
                 key=lambda x: x["project_name"]
             )
             for fp in all_reports_sorted_for_status:
                 sc = fp.get("status_counts", {})
+                t_str = _format_duration(fp.get("time_tracked_ms", 0))
                 if show_cancelled_column:
                     lines.append(
-                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | {sc.get('done', 0)} | {sc.get('cancelled', 0)} |"
+                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | "
+                        f"{sc.get('done', 0)} | {sc.get('cancelled', 0)} | {t_str} |"
                     )
                 else:
                     lines.append(
-                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | {sc.get('done', 0)} |"
+                        f"| {fp['project_name']} | {sc.get('not_started', 0)} | {sc.get('active', 0)} | "
+                        f"{sc.get('done', 0)} | {t_str} |"
                     )
             lines.append("")
 
