@@ -306,7 +306,9 @@ def _resolve_space_list_ids_for_reports(
     if scope_error:
         return [], resolved_space_name, monitored_applied, scope_error
 
-    all_list_ids = [lid for pdata in (project_map or {}).values() for lid in pdata["lists"]]
+    all_list_ids = [
+        lid for pdata in (project_map or {}).values() for lid in pdata["lists"]
+    ]
     deduped = list(dict.fromkeys(str(lid) for lid in all_list_ids if lid))
     return deduped, resolved_space_name, monitored_applied, None
 
@@ -805,16 +807,20 @@ def register_task_report_tools(mcp: FastMCP):
             lines.append("")
             lines.append("### Status Summary by Project")
             if show_cancelled_column:
-                lines.append("| Project | Not Started | Active | Done | Cancelled | Tracked |")
-                lines.append("|---------|------------:|-------:|-----:|----------:|--------:|")
+                lines.append(
+                    "| Project | Not Started | Active | Done | Cancelled | Tracked |"
+                )
+                lines.append(
+                    "|---------|------------:|-------:|-----:|----------:|--------:|"
+                )
             else:
                 lines.append("| Project | Not Started | Active | Done | Tracked |")
                 lines.append("|---------|------------:|-------:|-----:|--------:|")
-            
+
             # Show only projects that had activity in this period
             all_reports_sorted_for_status = sorted(
                 [pr for pr in project_reports.values() if pr["tasks_worked_on"] > 0],
-                key=lambda x: x["project_name"]
+                key=lambda x: x["project_name"],
             )
             for fp in all_reports_sorted_for_status:
                 sc = fp.get("status_counts", {})
@@ -1005,7 +1011,7 @@ def register_task_report_tools(mcp: FastMCP):
             grand_tracked_ms = 0
             grand_est_ms = 0
             total_tasks_worked = 0
-            
+
             overloaded_tasks_count = 0
             no_estimate_tasks_count = 0
 
@@ -1036,7 +1042,7 @@ def register_task_report_tools(mcp: FastMCP):
 
                 status = _extract_status_name(task)
                 task_est_str = _format_duration(est)
-                
+
                 if est > 0 and total_ms > est:
                     overloaded_tasks_count += 1
                 if est == 0:
@@ -1102,7 +1108,7 @@ def register_task_report_tools(mcp: FastMCP):
                     ai_summary_lines.append(
                         f"From {start_date} to {end_date}, {project_name} logged {_format_duration(grand_tracked_ms)} against {_format_duration(grand_est_ms)} ({utilization_pct}% of estimate) across {total_tasks_worked} active task(s)."
                     )
-                
+
                 top_member = max(
                     member_rollup.items(),
                     key=lambda item: item[1].get("tracked_ms", 0),
@@ -1113,15 +1119,21 @@ def register_task_report_tools(mcp: FastMCP):
                     ai_summary_lines.append(
                         f"Top contributor is {mb_name} with {_format_duration(mb_data['tracked_ms'])} across {mb_data['tasks']} task touch(es)."
                     )
-                
+
                 risk_parts = []
                 if overloaded_tasks_count > 0:
-                    risk_parts.append(f"{overloaded_tasks_count} task(s) are over tracked versus estimate")
+                    risk_parts.append(
+                        f"{overloaded_tasks_count} task(s) are over tracked versus estimate"
+                    )
                 if no_estimate_tasks_count > 0:
-                    risk_parts.append(f"{no_estimate_tasks_count} active task(s) have no time estimate")
-                
+                    risk_parts.append(
+                        f"{no_estimate_tasks_count} active task(s) have no time estimate"
+                    )
+
                 if risk_parts:
-                    ai_summary_lines.append("Attention areas: " + "; ".join(risk_parts) + ".")
+                    ai_summary_lines.append(
+                        "Attention areas: " + "; ".join(risk_parts) + "."
+                    )
 
             # --- Markdown formatted_output ---
             lines = [
@@ -1134,12 +1146,14 @@ def register_task_report_tools(mcp: FastMCP):
                 "### AI Summary",
             ]
             lines.extend([f"- {line}" for line in ai_summary_lines])
-            lines.extend([
-                "",
-                "### Employee Summary",
-                "| Member | Tasks | Time Tracked | Time Estimate |",
-                "|--------|------:|-------------:|--------------:|",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "### Employee Summary",
+                    "| Member | Tasks | Time Tracked | Time Estimate |",
+                    "|--------|------:|-------------:|--------------:|",
+                ]
+            )
             for mb, d in sorted(
                 formatted_team.items(),
                 key=lambda x: _duration_to_ms(x[1]["time_tracked"]),
@@ -1154,11 +1168,8 @@ def register_task_report_tools(mcp: FastMCP):
                 f"**{_format_duration(grand_est_ms)}** |"
             )
             lines.append("")
-            
-            for mb, d in sorted(
-                formatted_team.items(),
-                key=lambda x: x[0]
-            ):
+
+            for mb, d in sorted(formatted_team.items(), key=lambda x: x[0]):
                 lines.append(
                     f"**{mb}** — {d['tasks_count']} task(s)  |  "
                     f"Tracked: {d['time_tracked']}  |  "
@@ -1173,7 +1184,6 @@ def register_task_report_tools(mcp: FastMCP):
                         f"| {t['time_tracked']} | {t['time_estimate']} |"
                     )
                 lines.append("")
-
 
             return {
                 "project_name": project_name,
@@ -2565,8 +2575,12 @@ def register_task_report_tools(mcp: FastMCP):
                 "result_available": status == "finished",
             }
             if status == "finished":
-                resp["result"] = j.get("result")
+                result = j.get("result")
+                resp["result"] = result
                 resp["message"] = "Job complete! Result included."
+                # Promote formatted_output to top level so LLM renders it directly
+                if isinstance(result, dict) and result.get("formatted_output"):
+                    resp["formatted_output"] = result["formatted_output"]
             return resp
 
         if poll_count >= max_polls:
