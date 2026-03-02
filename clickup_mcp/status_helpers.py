@@ -36,7 +36,8 @@ from clickup_mcp.api_client import client as _client
 def date_to_timestamp_ms(date_str: str) -> int:
     """
     Convert YYYY-MM-DD date string to Unix timestamp in milliseconds.
-    Time is set to 00:00:00 UTC.
+    Time is set to 00:00:00 IST (UTC+05:30) so that day boundaries align
+    with ClickUp's dashboard which uses the team's local timezone (IST).
 
     Args:
         date_str: Date in YYYY-MM-DD format
@@ -45,9 +46,10 @@ def date_to_timestamp_ms(date_str: str) -> int:
         Unix timestamp in milliseconds
 
     Example:
-        date_to_timestamp_ms("2024-01-15") -> 1705276800000
+        date_to_timestamp_ms("2024-01-15") -> 1705254600000  (Jan 15 00:00 IST)
     """
-    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    IST = timezone(timedelta(hours=5, minutes=30))
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=IST)
     return int(dt.timestamp() * 1000)
 
 
@@ -584,6 +586,14 @@ def filter_time_entries_by_user_and_date_range(
 
     Fingerprint = interval["id"] if present, else (start_ms, end_ms) tuple.
 
+    MANUAL ENTRY FIX (2026-03-02):
+    ClickUp "Log Time" (manual) entries have an empty intervals list but carry
+    valid start / end / duration fields at the top level of the entry object.
+    Previously these entries were silently skipped, causing the report to
+    under-count vs the ClickUp dashboard (e.g. AI Photo Manager: 295h 49m
+    report vs 297h 3m dashboard).  They are now treated as a single synthetic
+    interval built from the entry-level start/end/duration.
+
     Args:
         time_entries: List of time entry objects with 'user' and 'intervals' fields
         start_ms: Start timestamp in milliseconds (inclusive)
@@ -613,10 +623,34 @@ def filter_time_entries_by_user_and_date_range(
         if username not in seen_per_user:
             seen_per_user[username] = set()
 
-        for interval in entry.get("intervals", []):
+        intervals = entry.get("intervals") or []
+
+        # --- Fallback for manual time entries ---
+        # ClickUp manual entries (added via "Log Time") have an empty intervals
+        # list but carry valid start / end / duration at the top level of the
+        # entry object.  Without this fallback those entries are silently
+        # skipped, causing the report to under-count vs the ClickUp dashboard.
+        if not intervals:
+            raw_start = entry.get("start")
+            raw_end = entry.get("end")
+            raw_dur = entry.get("duration")
+            if raw_start:
+                # Build a synthetic interval from the entry-level fields so the
+                # same dedup + overlap path below handles it uniformly.
+                synthetic = {"start": raw_start, "id": entry.get("id")}
+                if raw_end:
+                    synthetic["end"] = raw_end
+                elif raw_dur:
+                    try:
+                        synthetic["end"] = str(int(raw_start) + int(raw_dur))
+                    except (ValueError, TypeError):
+                        pass
+                intervals = [synthetic]
+
+        for interval in intervals:
             interval_start = interval.get("start")
             interval_end = interval.get("end")
-            duration = interval.get("time")
+            duration = interval.get("time") or interval.get("duration")
 
             if not interval_start:
                 continue

@@ -328,7 +328,9 @@ def _fetch_entries_by_period(
         rolling_days=rolling_days,
     )
     start_ms, end_ms = date_range_to_timestamps(start_date, end_date)
-    entries_map = _fetch_time_entries_smart(task_ids, start_ms, end_ms)
+    # No date params: ClickUp drops manual (empty-intervals) entries from
+    # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
+    entries_map = _fetch_time_entries_smart(task_ids)
     return entries_map, start_date, end_date, start_ms, end_ms
 
 
@@ -595,9 +597,14 @@ def register_task_report_tools(mcp: FastMCP):
 
             # --- Fetch time entries ---
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            entries_map = _fetch_time_entries_smart(
-                [t["id"] for t in timed], start_ms, end_ms
-            )
+            # NOTE: Do NOT pass start_ms/end_ms to _fetch_time_entries_smart here.
+            # ClickUp's per-task /time endpoint filters by interval timestamps, but
+            # manually-logged ("Log Time") entries have an empty intervals list, so
+            # the API silently excludes them when date params are applied.
+            # Fetching all entries and filtering client-side (in
+            # filter_time_entries_by_user_and_date_range) ensures manual entries
+            # are counted correctly and matches the ClickUp dashboard total.
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
             metrics = _calculate_task_metrics(all_tasks)
 
             # --- Build per-project report ---
@@ -1011,9 +1018,9 @@ def register_task_report_tools(mcp: FastMCP):
                 )
 
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            entries_map = _fetch_time_entries_smart(
-                [t["id"] for t in timed], start_ms, end_ms
-            )
+            # No date params: ClickUp drops manual (empty-intervals) entries from
+            # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
             metrics = _calculate_task_metrics(all_tasks)
 
             # Build per-member report with task detail
@@ -1318,9 +1325,9 @@ def register_task_report_tools(mcp: FastMCP):
                 }
 
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            entries_map = _fetch_time_entries_smart(
-                [t["id"] for t in timed], start_ms, end_ms
-            )
+            # No date params: ClickUp drops manual (empty-intervals) entries from
+            # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
             metrics = _calculate_task_metrics(all_tasks)
 
             member_lower = member_name.lower()
@@ -1549,9 +1556,9 @@ def register_task_report_tools(mcp: FastMCP):
                 )
 
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            entries_map = _fetch_time_entries_smart(
-                [t["id"] for t in timed], start_ms, end_ms
-            )
+            # No date params: ClickUp drops manual (empty-intervals) entries from
+            # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
 
             # Build per-member, per-day time map from ACTUAL entry user.
             # Works for unassigned tasks and multi-employee tasks naturally.
@@ -1855,7 +1862,9 @@ def register_task_report_tools(mcp: FastMCP):
                 candidate_ids = [
                     t["id"] for t in all_tasks if int(t.get("time_spent") or 0) > 0
                 ]
-                entries_map = _fetch_time_entries_smart(candidate_ids, start_ms, end_ms)
+                # No date params: ClickUp drops manual (empty-intervals) entries from
+                # date-filtered /task/{id}/time responses. Client-side checks the range.
+                entries_map = _fetch_time_entries_smart(candidate_ids)
 
                 # task_id → set of usernames who tracked in this period
                 task_trackers: Dict[str, set] = {}
@@ -2276,9 +2285,9 @@ def register_task_report_tools(mcp: FastMCP):
                 )
 
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            entries_map = _fetch_time_entries_smart(
-                [t["id"] for t in timed], start_ms, end_ms
-            )
+            # No date params: ClickUp drops manual (empty-intervals) entries from
+            # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
             metrics = _calculate_task_metrics(all_tasks)
             task_by_id = {str(t["id"]): t for t in all_tasks}
             children_map: Dict[str, List[str]] = {}
