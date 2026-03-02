@@ -672,20 +672,30 @@ def register_task_report_tools(mcp: FastMCP):
                 pr["tasks_worked_on"] += 1
                 pr["time_tracked_ms"] += total_ms
                 est = metrics.get(task_id, {}).get("est_direct", 0)
-                pr["time_estimate_ms"] += est
+                # Only count estimates for tasks with actual time entries in the period.
+                # Tasks included via the "closed in period" fallback (total_ms == 0) are
+                # counted for status/task-count purposes but their estimates must NOT be
+                # added to the totals, otherwise planned-but-untracked work inflates the
+                # space estimate vs what ClickUp's own dashboard shows.
+                if total_ms > 0:
+                    pr["time_estimate_ms"] += est
 
                 for username, t_ms in user_time.items():
                     mb = pr["team_members"][username]
                     mb["tasks"] += 1
                     mb["time_tracked_ms"] += t_ms
+                    # Per-member estimate: only include in the running subtotal when
+                    # the task actually had tracked time (consistent with project total).
                     member_est = est // len(user_time) if user_time else 0
-                    mb["time_estimate_ms"] += member_est
+                    if total_ms > 0:
+                        mb["time_estimate_ms"] += member_est
                     mb["task_list"].append(
                         {
                             "task_name": task_name,
                             "status": task_status,
                             "time_tracked_ms": t_ms,
                             "time_tracked": _format_duration(t_ms),
+                            # Still display the estimate on the task row for visibility
                             "time_estimate": _format_duration(member_est),
                         }
                     )
