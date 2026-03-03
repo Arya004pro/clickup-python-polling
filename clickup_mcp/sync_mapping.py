@@ -754,7 +754,50 @@ def register_sync_mapping_tools(mcp: FastMCP):
         Universal project/entity finder. Search for any space, folder, or list by name.
         Works regardless of where the entity is located in the hierarchy.
         Use this BEFORE any report tool to resolve the entity type and ID.
+
+        Special: "monitored" / "Monitored <Space>" / "monitored:<Space>" are virtual
+        scopes defined in monitoring_config.json — they are NOT real ClickUp entities.
+        This tool detects them and returns a directive to use get_space_task_report directly.
         """
+        # --- Intercept monitored-scope expressions before live API search ---
+        _name_lower = (project_name or "").strip().lower()
+        _is_monitored = _name_lower == "monitored" or _name_lower.startswith("monitored ") or _name_lower.startswith("monitored:")
+        if _is_monitored:
+            # Load monitoring_config to enumerate the space targets
+            import json as _j, os as _o
+            _cfg_path = _o.path.join(_o.path.dirname(__file__), "..", "monitoring_config.json")
+            _spaces: list = []
+            try:
+                with open(_cfg_path) as _f:
+                    _cfg = _j.load(_f)
+                _spaces = list(dict.fromkeys(
+                    str(p.get("space", "")).strip()
+                    for p in _cfg.get("monitored_projects", [])
+                    if p.get("space")
+                ))
+            except Exception:
+                pass
+            # Extract the target space from the expression (e.g. "Monitored AIX" -> "AIX")
+            _target = ""
+            _stripped = (project_name or "").strip()
+            if _stripped.lower().startswith("monitored:"):
+                _target = _stripped[len("monitored:"):].strip()
+            elif _stripped.lower().startswith("monitored "):
+                _target = _stripped[len("monitored "):].strip()
+            return {
+                "found": True,
+                "type": "monitored_scope",
+                "name": _stripped if _target else "monitored",
+                "monitored_target_space": _target or "(all)",
+                "configured_spaces": _spaces,
+                "source": "monitoring_config",
+                "usage_hint": (
+                    f"This is a virtual monitored scope, NOT a real ClickUp entity. "
+                    f"Call get_space_task_report(space_name=\"{_stripped}\", period_type=...) directly. "
+                    "Do NOT try to look up its ID — the report tool resolves it internally."
+                ),
+            }
+        # --- Normal entity search ---
         result = find_entity_anywhere(project_name)
         if not result:
             return {
