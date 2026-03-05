@@ -1,659 +1,596 @@
 # ClickUp MCP Server with Multi-Provider AI Client
 
-> **Transform ClickUp project management with natural language AI** - A production-ready Model Context Protocol (MCP) server with 54 specialized tools, supporting Groq, Gemini, and Ollama.
+> **Transform ClickUp project management with natural language AI** - A production-ready Model Context Protocol (MCP) server with **81 specialized tools**, connecting to AI language models (Cerebras, Z.AI) via API.
 
 <div align="center">
 
 ![Python Version](https://img.shields.io/badge/python-3.11.9+-blue.svg)
 ![MCP Protocol](https://img.shields.io/badge/MCP-FastMCP%203.0-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Tools](https://img.shields.io/badge/tools-54-orange.svg)
+![Tools](https://img.shields.io/badge/tools-81-orange.svg)
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [AI Provider Comparison](#-ai-provider-comparison)
-- [Features](#-features)
-- [Quick Start Guide](#-quick-start-guide)
-- [Detailed Setup Instructions](#-detailed-setup-instructions)
-- [MCP Server Tools](#-mcp-server-tools)
-- [SLM Client Usage](#-slm-client-usage)
-- [Configuration Reference](#-configuration-reference)
-- [Troubleshooting](#-troubleshooting)
-- [API Reference](#-api-reference)
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [AI Provider Comparison](#ai-provider-comparison)
+- [Features](#features)
+- [Quick Start Guide](#quick-start-guide)
+- [Detailed Setup Instructions](#detailed-setup-instructions)
+- [AI Client Usage](#ai-client-usage)
+- [Configuration Reference](#configuration-reference)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 🚀 Overview
+## Overview
 
-This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The client supports **multiple AI providers** with automatic tool calling and zero data truncation.
+This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The MCP server runs as a persistent HTTP service and exposes **81 ClickUp tools** via SSE transport. AI clients connect to the server, discover available tools, and call them on demand using natural language -- with the LLM powered via external API (Cerebras or Z.AI).
 
 ### What is MCP?
 
-The Model Context Protocol (MCP) is an open standard that enables AI models to interact with external tools and data sources in a structured, secure way. This server exposes 54 ClickUp-related tools that any MCP-compatible AI can use.
+The Model Context Protocol (MCP) is an open standard that enables AI models to interact with external tools and data sources in a structured, secure way. This server exposes ClickUp-related tools; the AI client connects to the backend over HTTP/SSE, discovers all 81 available tools, and calls them automatically based on the user's query.
 
 ---
 
-## 🤖 AI Provider Comparison
-
-| Provider        | Free Tier Limit       | Context Window | Speed      | Best For                  |
-| --------------- | --------------------- | -------------- | ---------- | ------------------------- |
-| **🏆 CEREBRAS** | **UNLIMITED! 🎉**     | 128K tokens    | ⚡ Fastest | **Primary (Recommended)** |
-| GROQ            | 14,400 req/day        | 128K tokens    | ⚡ Fast    | Backup/Secondary          |
-| GEMINI          | ~50 req/day           | 1M tokens      | Fast       | Large context needs       |
-| OLLAMA          | **Unlimited (local)** | 128K tokens    | Varies     | Privacy & offline use     |
-
-### Why Cerebras is Recommended (Primary Provider)
-
-| Feature               | Cerebras (Llama 3.3 70B) | Groq (Llama 3.3 70B) | Gemini 2.0 Flash |
-| --------------------- | ------------------------ | -------------------- | ---------------- |
-| **Free Requests/Day** | UNLIMITED ✅             | 14,400 ✅            | ~50 ❌           |
-| **Free Tokens/Day**   | UNLIMITED ✅             | 100K ✅              | Limited ❌       |
-| **Context Window**    | 128K tokens              | 128K tokens          | 1M tokens        |
-| **Inference Speed**   | 2000+ tokens/sec ⚡      | 100+ tokens/sec      | ~50 tokens/sec   |
-| **Tool Calling**      | Native support           | Native support       | Native support   |
-| **Accuracy**          | Excellent                | Excellent            | Excellent        |
-| **Rate Limit Issues** | None (Unlimited)         | Rare                 | Very common      |
-
----
-
-## 🏗 Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         USER (Natural Language)                  │
-│                    "Show me overdue tasks in Marketing"          │
-└─────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    SLM CLIENT (slm_client.py)                    │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │ Knowledge Graph │  │  LLM Provider   │  │   MCP Client    │  │
-│  │   (Context)     │  │ Groq/Gemini/    │  │   (Protocol)    │  │
-│  │                 │  │    Ollama       │  │                 │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ (SSE Transport)
-┌─────────────────────────────────────────────────────────────────┐
-│                    MCP SERVER (mcp_server.py)                    │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐        │
-│  │  Workspace    │  │    Task       │  │  PM Analytics │        │
-│  │  Structure    │  │  Management   │  │    Tools      │        │
-│  │  (10 tools)   │  │  (12 tools)   │  │  (9 tools)    │        │
-│  └───────────────┘  └───────────────┘  └───────────────┘        │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐        │
-│  │   Project     │  │   Project     │  │  Sync &       │        │
-│  │   Config      │  │ Intelligence  │  │  Mapping      │        │
-│  │  (7 tools)    │  │  (12 tools)   │  │  (10 tools)   │        │
-│  └───────────────┘  └───────────────┘  └───────────────┘        │
-└─────────────────────────────────────────────────────────────────┘
-                                    │
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-            ┌───────────┐   ┌───────────┐   ┌───────────┐
-            │  ClickUp  │   │ Supabase  │   │   Local   │
-            │    API    │   │ PostgreSQL│   │   Cache   │
-            └───────────┘   └───────────┘   └───────────┘
++------------------------------------------------------------------+
+|                      USER (Natural Language Query)               |
+|           "Show weekly time report for Development team"         |
++-----------------------------------+------------------------------+
+                                    |
+                                    v
++------------------------------------------------------------------+
+|                    AI CLIENT (zai_client.py)                     |
+|                                                                  |
+|  +------------------------------------------------------------+  |
+|  |              LLM Provider API (OpenAI-compatible)          |  |
+|  |                                                            |  |
+|  |  +--------------------+    +---------------------------+  |  |
+|  |  |      CEREBRAS      |    |          Z.AI             |  |  |
+|  |  |   gpt-oss-120b     |    |  glm-4.7-flash (primary)  |  |  |
+|  |  |  (alternative)     |    |  glm-4.5-flash (fallback) |  |  |
+|  |  +--------------------+    +---------------------------+  |  |
+|  +------------------------------------------------------------+  |
+|                                                                  |
+|  +----------------------+   +--------------------------------+  |
+|  |     MCP Session      |   |     Smart Polling Engine       |  |
+|  |    (SSE Transport)   |   |   (3s status check interval)   |  |
+|  +----------------------+   +--------------------------------+  |
++-----------------------------------+------------------------------+
+                                    |
+                           SSE Transport (HTTP)
+                     http://127.0.0.1:8001/sse
+                                    |
+                                    v
++------------------------------------------------------------------+
+|              MCP SERVER (clickup_mcp/mcp_server.py)              |
+|              Uvicorn + FastMCP 3.0 + Port 8001                   |
+|                                                                  |
+|  +--------------+ +-----------+ +-------------+ +-----------+   |
+|  |  Workspace   | |   Task    | | PM Analytics| |  Project  |   |
+|  |  Structure   | | Management| | (23 tools)  | |  Config   |   |
+|  |  (11 tools)  | | (9 tools) | |             | | (7 tools) |   |
+|  +--------------+ +-----------+ +-------------+ +-----------+   |
+|                                                                  |
+|  +--------------+ +------------+ +----------------------+       |
+|  |   Project    | |  Sync &    | |    Task Reports      |       |
+|  | Intelligence | |  Mapping   | |    (8 tools)         |       |
+|  |  (10 tools)  | | (13 tools) | |                      |       |
+|  +--------------+ +------------+ +----------------------+       |
++--------------------+---------------------------------------------+
+                     |
+         +-----------+-----------+
+         v           v           v
+   +---------+  +---------+  +---------+
+   | ClickUp |  | Supabase|  |  Local  |
+   |   API   |  |Postgres |  |  Cache  |
+   +---------+  +---------+  +---------+
+```
+
+### How the MCP-to-LLM Connection Works
+
+1. **MCP Server starts** as a persistent HTTP service on port `8001`, exposing 81 tools via SSE.
+2. **AI Client connects** to `http://127.0.0.1:8001/sse` using the MCP client session.
+3. **Tools are discovered** - the client loads all 81 tool schemas from the server.
+4. **User sends a query** - the client forwards it to the LLM provider (Z.AI or Cerebras) via their OpenAI-compatible API, attaching all tool schemas.
+5. **LLM selects tools** - it returns a structured tool-call request with the right arguments.
+6. **Client executes the tool** - the MCP session calls the tool on the backend server, which queries the ClickUp API or Supabase.
+7. **Result returned to LLM** - the LLM produces the final natural-language response for the user.
+
+---
+
+## AI Provider Comparison
+
+| Provider       | Models                           | Context Window | Speed     | Best For                   |
+| -------------- | -------------------------------- | -------------- | --------- | -------------------------- |
+| **Z.AI (GLM)** | `glm-4.7-flash`, `glm-4.5-flash` | 128K tokens    | Fast      | **Primary (Recommended)**  |
+| **CEREBRAS**   | `gpt-oss-120b`                   | 128K tokens    | 2000+ t/s | **High-speed alternative** |
+
+### Provider Feature Comparison
+
+| Feature              | Z.AI `glm-4.7-flash` | Z.AI `glm-4.5-flash` | Cerebras `gpt-oss-120b` |
+| -------------------- | -------------------- | -------------------- | ----------------------- |
+| **API Standard**     | OpenAI-compatible    | OpenAI-compatible    | OpenAI-compatible       |
+| **Tool Calling**     | Native support       | Native support       | Native support          |
+| **Context Window**   | 128K tokens          | 128K tokens          | 128K tokens             |
+| **Inference Speed**  | Fast                 | Fast                 | 2000+ tokens/sec        |
+| **Model Chain Role** | Primary              | Fallback             | Standalone alternative  |
+
+### Z.AI Waterfall Chain
+
+`zai_client.py` automatically falls back when a rate limit or error is hit:
+
+```
+glm-4.7-flash  -->  glm-4.5-flash
+   (primary)          (fallback)
 ```
 
 ---
 
-## ✨ Features
+## Features
 
-### 54 MCP Tools Organized in 6 Categories
+### 81 MCP Tools in 7 Categories
 
 <details>
-<summary><b>🏢 Workspace Structure (10 tools)</b></summary>
+<summary><b>Workspace Structure (11 tools)</b></summary>
 
-| Tool                   | Description                    |
-| ---------------------- | ------------------------------ |
-| `get_workspaces`       | List all accessible workspaces |
-| `get_spaces`           | List spaces in a workspace     |
-| `get_space`            | Get detailed space information |
-| `get_folders`          | List folders in a space        |
-| `get_folder`           | Get folder details with lists  |
-| `get_lists`            | List all lists in a folder     |
-| `get_folderless_lists` | List direct space lists        |
-| `get_list`             | Get detailed list information  |
-| `invalidate_cache`     | Clear cached data              |
+| Tool                   | Description                              |
+| ---------------------- | ---------------------------------------- |
+| `get_workspaces`       | List all accessible workspaces (teams)   |
+| `get_spaces`           | List spaces in a workspace               |
+| `get_space`            | Get detailed space information           |
+| `get_folders`          | List folders in a space                  |
+| `get_folder`           | Get folder details with lists            |
+| `get_lists`            | List all lists in a folder               |
+| `get_folderless_lists` | List direct space lists (no folder)      |
+| `get_list`             | Get detailed list information            |
+| `invalidate_cache`     | Clear cached workspace data              |
+| `get_team_members`     | Fetch all team members in a workspace    |
+| `resolve_assignees`    | Resolve names/emails to ClickUp user IDs |
 
 </details>
 
 <details>
-<summary><b>📝 Task Management (12 tools)</b></summary>
+<summary><b>Task Management (9 tools)</b></summary>
 
-| Tool                | Description                |
-| ------------------- | -------------------------- |
-| `get_tasks`         | List tasks with filters    |
-| `get_task`          | Get detailed task info     |
-| `create_task`       | Create a new task          |
-| `update_task`       | Update task properties     |
-| `search_tasks`      | Search across project      |
-| `get_project_tasks` | Get all project tasks      |
-| `get_list_progress` | Sprint progress summary    |
-| `get_workload`      | Team workload distribution |
-| `get_overdue_tasks` | Find overdue tasks         |
-
-</details>
-
-<details>
-<summary><b>📊 PM Analytics (9 tools)</b></summary>
-
-| Tool                       | Description                 |
-| -------------------------- | --------------------------- |
-| `get_progress_since`       | Progress since date         |
-| `get_time_tracking_report` | Time tracking summary       |
-| `get_task_time_breakdown`  | Detailed time breakdown     |
-| `get_estimation_accuracy`  | Estimate vs actual analysis |
-| `get_at_risk_tasks`        | Find at-risk tasks          |
-| `get_stale_tasks`          | Find stagnant tasks         |
-| `get_untracked_tasks`      | Tasks without time logged   |
-| `get_inactive_assignees`   | Inactive team members       |
-| `get_status_summary`       | Status distribution         |
+| Tool                | Description                                      |
+| ------------------- | ------------------------------------------------ |
+| `get_tasks`         | List tasks with filters (status, assignee, date) |
+| `get_task`          | Get detailed task info including subtasks        |
+| `create_task`       | Create a new task in a list                      |
+| `update_task`       | Update task properties (status, assignee, dates) |
+| `search_tasks`      | Full-text search across projects                 |
+| `get_project_tasks` | Get all tasks in a project with subtask tree     |
+| `get_list_progress` | Sprint/list progress summary                     |
+| `get_workload`      | Team workload distribution across assignees      |
+| `get_overdue_tasks` | Find all overdue tasks in a list                 |
 
 </details>
 
 <details>
-<summary><b>⚙️ Project Configuration (7 tools)</b></summary>
+<summary><b>PM Analytics (23 tools)</b></summary>
 
-| Tool                      | Description             |
-| ------------------------- | ----------------------- |
-| `discover_projects`       | Scan for projects       |
-| `add_project`             | Track a project         |
-| `list_projects`           | List tracked projects   |
-| `remove_project`          | Untrack project         |
-| `refresh_projects`        | Verify tracked projects |
-| `get_project_status`      | Project status metrics  |
-| `get_all_projects_status` | All projects overview   |
-
-</details>
-
-<details>
-<summary><b>🧠 Project Intelligence (12 tools)</b></summary>
-
-| Tool                             | Description              |
-| -------------------------------- | ------------------------ |
-| `get_workspace_folderless_lists` | Find folderless lists    |
-| `get_list_defined_statuses`      | List status definitions  |
-| `get_project_statuses`           | Project status workflow  |
-| `get_project_health_score`       | Health score (A-F grade) |
-| `get_project_daily_standup`      | Daily standup report     |
-| `get_project_time_tracking`      | Project time report      |
-| `get_project_blockers`           | Identify blockers        |
-| `get_project_at_risk`            | Risk assessment          |
-| `get_project_weekly_digest`      | Weekly summary           |
-| `get_project_team_workload`      | Team workload analysis   |
+| Tool                                   | Description                                        |
+| -------------------------------------- | -------------------------------------------------- |
+| `get_progress_since`                   | Progress made since a specified date               |
+| `get_time_tracking_report`             | Time tracking summary by list/project              |
+| `get_task_time_breakdown`              | Detailed time breakdown for a single task          |
+| `get_project_report_universal`         | Universal project report with configurable filters |
+| `get_estimation_accuracy`              | Estimate vs actual time analysis (bottom-up)       |
+| `get_at_risk_tasks`                    | Find tasks at risk of missing deadline             |
+| `get_stale_tasks`                      | Find stagnant tasks with no recent activity        |
+| `get_untracked_tasks`                  | Tasks with zero time logged                        |
+| `get_inactive_assignees`               | Assignees with no recent activity                  |
+| `get_status_summary`                   | Status distribution across a project               |
+| `get_space_time_report`                | Time report aggregated at space level              |
+| `get_space_folder_team_report`         | Space-folder-team combined time breakdown          |
+| `get_time_report_by_period`            | Time report filtered by period (week/month/custom) |
+| `get_async_report_status`              | Check status of a background report job            |
+| `get_async_report_result`              | Fetch result of a completed background report job  |
+| `get_space_time_report_by_period`      | Space-level time report for a specific period      |
+| `get_space_project_time_report`        | Time report by space -> project -> member          |
+| `get_time_report_detailed`             | Granular time report with full task details        |
+| `get_person_tasks_with_time`           | All tasks + time tracked for a specific person     |
+| `get_task_status_distribution`         | Status distribution with percentage breakdown      |
+| `get_space_time_report_comprehensive`  | Full space-level comprehensive time report         |
+| `get_folder_time_report_comprehensive` | Full folder-level comprehensive time report        |
+| `get_employee_daily_time_report`       | Employee time report grouped by day                |
 
 </details>
 
 <details>
-<summary><b>🔄 Sync & Mapping (10 tools)</b></summary>
+<summary><b>Project Configuration (7 tools)</b></summary>
 
-| Tool                   | Description              |
-| ---------------------- | ------------------------ |
-| `discover_hierarchy`   | Full workspace tree      |
-| `map_project`          | Map ClickUp entity       |
-| `list_mapped_projects` | Show mappings            |
-| `get_mapped_project`   | Get mapping details      |
-| `refresh_project`      | Refresh mapping          |
-| `unmap_project`        | Remove mapping           |
-| `get_sync_status`      | Sync health check        |
-| `list_spaces`          | Spaces with mapping info |
-| `clear_sync`           | Reset all mappings       |
-| `prune_cache`          | Clean expired cache      |
+| Tool                      | Description                                 |
+| ------------------------- | ------------------------------------------- |
+| `discover_projects`       | Scan workspace and auto-discover projects   |
+| `add_project`             | Add a project to the tracked list           |
+| `list_projects`           | List all currently tracked projects         |
+| `remove_project`          | Remove a project from tracking              |
+| `refresh_projects`        | Re-verify all tracked projects are valid    |
+| `get_project_status`      | Project status metrics and health           |
+| `get_all_projects_status` | Overview of health for all tracked projects |
 
 </details>
+
+<details>
+<summary><b>Project Intelligence (10 tools)</b></summary>
+
+| Tool                             | Description                                |
+| -------------------------------- | ------------------------------------------ |
+| `get_workspace_folderless_lists` | Find lists not inside any folder           |
+| `get_list_defined_statuses`      | Get all status definitions for a list      |
+| `get_project_statuses`           | Get project-level status workflow          |
+| `get_project_health_score`       | Health score graded A-F with breakdown     |
+| `get_project_daily_standup`      | Auto-generated daily standup report        |
+| `get_project_time_tracking`      | Project-level time tracking summary        |
+| `get_project_blockers`           | Identify blocked or stale tasks            |
+| `get_project_at_risk`            | Risk assessment for tasks nearing deadline |
+| `get_project_weekly_digest`      | Auto-generated weekly project summary      |
+| `get_project_team_workload`      | Per-member workload analysis               |
+
+</details>
+
+<details>
+<summary><b>Sync and Mapping (13 tools)</b></summary>
+
+| Tool                          | Description                                          |
+| ----------------------------- | ---------------------------------------------------- |
+| `discover_hierarchy`          | Traverse full workspace tree (spaces/folders/lists)  |
+| `map_project`                 | Map a ClickUp entity (space/folder/list) by alias    |
+| `list_mapped_projects`        | Show all current project mappings                    |
+| `get_mapped_project`          | Get details of a specific mapped project             |
+| `refresh_project`             | Refresh a mapping with latest ClickUp data           |
+| `unmap_project`               | Remove a project mapping by alias                    |
+| `get_sync_status`             | Check overall sync health and cache state            |
+| `list_spaces`                 | List all spaces with mapping metadata                |
+| `clear_sync`                  | Reset all mappings and cache (confirm required)      |
+| `prune_cache`                 | Clean expired cache entries                          |
+| `find_project_anywhere`       | Universal entity search by name across workspace     |
+| `get_environment_context`     | Bootstrap - returns server state, mappings, guidance |
+| `trigger_mapping_maintenance` | Manually run the mapping maintenance routine         |
+
+</details>
+
+<details>
+<summary><b>Task Reports (8 tools)</b></summary>
+
+| Tool                            | Description                                         |
+| ------------------------------- | --------------------------------------------------- |
+| `get_space_task_report`         | Space-wide task report with per-project breakdown   |
+| `get_project_task_report`       | Project report with per-team-member breakdown       |
+| `get_member_task_report`        | Individual team member task and time report         |
+| `get_low_hours_report`          | Members who tracked less than 8h on any working day |
+| `get_missing_estimation_report` | Tasks without time estimates, grouped by assignee   |
+| `get_overtracked_report`        | Members where tracked time exceeds estimate         |
+| `get_task_report_job_status`    | Poll status of an async report job                  |
+| `get_task_report_job_result`    | Retrieve result of a completed async report job     |
+
+**Async Report Pattern**: Large reports run as background jobs. Use `get_task_report_job_status`
+to poll (smart 3s interval in `zai_client.py`) and `get_task_report_job_result` once done.
+
+</details>
+
+### Other Key Features
+
+- **Smart Async Polling** - Background report jobs polled every 3s; results appear within 3s of completion.
+- **Zero Data Truncation** - All API responses delivered in full, no content trimming.
+- **Connection Pooling** - Shared `api_client.py` with persistent HTTP session for efficient ClickUp API calls.
+- **Bottom-Up Time Rollup** - Accurate time calculation from subtasks to parent tasks across all reports.
+- **Auto-Watchdog** - `npm start` launches `watch-restart.py`, auto-restarting the MCP server on code changes.
+- **Mapping Maintenance Scheduler** - APScheduler background job periodically syncs project mappings with ClickUp.
+- **IST Timezone Support** - All date calculations default to Asia/Kolkata (+05:30).
+- **Report Saving** - Reports saved as Markdown files to a configurable `REPORTS_DIR`.
 
 ---
 
-## ⚡ Quick Start Guide (Updated)
+## Quick Start Guide
 
-### 5-Minute Setup
+### Setup in 5 Minutes
 
 ```bash
-# 1. Clone the repository
-# Ensure you are on the correct branch (e.g., qwen-1.2)
+# 1. Clone and switch to the Zai branch
 git clone https://github.com/Arya004pro/clickup-python-polling.git
 cd clickup-python-polling
+git checkout Zai
 
-git checkout qwen-1.2
-
-# 2. Create Python virtual environment
+# 2. Create virtual environment
 python -m venv myenv
-myenv\Scripts\activate  # Windows
-# source myenv/bin/activate  # Linux/Mac
+myenv\Scripts\activate        # Windows
+# source myenv/bin/activate   # Linux/Mac
 
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Start the server and watchdog
+# 4. Create .env (see Configuration Reference)
+
+# 5. Start MCP server + watchdog
 npm start
 ```
 
-### Minimum .env Configuration
+### Minimum `.env`
 
 ```bash
-# Required
 CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
 DATABASE_URL=postgresql://user:pass@host:6543/postgres
+MCP_SERVER_URL=http://127.0.0.1:8001/sse
 
-# AI Provider (Cerebras recommended - UNLIMITED free!)
-LLM_PROVIDER=cerebras
-CEREBRAS_API_KEY=csk_YOUR_KEY_HERE  # Get from https://cloud.cerebras.ai/
+# Z.AI (primary - model chain: glm-4.7-flash -> glm-4.5-flash)
+ZAI_API_KEY=your_zai_key_here
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
 
-# OR use Groq as backup
-# LLM_PROVIDER=groq
-# GROQ_API_KEY=gsk_YOUR_KEY_HERE  # Get from https://console.groq.com/keys
+# Cerebras (alternative - model: gpt-oss-120b)
+# CEREBRAS_API_KEY=csk_YOUR_KEY_HERE
 ```
 
 ---
 
-## 📖 Detailed Setup Instructions
+## Detailed Setup Instructions
 
 ### Step 1: Install Python 3.11.9
 
 <details>
-<summary><b>Windows Installation</b></summary>
+<summary><b>Windows</b></summary>
 
 1. Download Python 3.11.9 from [python.org](https://www.python.org/downloads/release/python-3119/)
-2. Run installer with these options checked:
-   - ✅ Add Python to PATH
-   - ✅ Install pip
-   - ✅ Install for all users (recommended)
-3. Verify installation:
-   ```powershell
-   python --version
-   # Should show: Python 3.11.9
-   ```
+2. Run installer: check **Add Python to PATH**, **Install pip**, **Install for all users**
+3. Verify: `python --version` (should show Python 3.11.9)
 
 </details>
 
 <details>
-<summary><b>Linux/Mac Installation</b></summary>
+<summary><b>Linux/Mac</b></summary>
 
 ```bash
-# Using pyenv (recommended)
 curl https://pyenv.run | bash
-
-# Add to ~/.bashrc or ~/.zshrc:
 export PATH="$HOME/.pyenv/bin:$PATH"
 eval "$(pyenv init -)"
-
-# Install Python 3.11.9
-pyenv install 3.11.9
-pyenv global 3.11.9
-
-# Verify
-python --version
+pyenv install 3.11.9 && pyenv global 3.11.9
 ```
 
 </details>
 
-### Step 2: Create Virtual Environment
+### Step 2: Create and Activate Virtual Environment
 
 ```bash
-# Navigate to project directory
 cd clickup-python-polling
-
-# Create virtual environment
 python -m venv myenv
 
-# Activate (Windows PowerShell)
+# Windows PowerShell
 myenv\Scripts\Activate.ps1
 
-# Activate (Windows CMD)
+# Windows CMD
 myenv\Scripts\activate.bat
 
-# Activate (Linux/Mac)
+# Linux/Mac
 source myenv/bin/activate
-
-# Verify activation (you should see (myenv) in prompt)
 ```
 
 ### Step 3: Install Dependencies
 
 ```bash
-# Upgrade pip first
 python -m pip install --upgrade pip
-
-# Install all requirements
 pip install -r requirements.txt
 
-# Verify key packages
-python -c "import fastmcp; print(f'FastMCP: {fastmcp.__version__}')"
-python -c "import google.generativeai; print('Gemini SDK: OK')"
+# Verify
+python -c "import fastmcp; print('FastMCP:', fastmcp.__version__)"
+python -c "from mcp import ClientSession; print('MCP client: OK')"
 ```
 
 ### Step 4: Get API Keys
 
 #### ClickUp API Token
 
-1. Go to [ClickUp Settings](https://app.clickup.com/settings/apps)
-2. Navigate to **Apps** → **API Token**
-3. Click **Generate** or copy existing token
-4. Token format: `pk_123456_XXXXXXXXXXXXXXXXXXXXXXXXX`
+1. Go to [ClickUp Settings -> Apps](https://app.clickup.com/settings/apps)
+2. Generate or copy your token (`pk_123456_XXXX...`)
 
 #### ClickUp Team ID
 
-1. Open ClickUp in browser
-2. Navigate to any space
-3. Copy the team ID from URL: `https://app.clickup.com/{TEAM_ID}/v/...`
+Copy from your ClickUp URL: `https://app.clickup.com/{TEAM_ID}/v/...`
 
-#### AI Provider API Keys
+#### Z.AI API Key (Primary LLM)
 
-##### 🏆 Cerebras API Key (RECOMMENDED - UNLIMITED FREE!)
+1. Sign up at the Z.AI platform
+2. Generate an API key from the API Keys section
+3. Set `ZAI_API_KEY` and `ZAI_BASE_URL=https://api.z.ai/api/paas/v4/` in `.env`
+4. Models used: `glm-4.7-flash` (primary), `glm-4.5-flash` (fallback)
 
-1. Go to [Cerebras Cloud](https://cloud.cerebras.ai/)
-2. Sign up/Login (free)
-3. Navigate to **API Keys**
-4. Click **Create API Key**
-5. Copy the key (starts with `csk_...`)
-6. Set in `.env`: `CEREBRAS_API_KEY=csk_YOUR_KEY`
+#### Cerebras API Key (Alternative LLM)
 
-##### Groq API Key (Secondary - 14,400 requests/day FREE)
+1. Sign up at [Cerebras Cloud](https://cloud.cerebras.ai/) (free tier available)
+2. Create an API Key (starts with `csk_...`)
+3. Set `CEREBRAS_API_KEY` in `.env`
+4. Model used: `gpt-oss-120b`
 
-1. Go to [Groq Console](https://console.groq.com/keys)
-2. Sign up/Login (free)
-3. Click **Create API Key**
-4. Copy the key (starts with `gsk_...`)
+#### Supabase / PostgreSQL
 
-##### Google Gemini API Key (Fallback - only ~50 requests/day)
+1. Create a project at [Supabase](https://supabase.com)
+2. Copy the Transaction Pooler connection string from Settings -> Database
 
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Click **Create API Key**
-3. Copy the key (starts with `AIza...`)
+### Step 5: Configure Environment File
 
-##### Ollama (Local - Unlimited, requires GPU)
-
-**Windows:**
-
-1. Download installer from [ollama.ai](https://ollama.ai)
-2. Run the `.exe` installer
-3. Open PowerShell and verify: `ollama --version`
-4. Pull a model (small for 6GB RAM): `ollama pull qwen2.5:3b`
-5. Start Ollama service: `ollama serve`
-6. Set in `.env`: `OLLAMA_BASE_URL=http://localhost:11434`
-
-**Linux/Mac:**
-
-1. Install from [ollama.ai](https://ollama.ai)
-2. Run: `ollama pull qwen2.5:3b` (or `llama3.1:8b` for 8GB+ RAM)
-3. Ollama runs automatically in background
-4. Set in `.env`: `OLLAMA_BASE_URL=http://localhost:11434`
-
-#### Supabase/PostgreSQL
-
-1. Create project at [Supabase](https://supabase.com)
-2. Go to **Settings** → **Database**
-3. Copy the **Connection string** (use Transaction Pooler for production)
-
-### Step 5: Configure Environment
-
-Create a `.env` file in the project root:
+Create `.env` in the project root:
 
 ```env
-# ===========================================
-# REQUIRED CONFIGURATION
-# ===========================================
-
-# ClickUp API Token (from ClickUp Settings > Apps > API Token)
+# Required
 CLICKUP_API_TOKEN=pk_123456_XXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-# PostgreSQL/Supabase Connection String
-# Format: postgresql://user:password@host:port/database
 DATABASE_URL=postgresql://postgres.xxxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
-
-# ===========================================
-# AI PROVIDER CONFIGURATION
-# ===========================================
-
-# Select provider: groq (recommended), gemini, or ollama
-LLM_PROVIDER=groq
-
-# Groq API Key (14,400 requests/day FREE - https://console.groq.com/keys)
-GROQ_API_KEY=gsk_XXXXXXXXXXXXXXXXXXXXXXXX
-GROQ_MODEL=llama-3.3-70b-versatile
-
-# Gemini API Key (only ~50 requests/day - https://aistudio.google.com/apikey)
-# GEMINI_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-# Ollama (local, unlimited)
-# OLLAMA_BASE_URL=http://localhost:11434
-# OLLAMA_MODEL=llama3.1:8b
-
-# MCP Server URL
 MCP_SERVER_URL=http://127.0.0.1:8001/sse
 
-# ===========================================
-# OPTIONAL CONFIGURATION
-# ===========================================
+# Z.AI - Primary LLM Provider
+# Model chain: glm-4.7-flash (primary) -> glm-4.5-flash (fallback)
+ZAI_API_KEY=your_zai_api_key_here
+ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
 
-# ClickUp Team/Workspace ID (auto-detected if not set)
+# Cerebras - Alternative LLM Provider (model: gpt-oss-120b)
+# Uncomment to switch to Cerebras
+# CEREBRAS_API_KEY=csk_XXXXXXXXXXXXXXXXXXXXXXXX
+
+# Optional
 CLICKUP_TEAM_ID=12345678
-
-# ClickUp Space ID (optional - for filtering)
 CLICKUP_SPACE_ID=
+REPORTS_DIR=D:\reports
 ```
 
-### Step 6: Start MCP Server
+### Step 6: Start the MCP Server
 
-**Terminal 1 - Start the MCP Server:**
+**Recommended (with file-watcher/watchdog):**
 
 ```bash
-# Activate virtual environment first (if not already activated)
-myenv\Scripts\Activate.ps1
+npm start
+```
 
-# Start the server
-python app/mcp/mcp_server.py
+**Manual start:**
+
+```bash
+python clickup_mcp/mcp_server.py
 ```
 
 Expected output:
 
 ```
-Starting ClickUp MCP Server...
+Starting ClickUp MCP Server in 2s to allow initialization...
 INFO:     Uvicorn running on http://0.0.0.0:8001
-INFO:     Application startup complete
+INFO:     Application startup complete.
 ```
 
-**Important:** Keep this terminal open. The server must run continuously for the SLM client to work.
+Keep this terminal open -- the server must stay running for the AI client to function.
 
-### Step 7: Start SLM Client
-
-**Terminal 2 - Run the SLM Client:**
+### Step 7: Start the AI Client
 
 ```bash
-python slm_client.py
+# Terminal 2
+python zai_client.py
 ```
 
 Expected output:
 
 ```
-============================================================
-🚀 ClickUp MCP Server - SLM Client (Gemini 2.0 Flash)
-============================================================
+========================================================================
+  ClickUp MCP - Z.AI GLM Client
+========================================================================
+  OK System prompt     : zai_system_prompt.md  (X chars)
+  OK Connecting to MCP : http://127.0.0.1:8001/sse
+  OK Loaded 81 tools
+  OK LLM               : glm-4.7-flash
 
-🔗 Connecting to MCP Server: http://127.0.0.1:8001/sse
-
-🧠 Building Knowledge Graph...
-   ✓ Mapped 1 Workspaces
-   ✓ Mapped 5 Spaces
-   ✓ Knowledge Graph Ready (6 entities)
-
-✅ Loaded 54 MCP tools
-🤖 Gemini gemini-2.0-flash initialized successfully!
-
-============================================================
-💬 Chat Ready! Type 'quit' to exit, 'help' for commands
-============================================================
-
-📝 You:
+========================================================================
+  You:
 ```
 
 ---
 
-## 💬 SLM Client Usage
+## AI Client Usage
 
-### Available Commands
+### Commands
 
-| Command | Description             |
-| ------- | ----------------------- |
-| `help`  | Show available commands |
-| `tools` | List all 54 MCP tools   |
-| `quit`  | Exit the application    |
+| Command | Description               |
+| ------- | ------------------------- |
+| `help`  | Show available commands   |
+| `tools` | List all 81 MCP tools     |
+| `quit`  | Exit with session summary |
 
 ### Example Queries
 
 ```
-📝 You: Show me all workspaces
+You: Show me all workspaces
+```
 
-🤖 Assistant:
-Found 1 workspace:
-| Workspace | ID | Members | Plan |
-|-----------|-----|---------|------|
-| My Company | 12345678 | 15 | Business |
+Response: 1 workspace found with members, plan, and ID details.
+
+```
+You: What's the project health for Marketing?
+```
+
+Response: Health Score 78/100 (Grade B) with breakdown by overdue tasks, freshness, progress, assignment coverage, and time estimates + recommendations.
+
+```
+You: Generate daily standup for Development
+```
+
+Response: Auto-generated standup with completed tasks (yesterday), in-progress items, blockers, and tasks due today.
+
+```
+You: Show time tracking report for last week grouped by assignee
 ```
 
 ```
-📝 You: What's the project health for Marketing?
-
-🤖 Assistant:
-📊 Project Health Score: Marketing
-
-Score: 78/100 (Grade: B)
-
-Breakdown:
-• Overdue Tasks: 85% ✓
-• Freshness: 72% ⚠
-• Progress: 65%
-• Assignment Coverage: 90% ✓
-• Time Estimates: 55% ⚠
-
-Recommendations:
-1. Update stale tasks (7 untouched >5 days)
-2. Add time estimates to 12 tasks
+You: Find all tasks that are overdue or due within 3 days and assign risk levels
 ```
 
 ```
-📝 You: Generate daily standup for Development
-
-🤖 Assistant:
-📋 Daily Standup - Development
-Date: 2026-02-01
-
-✅ Completed Yesterday:
-• API endpoint optimization (John)
-• Bug fix: Login timeout (Sarah)
-
-🔄 In Progress:
-• Dashboard redesign (Mike) - 60% complete
-• Database migration (John) - Blocked: waiting for credentials
-
-🚫 Blockers:
-• Database migration blocked - needs DevOps support
-
-📅 Due Today:
-• Code review for PR #142 (Sarah)
+You: Show me the employee daily time report for this month
 ```
 
-### Advanced Queries
+```
+You: Which team members tracked less than 8 hours on any day this week?
+```
+
+### Session Summary
+
+When you type `quit`, the client prints a full session summary:
 
 ```
-# Time tracking analysis
-📝 You: Show time tracking report grouped by assignee for Q1
-
-# Risk assessment
-📝 You: Find all tasks that are overdue or due within 3 days
-
-# Search functionality
-📝 You: Search for tasks mentioning "API" or "integration"
-
-# Team analysis
-📝 You: Who has the highest workload? Show task distribution
+====================================================================
+  Session Summary
+--------------------------------------------------------------------
+  API calls        : 12
+  MCP tool calls   : 18
+  Input tokens     : 24,500
+  Output tokens    : 8,200
+  Total tokens     : 32,700
+  Reports saved    : 2
+  Duration         : 4m 32s
+  Models used      :  glm-4.7-flash x10  glm-4.5-flash x2
+====================================================================
 ```
 
 ---
 
-## ⚙️ Configuration Reference
+## Configuration Reference
 
 ### Environment Variables
 
-| Variable            | Required | Default                     | Description                  |
-| ------------------- | -------- | --------------------------- | ---------------------------- |
-| `CLICKUP_API_TOKEN` | ✅ Yes   | -                           | ClickUp personal API token   |
-| `DATABASE_URL`      | ✅ Yes   | -                           | PostgreSQL connection string |
-| `GEMINI_API_KEY`    | ⚠️ SLM   | -                           | Google AI API key for SLM    |
-| `MCP_SERVER_URL`    | No       | `http://127.0.0.1:8001/sse` | MCP server endpoint          |
-| `CLICKUP_TEAM_ID`   | No       | Auto-detected               | Default workspace ID         |
-| `CLICKUP_SPACE_ID`  | No       | -                           | Default space ID             |
+| Variable            | Required | Default                         | Description                           |
+| ------------------- | -------- | ------------------------------- | ------------------------------------- |
+| `CLICKUP_API_TOKEN` | Yes      | -                               | ClickUp personal API token            |
+| `DATABASE_URL`      | Yes      | -                               | PostgreSQL/Supabase connection string |
+| `MCP_SERVER_URL`    | Yes      | `http://127.0.0.1:8001/sse`     | MCP server SSE endpoint               |
+| `ZAI_API_KEY`       | LLM      | -                               | Z.AI API key                          |
+| `ZAI_BASE_URL`      | LLM      | `https://api.z.ai/api/paas/v4/` | Z.AI base URL                         |
+| `CEREBRAS_API_KEY`  | LLM      | -                               | Cerebras API key (alternative)        |
+| `CLICKUP_TEAM_ID`   | No       | Auto-detected                   | Default workspace/team ID             |
+| `CLICKUP_SPACE_ID`  | No       | -                               | Default space ID for filtering        |
+| `REPORTS_DIR`       | No       | `D:\reports`                    | Directory for saved Markdown reports  |
 
-### Model Selection
+### Supported Period Types (for report tools)
 
-The SLM client uses **Gemini 2.0 Flash** by default. To change:
-
-```python
-# In slm_client.py
-MODEL_NAME = "gemini-2.0-flash"  # Recommended
-# OR
-MODEL_NAME = "gemini-1.5-pro"    # More capable, slower
-# OR
-MODEL_NAME = "gemini-1.5-flash"  # Fallback
-```
-
-### Alternative SLM Providers
-
-If you prefer other providers, modify `slm_client.py`:
-
-<details>
-<summary><b>Groq (Llama 3.3 70B)</b></summary>
-
-```python
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
-
-# Free tier: 100K tokens/min
-# Model: llama-3.3-70b-versatile
-```
-
-</details>
-
-<details>
-<summary><b>OpenRouter (Multiple Models)</b></summary>
-
-```python
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url="https://openrouter.ai/api/v1"
-)
-
-# Supports: Claude, GPT-4, Llama, Mistral, etc.
-# Free tier available for some models
-```
-
-</details>
+| Period Type    | Description                                                      |
+| -------------- | ---------------------------------------------------------------- |
+| `today`        | Current calendar day                                             |
+| `yesterday`    | Previous calendar day                                            |
+| `this_week`    | Monday to today (current week)                                   |
+| `last_week`    | Full previous Monday-Sunday week                                 |
+| `this_month`   | First of month to today                                          |
+| `last_month`   | Full previous month                                              |
+| `this_year`    | Jan 1 to today                                                   |
+| `last_30_days` | Rolling 30-day window                                            |
+| `rolling`      | Custom rolling window (use with `rolling_days`)                  |
+| `custom`       | Specific date range (use `custom_start`/`custom_end` YYYY-MM-DD) |
 
 ---
 
-## 🔧 Troubleshooting
-
-### Common Issues
+## Troubleshooting
 
 <details>
-<summary><b>❌ MCP Server won't start</b></summary>
-
-**Error:** `Address already in use`
+<summary><b>MCP Server won't start - Address already in use</b></summary>
 
 ```bash
 # Find and kill process on port 8001
@@ -661,7 +598,10 @@ netstat -ano | findstr :8001
 taskkill /PID <PID> /F
 ```
 
-**Error:** `ModuleNotFoundError`
+</details>
+
+<details>
+<summary><b>MCP Server won't start - ModuleNotFoundError</b></summary>
 
 ```bash
 # Ensure virtual environment is activated
@@ -672,284 +612,42 @@ pip install -r requirements.txt
 </details>
 
 <details>
-<summary><b>❌ SLM Client can't connect</b></summary>
+<summary><b>AI Client can't connect to MCP server</b></summary>
 
-**Error:** `ConnectionRefusedError`
-
-1. Ensure MCP server is running in another terminal
-2. Check the URL in `.env`: `MCP_SERVER_URL=http://127.0.0.1:8001/sse`
-3. Try `http://localhost:8001/sse` instead
+1. Ensure MCP server is running in another terminal (`npm start` or `python clickup_mcp/mcp_server.py`)
+2. Verify `MCP_SERVER_URL=http://127.0.0.1:8001/sse` in `.env`
+3. Try `http://localhost:8001/sse` as an alternative
 
 </details>
 
 <details>
-<summary><b>❌ Gemini API errors</b></summary>
+<summary><b>Z.AI API errors - Rate limit (429)</b></summary>
 
-**Error:** `API key invalid`
-
-1. Verify key at [Google AI Studio](https://aistudio.google.com/apikey)
-2. Create a new key if needed
-3. Ensure no extra spaces in `.env`
-
-**Error:** `Resource exhausted`
-
-- Free tier limit reached (1,500 req/day)
-- Wait until next day or upgrade plan
+The client automatically falls back from `glm-4.7-flash` to `glm-4.5-flash`. If both models are rate-limited, wait a few minutes. Both Z.AI models share the same API key quota.
 
 </details>
 
 <details>
-<summary><b>❌ ClickUp API errors</b></summary>
+<summary><b>Cerebras API errors - Invalid key</b></summary>
 
-**Error:** `401 Unauthorized`
-
-- Token expired - regenerate in ClickUp settings
-- Ensure no extra spaces in `.env`
-
-**Error:** `Rate limited`
-
-- ClickUp free tier: 100 requests/minute
-- Add delays between bulk operations
+1. Verify key at [Cerebras Cloud](https://cloud.cerebras.ai/)
+2. Ensure the key starts with `csk_` and has no leading/trailing spaces in `.env`
+3. Confirm the model name is exactly `gpt-oss-120b`
 
 </details>
 
 <details>
-<summary><b>❌ Database connection issues</b></summary>
+<summary><b>Reports are not being saved</b></summary>
 
-**Error:** `Connection refused`
-
-1. Check Supabase project is active
-2. Use Transaction Pooler URL (port 6543)
-3. Verify password has no special characters (URL encode if needed)
+1. Check `REPORTS_DIR` in `.env` points to a writable directory
+2. Create the directory manually if it does not exist: `mkdir D:\reports`
+3. The client saves reports when it detects a `formatted_output` key in the tool response
 
 </details>
 
-### Debug Mode
+<details>
+<summary><b>Async reports time out or never complete</b></summary>
 
-Enable verbose logging:
+Large space/folder reports run as async background jobs on the MCP server. The client polls every 3s for up to 5 minutes (`STATUS_CHECK_TIMEOUT_S = 300`). If a job is stuck, use `get_environment_context` to check server state or restart the server with `npm start`.
 
-```bash
-# Set environment variable
-set DEBUG=true  # Windows
-export DEBUG=true  # Linux/Mac
-
-python slm_client.py
-```
-
----
-
-## 📚 API Reference
-
-### MCP Server Endpoints
-
-| Endpoint  | Method | Description                 |
-| --------- | ------ | --------------------------- |
-| `/sse`    | GET    | SSE stream for MCP protocol |
-| `/health` | GET    | Server health check         |
-
-### Tool Response Format
-
-All tools return JSON with this structure:
-
-```json
-{
-  "success": true,
-  "data": { ... },
-  "error": null,
-  "metadata": {
-    "tool": "get_tasks",
-    "execution_time_ms": 245
-  }
-}
-```
-
-### Error Response Format
-
-```json
-{
-  "success": false,
-  "data": null,
-  "error": "Detailed error message",
-  "hint": "Suggested fix or alternative"
-}
-```
-
----
-
-## 🗂 Project Structure
-
-```
-clickup-python-polling/
-├── clickup_mcp/                # Core MCP server and tools
-│   ├── __init__.py
-│   ├── api_client.py           # API client for ClickUp
-│   ├── clickup_shared.py       # Shared utilities for ClickUp
-│   ├── mcp_server.py           # Main MCP server entry point
-│   ├── pm_analytics.py         # Project management analytics tools
-│   ├── project_configuration.py # Project configuration utilities
-│   ├── project_intelligence.py # Project intelligence tools
-│   ├── status_helpers.py       # Status management helpers
-│   ├── sync_mapping.py         # Sync and mapping utilities
-│   ├── task_management.py      # Task management tools
-│   ├── time_stamp_helpers.py   # Timestamp formatting helpers
-│   ├── watch-restart.py        # Watchdog script for server restarts
-│   └── workspace_structure.py  # Workspace structure management
-├── app/                        # Application-level scripts
-│   ├── __init__.py
-│   ├── clickup.py              # ClickUp integration
-│   ├── config.py               # Configuration settings
-│   ├── daily_sync.py           # Daily synchronization tasks
-│   ├── employee_sync.py        # Employee synchronization tasks
-│   ├── logging_config.py       # Logging configuration
-│   ├── main.py                 # Main application entry point
-│   ├── scheduler.py            # Task scheduler
-│   ├── supabase_db.py          # Supabase database integration
-│   ├── sync.py                 # Synchronization utilities
-│   ├── time_tracking.py        # Time tracking utilities
-├── myenv/                      # Python virtual environment
-├── requirements.txt            # Python dependencies
-├── package.json                # npm scripts for server management
-└── README.md                   # Project documentation
-```
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework
-- [Google Gemini](https://ai.google.dev/) - AI model provider
-- [ClickUp](https://clickup.com/) - Project management platform
-- [Supabase](https://supabase.com/) - PostgreSQL database platform
-
----
-
-## 🛠 Updated Features
-
-### Watchdog Integration for Automatic Server Restarts
-
-- A new script `clickup_mcp/watch-restart.py` has been added to monitor file changes in the `clickup_mcp` directory.
-- Automatically restarts the MCP server when changes are detected.
-- Simplifies development workflow by eliminating the need for manual server restarts.
-
-### Simplified Server Management with npm Scripts
-
-- Added an `npm` script for starting the server and watchdog together.
-- To start the server, simply run:
-
-```bash
-npm start
-```
-
-### Enhanced Task Management and Workspace Tools
-
-- Optimized `task_management.py` for better performance and additional features.
-- Added `time_stamp_helpers.py` for advanced timestamp formatting.
-- Improved `workspace_structure.py` for managing ClickUp workspaces efficiently.
-
----
-
-## 🛠 Quick Setup for Testers (Non-Technical Users)
-
-Follow these simple steps to get the ClickUp MCP Server running on your device (even if you're not a developer):
-
-### 1. Prerequisites
-
-- **Python 3.11.9+**: Ensure Python is installed. [Download Python](https://www.python.org/downloads/)
-- **Pip**: Comes with Python installation.
-- **Virtual Environment**: Recommended for dependency isolation.
-
-### 2. Clone the Repository
-
-```bash
-# Clone the repository
-$ git clone https://github.com/Arya004pro/clickup-python-polling.git
-$ cd clickup-python-polling
-```
-
-### 3. Set Up Virtual Environment
-
-```bash
-# Create and activate a virtual environment
-$ python -m venv myenv
-$ source myenv/Scripts/activate  # On Windows
-$ source myenv/bin/activate      # On macOS/Linux
-```
-
-### 4. Install Dependencies
-
-```bash
-# Install required Python packages
-$ pip install -r requirements.txt
-```
-
-### 5. Configure Environment Variables
-
-- Create a `.env` file in the root directory.
-- Add the following **REQUIRED** variables:
-
-  ```env
-  # Required
-  CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
-  DATABASE_URL=postgresql://user:pass@host:6543/postgres
-
-  # AI Provider (get FREE key from https://cloud.cerebras.ai/)
-  LLM_PROVIDER=cerebras
-  CEREBRAS_API_KEY=csk_YOUR_KEY_HERE
-
-  # Server URL (default)
-  MCP_SERVER_URL=http://127.0.0.1:8001/sse
-  ```
-
-### 6. Run the MCP Server (Keep This Terminal Open!)
-
-```bash
-# Start the MCP server
-$ python app/mcp/mcp_server.py
-```
-
-You should see:
-
-```
-Starting ClickUp MCP Server...
-INFO:     Uvicorn running on http://0.0.0.0:8001
-```
-
-**⚠️ Important:** Do NOT close this terminal. It must stay running!
-
-### 7. Test the SLM Client (Open NEW Terminal)
-
-**Open a NEW terminal window** (keep step 6 terminal running in background):
-
-```bash
-# Activate virtual environment in NEW terminal
-$ source myenv/Scripts/activate  # On Windows
-$ source myenv/bin/activate      # On macOS/Linux
-
-# Run the SLM client
-$ python slm_client.py
-```
-
-### 8. Verify Setup
-
-- Open the terminal and ensure the server and client are running without errors.
-- Test basic commands like listing spaces or fetching tasks.
-
----
-
-For troubleshooting, refer to the [Troubleshooting](#-troubleshooting) section.
+</details>
