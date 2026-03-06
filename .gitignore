@@ -4,3 +4,6 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+project_map.json
+monitoring_config.json
+.jobs_cache.json

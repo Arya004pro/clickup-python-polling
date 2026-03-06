@@ -1,0 +1,13 @@
+{
+  "monitored_projects": [
+    {
+      "alias": "Example Alias",
+      "clickup_id": "123456789",
+      "type": "folder",
+      "space": "Example Space",
+      "list_ids": [
+        "123456789000"
+      ]
+    }
+  ]
+}

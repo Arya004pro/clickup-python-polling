@@ -36,7 +36,7 @@ import os as _os
 
 from fastmcp import FastMCP
 
-from app.config import BASE_URL
+from clickup_mcp.config import BASE_URL
 from .api_client import client as _client
 from .status_helpers import (
     date_range_to_timestamps,

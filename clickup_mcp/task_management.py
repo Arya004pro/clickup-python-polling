@@ -9,7 +9,7 @@ import requests
 import re
 import time
 from typing import List, Dict
-from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.config import CLICKUP_API_TOKEN, BASE_URL, CLICKUP_TEAM_ID
 from .api_client import client as _client
 from .clickup_shared import (
     safe_get as _safe_get,
@@ -18,11 +18,6 @@ from .clickup_shared import (
     calculate_task_metrics as _calculate_task_metrics,
     fetch_missing_parents as _fetch_missing_parents,
 )
-
-try:
-    from app.config import CLICKUP_TEAM_ID
-except ImportError:
-    CLICKUP_TEAM_ID = None
 
 SPACE_NAME_CACHE = {}
 

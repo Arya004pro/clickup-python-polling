@@ -11,12 +11,12 @@ import os
 import time
 import re
 import threading
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import requests
 from fastmcp import FastMCP
 from apscheduler.schedulers.background import BackgroundScheduler
 from zoneinfo import ZoneInfo
-from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.config import CLICKUP_API_TOKEN, BASE_URL
 from clickup_mcp.api_client import client as _client
 
 # --- Constants & Configuration ---
@@ -27,6 +27,7 @@ MONITORING_CONFIG_FILE = os.path.join(
     os.path.dirname(__file__), "..", "monitoring_config.json"
 )
 DEFAULT_MAINTENANCE_TIMEZONE = "Asia/Kolkata"
+DEFAULT_MAINTENANCE_RUN_TIMES = [(h, 0) for h in range(9, 22, 2)]  # 09:00..21:00
 
 # --- Persistence Layer ---
 
@@ -335,11 +336,9 @@ def run_mapping_maintenance_once() -> dict:
         _maintenance_running = False
 
 
-from typing import List, Tuple
-
 def start_mapping_maintenance_scheduler(
     timezone: str = DEFAULT_MAINTENANCE_TIMEZONE,
-    run_times: List[Tuple[int, int]] = [(13, 0), (18, 0)],
+    run_times: Optional[List[Tuple[int, int]]] = None,
     run_on_startup: bool = False,
 ) -> bool:
     """
@@ -348,6 +347,9 @@ def start_mapping_maintenance_scheduler(
     global _maintenance_scheduler
     if _maintenance_scheduler and _maintenance_scheduler.running:
         return False
+
+    if run_times is None:
+        run_times = DEFAULT_MAINTENANCE_RUN_TIMES
 
     tz = ZoneInfo(timezone)
     _maintenance_scheduler = BackgroundScheduler(timezone=tz)

@@ -7,7 +7,7 @@ Implements robust bottom-up time calculations and unified status mapping.
 import requests
 import time
 from fastmcp import FastMCP
-from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.config import CLICKUP_API_TOKEN, BASE_URL
 from clickup_mcp.api_client import client as _client
 from clickup_mcp.project_configuration import TRACKED_PROJECTS
 from clickup_mcp.clickup_shared import (

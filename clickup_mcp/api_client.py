@@ -21,12 +21,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from app.config import CLICKUP_API_TOKEN, BASE_URL
-
-try:
-    from app.config import CLICKUP_TEAM_ID
-except ImportError:
-    CLICKUP_TEAM_ID = None
+from clickup_mcp.config import CLICKUP_API_TOKEN, BASE_URL, CLICKUP_TEAM_ID
 
 
 # ============================================================================
