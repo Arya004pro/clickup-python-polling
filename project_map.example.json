@@ -1,0 +1,17 @@
+{
+  "mapped_projects": {
+    "Example_Project": {
+      "alias": "Example_Project",
+      "clickup_id": "123456789",
+      "clickup_type": "space",
+      "last_sync": 0,
+      "structure": {
+        "id": "123456789",
+        "type": "space",
+        "name": "Example Space",
+        "children": []
+      }
+    }
+  },
+  "discovery_cache": {}
+}
