@@ -1,21 +1,33 @@
 #!/usr/bin/env python
 """
-ClickUp MCP - Z.AI AI Client Entry Point
+ClickUp MCP - AI Client Entry Point
 
-Interactive terminal client for querying ClickUp via MCP + Z.AI LLM.
+Interactive terminal client for querying ClickUp via MCP + LLM provider.
 Run with: python -m clickup_mcp.client
 """
 
+import os
 import sys
 
-# Import the actual client logic from zai_client.py
-# This allows running via: python -m clickup_mcp.client
+
+def _resolve_client_main():
+    provider = os.getenv("AI_CLIENT_PROVIDER", "zai").strip().lower()
+    if provider == "openrouter":
+        from openrouter_client import main
+
+        return main
+    if provider == "zai":
+        from zai_client import main
+
+        return main
+    raise RuntimeError(
+        f"Unsupported AI_CLIENT_PROVIDER='{provider}'. Use 'zai' or 'openrouter'."
+    )
+
+
 if __name__ == "__main__":
-    # Import here to ensure package is initialized
     import asyncio
+
     sys.path.insert(0, "/app")
-    
-    # Import the main function from zai_client
-    from zai_client import main
-    
+    main = _resolve_client_main()
     asyncio.run(main())

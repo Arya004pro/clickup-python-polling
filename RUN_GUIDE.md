@@ -10,15 +10,27 @@ This guide covers running the Docker stack, using the web dashboard/API, and loc
 - `project_map.json` present in project root for mapped-project resolution/sync
 - Required values in `.env`:
   - `CLICKUP_API_TOKEN`
-  - `ZAI_API_KEY`
+  - `OPENROUTER_API_KEY` (for OpenRouter testing)
 
 Example `.env` values (placeholders only):
 
 ```bash
 CLICKUP_API_TOKEN=pk_your_clickup_token
-ZAI_API_KEY=your_zai_api_key
+AI_CLIENT_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 MCP_SERVER_URL=http://mcp-server:8001/sse
 REPORTS_DIR=/app/reports
+```
+
+Optional OpenRouter headers:
+
+```bash
+OPENROUTER_HTTP_REFERER=https://your-app-url.example
+OPENROUTER_APP_TITLE=ClickUp MCP
+OPENROUTER_ENABLE_ZAI_FALLBACK=true
+OPENROUTER_ZAI_FALLBACK_MODELS=glm-4.7-flash,glm-4.5-flash
 ```
 
 ## Start the stack

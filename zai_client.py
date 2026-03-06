@@ -67,7 +67,7 @@ MODEL_CHAIN = [
     "glm-4.5-flash",
 ]
 
-RATE_LIMIT_CODES = {429, 503}
+RATE_LIMIT_CODES = {402, 429, 503}
 MAX_POLL_RETRIES = 5
 
 # ── SMART POLLING ────────────────────────────────────────────────────────────
@@ -174,7 +174,19 @@ def is_rate_limit(exc):
     if isinstance(exc, APIStatusError) and exc.status_code in RATE_LIMIT_CODES:
         return True
     msg = str(exc).lower()
-    return any(k in msg for k in ("rate limit", "quota", "too many", "exhausted", "1113"))
+    return any(
+        k in msg
+        for k in (
+            "rate limit",
+            "quota",
+            "too many",
+            "exhausted",
+            "insufficient",
+            "credit",
+            "payment required",
+            "1113",
+        )
+    )
 
 
 def find_in_json(obj, key):

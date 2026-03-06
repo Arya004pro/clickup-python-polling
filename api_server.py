@@ -26,9 +26,26 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-# Import the AI client
+# Import the AI client provider dynamically
 sys.path.insert(0, "/app")
-from zai_client import ZaiMCPClient
+
+
+def _resolve_client_class():
+    provider = os.getenv("AI_CLIENT_PROVIDER", "zai").strip().lower()
+    if provider == "openrouter":
+        from openrouter_client import OpenRouterMCPClient
+
+        return provider, OpenRouterMCPClient
+    if provider == "zai":
+        from zai_client import ZaiMCPClient
+
+        return provider, ZaiMCPClient
+    raise RuntimeError(
+        f"Unsupported AI_CLIENT_PROVIDER='{provider}'. Use 'zai' or 'openrouter'."
+    )
+
+
+AI_CLIENT_PROVIDER, AI_CLIENT_CLASS = _resolve_client_class()
 
 
 class _SuppressStatusAccessLog(logging.Filter):
@@ -73,7 +90,7 @@ class QueryResponse(BaseModel):
 
 app = FastAPI(
     title="ClickUp MCP REST API",
-    description="Query ClickUp via MCP + Z.AI",
+    description="Query ClickUp via MCP + AI provider",
     version="1.1.0",
 )
 
@@ -126,7 +143,7 @@ async def startup_event():
     for attempt in range(max_retries):
         try:
             print(f"[Attempt {attempt + 1}/{max_retries}] Initializing AI client...")
-            client = ZaiMCPClient()
+            client = AI_CLIENT_CLASS()
             await client.connect_mcp()
             client_ready = True
             print("API client initialized and ready.")
@@ -869,7 +886,7 @@ async def query_ai(req: QueryRequest):
 
     if not client_ready and client is None:
         try:
-            client = ZaiMCPClient()
+            client = AI_CLIENT_CLASS()
             await client.connect_mcp()
             client_ready = True
         except Exception as exc:
@@ -930,6 +947,11 @@ async def status():
         "mcp_connected": client is not None and client.mcp_session is not None,
         "active_model": client.active_model if client else None,
         "tools_loaded": len(client.openai_tools) if client else 0,
+        "ai_provider": (
+            getattr(client, "active_provider", AI_CLIENT_PROVIDER)
+            if client
+            else AI_CLIENT_PROVIDER
+        ),
         "reports_dir": str(REPORTS_DIR),
     }
 
