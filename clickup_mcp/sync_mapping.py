@@ -16,7 +16,7 @@ import requests
 from fastmcp import FastMCP
 from apscheduler.schedulers.background import BackgroundScheduler
 from zoneinfo import ZoneInfo
-from app.config import CLICKUP_API_TOKEN, BASE_URL
+from clickup_mcp.config import CLICKUP_API_TOKEN, BASE_URL
 from clickup_mcp.api_client import client as _client
 
 # --- Constants & Configuration ---

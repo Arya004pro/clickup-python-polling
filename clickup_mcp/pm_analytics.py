@@ -17,7 +17,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
-from app.config import BASE_URL
+from clickup_mcp.config import BASE_URL
 from .status_helpers import (
     get_current_week_dates,
     date_range_to_timestamps,
