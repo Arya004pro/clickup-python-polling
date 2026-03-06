@@ -1,0 +1,88 @@
+#!/usr/bin/env python
+"""
+ClickUp MCP Server Entry Point
+
+Starts the FastMCP HTTP server with SSE transport on port 8001.
+Run with: python -m clickup_mcp.server
+"""
+
+import time
+from pathlib import Path
+import uvicorn
+
+from fastmcp import FastMCP
+from clickup_mcp.workspace_structure import register_workspace_tools
+from clickup_mcp.task_management import register_task_tools
+from clickup_mcp.pm_analytics import register_pm_analytics_tools
+from clickup_mcp.project_configuration import register_project_configuration_tools
+from clickup_mcp.project_intelligence import register_project_intelligence_tools
+from clickup_mcp.sync_mapping import (
+    register_sync_mapping_tools,
+    start_mapping_maintenance_scheduler,
+)
+from clickup_mcp.task_reports import register_task_report_tools
+
+
+MONITORING_CONFIG_PATH = Path("/app/monitoring_config.json")
+PROJECT_MAP_PATH = Path("/app/project_map.json")
+
+
+def _print_runtime_config_status() -> None:
+    missing = []
+    if not MONITORING_CONFIG_PATH.is_file():
+        missing.append(str(MONITORING_CONFIG_PATH))
+    if not PROJECT_MAP_PATH.is_file():
+        missing.append(str(PROJECT_MAP_PATH))
+
+    if not missing:
+        print("Runtime config OK: monitoring_config.json and project_map.json found.")
+        return
+
+    print("WARNING: Missing runtime config files:")
+    for path in missing:
+        print(f"  - {path}")
+    print(
+        "Monitored-scope reports may fall back to broad space data without these files."
+    )
+
+
+def create_mcp_app():
+    """Initialize and configure the MCP server."""
+    mcp = FastMCP(
+        name="ClickUp Sync MCP Server",
+        instructions="Access and manage ClickUp data synced to Supabase. Tools use real-time ClickUp API + cached Supabase queries.",
+    )
+
+    # Register tools from different categories
+    register_workspace_tools(mcp)
+    register_task_tools(mcp)
+    register_pm_analytics_tools(mcp)
+    register_project_configuration_tools(mcp)
+    register_project_intelligence_tools(mcp)
+    register_sync_mapping_tools(mcp)
+    register_task_report_tools(mcp)
+    start_mapping_maintenance_scheduler()
+
+    return mcp.http_app(transport="sse")
+
+
+def main():
+    """Start the MCP server."""
+    print("Starting ClickUp MCP Server in 2s to allow initialization...")
+    time.sleep(2)
+    _print_runtime_config_status()
+
+    app = create_mcp_app()
+
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=8001,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    server.run()
+
+
+if __name__ == "__main__":
+    main()

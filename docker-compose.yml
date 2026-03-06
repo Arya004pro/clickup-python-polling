@@ -1,0 +1,143 @@
+services:
+  # MCP Server with auto-restart on code changes
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clickup-mcp-server
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+      - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-}
+      - REPORTS_DIR=/app/reports
+    volumes:
+      - ./clickup_mcp:/app/clickup_mcp
+      - ./app:/app/app
+      - ./monitoring_config.json:/app/monitoring_config.json
+      - ./project_map.json:/app/project_map.json
+      - reports:/app/reports
+    develop:
+      watch:
+        - path: ./clickup_mcp
+          action: rebuild
+        - path: ./app
+          action: rebuild
+        - path: ./monitoring_config.json
+          action: rebuild
+        - path: ./project_map.json
+          action: rebuild
+        - path: ./requirements.txt
+          action: rebuild
+        - path: ./Dockerfile
+          action: rebuild
+    networks:
+      - clickup-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/sse"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # API Server - REST endpoint for browser queries
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clickup-api-server
+    ports:
+      - "8003:8003"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
+      - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      - REPORTS_DIR=/app/reports
+    volumes:
+      - ./api_server.py:/app/api_server.py
+      - ./zai_client.py:/app/zai_client.py
+      - ./zai_system_prompt.md:/app/zai_system_prompt.md
+      - ./lm_studio_system_prompt.md:/app/lm_studio_system_prompt.md
+      - ./clickup_mcp:/app/clickup_mcp
+      - ./app:/app/app
+      - reports:/app/reports
+    networks:
+      - clickup-net
+    depends_on:
+      mcp-server:
+        condition: service_started
+    command: python api_server.py
+    develop:
+      watch:
+        - path: ./api_server.py
+          action: rebuild
+        - path: ./zai_client.py
+          action: rebuild
+        - path: ./zai_system_prompt.md
+          action: rebuild
+        - path: ./lm_studio_system_prompt.md
+          action: rebuild
+        - path: ./requirements.txt
+          action: rebuild
+        - path: ./Dockerfile
+          action: rebuild
+
+  # AI Client (Z.AI / future OpenRouter) - runs interactively
+  ai-client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clickup-ai-client
+    stdin_open: true
+    tty: true
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
+      - ZAI_API_KEY=${ZAI_API_KEY}
+      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - REPORTS_DIR=/app/reports
+    volumes:
+      - ./zai_client.py:/app/zai_client.py
+      - ./clickup_mcp:/app/clickup_mcp
+      - ./app:/app/app
+      - reports:/app/reports
+    networks:
+      - clickup-net
+    depends_on:
+      mcp-server:
+        condition: service_started
+    command: sh -c "sleep 5 && python -m clickup_mcp.client"
+    develop:
+      watch:
+        - path: ./zai_client.py
+          action: rebuild
+        - path: ./zai_system_prompt.md
+          action: rebuild
+        - path: ./lm_studio_system_prompt.md
+          action: rebuild
+        - path: ./clickup_mcp
+          action: rebuild
+        - path: ./requirements.txt
+          action: rebuild
+        - path: ./Dockerfile
+          action: rebuild
+
+volumes:
+  reports:
+    driver: local
+
+networks:
+  clickup-net:
+    driver: bridge

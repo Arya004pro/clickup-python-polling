@@ -13,6 +13,7 @@ Free Z.AI models:
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -193,10 +194,61 @@ def find_in_json(obj, key):
     return None
 
 
-def save_report(content: str, stats: SessionStats) -> str:
+def _slugify(text: str, fallback: str = "na", max_len: int = 40) -> str:
+    value = (text or "").strip().lower()
+    value = value.replace("→", " to ")
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    if not value:
+        value = fallback
+    return value[:max_len].strip("-") or fallback
+
+
+def _extract_report_name_parts(content: str, query_text: str = "") -> tuple[str, str, str]:
+    kind = "generic"
+    entity = _slugify(query_text, fallback="query", max_len=44)
+    period = "period-na"
+
+    header_match = re.search(
+        r"^\s*##\s*([^:\n]+?)\s*:\s*(.+?)\s*$", content or "", flags=re.MULTILINE
+    )
+    if header_match:
+        title = header_match.group(1).strip().lower()
+        entity = _slugify(header_match.group(2), fallback="entity", max_len=44)
+        if "space report" in title:
+            kind = "space"
+        elif "project report" in title:
+            kind = "project"
+        elif "member report" in title:
+            kind = "member"
+        elif "low hours report" in title:
+            kind = "low-hours"
+        elif "missing estimation report" in title:
+            kind = "missing-estimation"
+        elif "overtracked report" in title:
+            kind = "overtracked"
+        else:
+            kind = _slugify(title, fallback="report", max_len=24)
+
+    period_match = re.search(
+        r"^\s*\*\*Period:\*\*\s*(.+?)\s*$", content or "", flags=re.MULTILINE
+    )
+    if period_match:
+        period = _slugify(period_match.group(1), fallback="period-na", max_len=36)
+
+    return kind, entity, period
+
+
+def save_report(content: str, stats: SessionStats, query_text: str = "") -> str:
     REPORTS_DIR.mkdir(exist_ok=True)
-    timestamp   = time.strftime("%Y-%m-%d_%H-%M-%S")
-    report_file = REPORTS_DIR / f"report_{timestamp}.md"
+    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    kind, entity, period = _extract_report_name_parts(content, query_text=query_text)
+    base_name = f"report_{kind}_{entity}_{period}_{timestamp}"
+    report_file = REPORTS_DIR / f"{base_name}.md"
+    suffix = 1
+    while report_file.exists():
+        report_file = REPORTS_DIR / f"{base_name}_{suffix}.md"
+        suffix += 1
     report_file.write_text(content, encoding="utf-8")
     stats.reports_saved += 1
     return str(report_file)
@@ -306,7 +358,7 @@ class ZaiMCPClient:
 
     # ── SMART POLL ────────────────────────────────────────────────────────────
 
-    async def smart_poll_job(self, job_id: str, messages: list):
+    async def smart_poll_job(self, job_id: str, messages: list, query_text: str = ""):
         """
         Two-phase smart polling:
 
@@ -392,7 +444,7 @@ class ZaiMCPClient:
             fo     = find_in_json(parsed, "formatted_output")
 
             if fo:
-                path = save_report(fo, self.stats)
+                path = save_report(fo, self.stats, query_text=query_text)
                 total_wait = int(time.time() - started_at)
                 print(f"  {col(GREEN,'OK')} Report ready in {total_wait}s! "
                       f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n")
@@ -400,7 +452,7 @@ class ZaiMCPClient:
 
         except json.JSONDecodeError:
             if len(raw_result) > 200:
-                path = save_report(raw_result, self.stats)
+                path = save_report(raw_result, self.stats, query_text=query_text)
                 print(f"  {col(GREEN,'OK')} Result received. "
                       f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n")
                 return raw_result
@@ -476,7 +528,9 @@ class ZaiMCPClient:
                         ),
                     })
 
-                    formatted = await self.smart_poll_job(job_id, messages)
+                    formatted = await self.smart_poll_job(
+                        job_id, messages, query_text=user_message
+                    )
                     if formatted:
                         self.conversation.append({"role": "assistant", "content": formatted})
                         return formatted

@@ -116,8 +116,9 @@ def _resolve_space_lists(space_id: str) -> Dict[str, Dict]:
 # ---------------------------------------------------------------------------
 
 
-_MONITORING_CONFIG_PATH = _os.path.join(
-    _os.path.dirname(__file__), "..", "monitoring_config.json"
+_MONITORING_CONFIG_PATH = _os.getenv(
+    "MONITORING_CONFIG_PATH",
+    _os.path.join(_os.path.dirname(__file__), "..", "monitoring_config.json"),
 )
 
 
@@ -150,16 +151,24 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
     Returns a list of list IDs if found, or None to fall through to normal
     ClickUp API resolution.
     """
-    try:
-        with open(_MONITORING_CONFIG_PATH, "r") as _f:
-            _cfg = _json.load(_f)
-    except FileNotFoundError:
-        return None
-
-    _projects = _cfg.get("monitored_projects", [])
     _name = project_name.strip()
     _name_lower = _name.lower()
     _is_monitored_scope, _monitored_target = _split_monitored_scope(_name)
+
+    try:
+        with open(_MONITORING_CONFIG_PATH, "r", encoding="utf-8") as _f:
+            _cfg = _json.load(_f)
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+        # Explicit monitored scopes should not silently broaden to full-space data.
+        if _name_lower == "monitored" or (_is_monitored_scope and _monitored_target):
+            return []
+        return None
+    except _json.JSONDecodeError:
+        if _name_lower == "monitored" or (_is_monitored_scope and _monitored_target):
+            return []
+        return None
+
+    _projects = _cfg.get("monitored_projects", [])
 
     def _collect_project_list_ids(_p: Dict[str, Any]) -> List[str]:
         _ids: List[str] = [str(_id) for _id in (_p.get("list_ids") or []) if _id]
@@ -241,6 +250,17 @@ def _resolve_space_project_map_for_reports(
                 "For monitored scope, provide a space name like 'Monitored AIX'.",
             )
         resolved_space_name = monitored_target
+
+        if not _os.path.isfile(_MONITORING_CONFIG_PATH):
+            return (
+                None,
+                resolved_space_name,
+                True,
+                (
+                    "Monitored scope requested but monitoring_config.json is missing "
+                    f"at '{_MONITORING_CONFIG_PATH}'."
+                ),
+            )
 
     sid = _resolve_space_id(resolved_space_name)
     if not sid:
