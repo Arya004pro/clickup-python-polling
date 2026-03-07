@@ -353,7 +353,7 @@ def start_mapping_maintenance_scheduler(
 
     tz = ZoneInfo(timezone)
     _maintenance_scheduler = BackgroundScheduler(timezone=tz)
-    
+
     for idx, (hour, minute) in enumerate(run_times):
         _maintenance_scheduler.add_job(
             run_mapping_maintenance_once,
@@ -483,6 +483,75 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
                         "found_at": "folderless_list",
                     }
     return None
+
+
+def _resolve_monitored_scope_entity(entity_name: str) -> Optional[dict]:
+    """
+    Resolve synthetic monitored scopes used by report tools.
+
+    Supported expressions:
+      - "monitored"            -> aggregate monitored project scope
+      - "Monitored AIX"        -> monitored subset within space AIX
+      - "monitored:AIX"        -> same as above
+    """
+    raw = (entity_name or "").strip()
+    if not raw:
+        return None
+
+    lower = raw.lower()
+    if lower == "monitored":
+        try:
+            with open(MONITORING_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            projects = cfg.get("monitored_projects", [])
+            if not projects:
+                return None
+        except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
+            return None
+
+        return {
+            "id": "monitoring_scope:monitored",
+            "name": "monitored",
+            "type": "project",
+            "source": "monitoring_config",
+            "found_at": "monitoring_scope",
+            "monitoring_scope": True,
+        }
+
+    target = ""
+    if lower.startswith("monitored "):
+        target = raw[len("monitored ") :].strip()
+    elif lower.startswith("monitored:"):
+        target = raw.split(":", 1)[1].strip()
+    else:
+        return None
+
+    if not target:
+        return None
+
+    target_lower = target.lower()
+    try:
+        with open(MONITORING_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        projects = cfg.get("monitored_projects", [])
+    except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
+        return None
+
+    matching = [
+        p for p in projects if str(p.get("space", "")).strip().lower() == target_lower
+    ]
+    if not matching:
+        return None
+
+    resolved_space = str(matching[0].get("space", target)).strip() or target
+    return {
+        "id": f"monitoring_scope:space:{resolved_space}",
+        "name": f"Monitored {resolved_space}",
+        "type": "space",
+        "source": "monitoring_config",
+        "found_at": "monitoring_scope",
+        "monitoring_scope": True,
+    }
 
 
 # --- Tools Definition ---
@@ -757,7 +826,11 @@ def register_sync_mapping_tools(mcp: FastMCP):
         Works regardless of where the entity is located in the hierarchy.
         Use this BEFORE any report tool to resolve the entity type and ID.
         """
-        result = find_entity_anywhere(project_name)
+        # Handle monitored scopes early to avoid false "not found" on
+        # synthetic names like "Monitored AIX".
+        result = _resolve_monitored_scope_entity(project_name)
+        if not result:
+            result = find_entity_anywhere(project_name)
         if not result:
             return {
                 "error": f"Project '{project_name}' not found",
@@ -797,9 +870,19 @@ def register_sync_mapping_tools(mcp: FastMCP):
                     response["contains"]["note"] = (
                         f"Showing 10 of {len(children)} items"
                     )
-        response["usage_hint"] = (
-            f"Use this {result['type']} ID ({result['id']}) with report generation tools"
-        )
+        if result.get("monitoring_scope"):
+            if result.get("type") == "space":
+                response["usage_hint"] = (
+                    f"Use get_space_task_report(space_name='{result['name']}', period_type='today')"
+                )
+            else:
+                response["usage_hint"] = (
+                    "Use monitored scope with report tools (e.g., project_name='monitored')."
+                )
+        else:
+            response["usage_hint"] = (
+                f"Use this {result['type']} ID ({result['id']}) with report generation tools"
+            )
         return response
 
     @mcp.tool()
@@ -834,9 +917,10 @@ def register_sync_mapping_tools(mcp: FastMCP):
     @mcp.tool()
     def trigger_mapping_maintenance() -> dict:
         """
-        Manually trigger the mapping maintenance routine to update all mapped 
+        Manually trigger the mapping maintenance routine to update all mapped
         project structures and monitoring configs with the latest data from ClickUp.
         """
         from typing import Dict, Any
+
         result: Dict[str, Any] = run_mapping_maintenance_once()
         return result

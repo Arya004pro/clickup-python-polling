@@ -663,16 +663,8 @@ def register_task_report_tools(mcp: FastMCP):
                 user_time = filter_time_entries_by_user_and_date_range(
                     entries_map.get(task_id, []), start_ms, end_ms
                 )
-                # Include tasks completed in this period even if no time was explicitly tracked
-                if not user_time:
-                    done_date = task.get("date_closed") or task.get("date_done")
-                    if done_date and start_ms <= int(done_date) <= end_ms:
-                        assignees = task.get("assignees", [])
-                        if assignees:
-                            for a in assignees:
-                                user_time[a.get("username", "Unknown")] = 0
-                        else:
-                            user_time["Unassigned"] = 0
+                # Only include tasks with time actually tracked inside the report window.
+                # A status change (e.g. review→shipped) does NOT count as work in the period.
 
                 if not user_time:
                     continue
@@ -947,6 +939,9 @@ def register_task_report_tools(mcp: FastMCP):
         include_archived: bool = True,
         async_job: bool = True,
         job_id: Optional[str] = None,
+        space_name: Optional[
+            str
+        ] = None,  # accepted but unused; prevents model hallucination errors
     ) -> dict:
         """
         Project-Wise Task Report.
@@ -1048,6 +1043,12 @@ def register_task_report_tools(mcp: FastMCP):
             grand_tracked_ms = 0
             grand_est_ms = 0
             total_tasks_worked = 0
+            status_counts = {
+                "not_started": 0,
+                "active": 0,
+                "done": 0,
+                "cancelled": 0,
+            }
 
             overloaded_tasks_count = 0
             no_estimate_tasks_count = 0
@@ -1057,16 +1058,8 @@ def register_task_report_tools(mcp: FastMCP):
                 user_time = filter_time_entries_by_user_and_date_range(
                     entries_map.get(task_id, []), start_ms, end_ms
                 )
-                # Include tasks completed in this period even if no time was explicitly tracked
-                if not user_time:
-                    done_date = task.get("date_closed") or task.get("date_done")
-                    if done_date and start_ms <= int(done_date) <= end_ms:
-                        assignees = task.get("assignees", [])
-                        if assignees:
-                            for a in assignees:
-                                user_time[a.get("username", "Unknown")] = 0
-                        else:
-                            user_time["Unassigned"] = 0
+                # Only include tasks with time actually tracked inside the report window.
+                # A status change (e.g. review→shipped) does NOT count as work in the period.
 
                 if not user_time:
                     continue
@@ -1078,6 +1071,20 @@ def register_task_report_tools(mcp: FastMCP):
                 grand_est_ms += est
 
                 status = _extract_status_name(task)
+                status_obj = task.get("status")
+                status_type = (
+                    status_obj.get("type") if isinstance(status_obj, dict) else None
+                )
+                status_category = get_status_category(status, status_type)
+                if status_category == "not_started":
+                    status_counts["not_started"] += 1
+                elif status_category == "done":
+                    status_counts["done"] += 1
+                elif status_category == "closed":
+                    status_counts["cancelled"] += 1
+                else:
+                    status_counts["active"] += 1
+
                 task_est_str = _format_duration(est)
 
                 if est > 0 and total_ms > est:
@@ -1186,6 +1193,15 @@ def register_task_report_tools(mcp: FastMCP):
             lines.extend(
                 [
                     "",
+                    "### Status Summary",
+                    "| Not Started | Active | Done | Cancelled |",
+                    "|------------:|-------:|-----:|----------:|",
+                    f"| {status_counts['not_started']} | {status_counts['active']} | {status_counts['done']} | {status_counts['cancelled']} |",
+                ]
+            )
+            lines.extend(
+                [
+                    "",
                     "### Employee Summary",
                     "| Member | Tasks | Time Tracked | Time Estimate |",
                     "|--------|------:|-------------:|--------------:|",
@@ -1228,6 +1244,7 @@ def register_task_report_tools(mcp: FastMCP):
                 "period_type": period_type,
                 "total_members": len(formatted_team),
                 "total_tasks_worked": total_tasks_worked,
+                "status_summary": status_counts,
                 "total_time_tracked": _format_duration(grand_tracked_ms),
                 "total_time_estimate": _format_duration(grand_est_ms),
                 "formatted_output": "\n".join(lines),

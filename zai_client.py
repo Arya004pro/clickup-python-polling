@@ -189,6 +189,25 @@ def is_rate_limit(exc):
     )
 
 
+def is_mcp_connection_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in (
+            "all connection attempts failed",
+            "connection closed",
+            "connection reset",
+            "connection aborted",
+            "broken pipe",
+            "server disconnected",
+            "stream closed",
+            "transport closed",
+            "clientsession is closed",
+            "nonetype",
+        )
+    )
+
+
 def find_in_json(obj, key):
     """Recursively find a key anywhere in a nested JSON object."""
     if isinstance(obj, dict):
@@ -318,10 +337,27 @@ class ZaiMCPClient:
         print(f"  {col(GREEN,'OK')} MCP tools loaded  : {col(WHITE, str(len(self.openai_tools)))}")
 
     async def disconnect_mcp(self):
-        if self._session_cm:
-            await self._session_cm.__aexit__(None, None, None)
-        if self._sse_cm:
-            await self._sse_cm.__aexit__(None, None, None)
+        session_cm = self._session_cm
+        sse_cm = self._sse_cm
+        self._session_cm = None
+        self._sse_cm = None
+        self.mcp_session = None
+
+        try:
+            if session_cm:
+                await session_cm.__aexit__(None, None, None)
+        finally:
+            if sse_cm:
+                await sse_cm.__aexit__(None, None, None)
+
+    def _tool_result_to_text(self, result):
+        parts = []
+        for block in result.content:
+            if hasattr(block, "text"):
+                parts.append(block.text)
+            elif hasattr(block, "data"):
+                parts.append(str(block.data))
+        return "\n".join(parts) if parts else json.dumps({"status": "done"})
 
     # ── TOOL CALL ─────────────────────────────────────────────────────────────
 
@@ -329,14 +365,27 @@ class ZaiMCPClient:
         self.stats.record_tool()
         try:
             result = await self.mcp_session.call_tool(name, args)
-            parts  = []
-            for block in result.content:
-                if hasattr(block, "text"):
-                    parts.append(block.text)
-                elif hasattr(block, "data"):
-                    parts.append(str(block.data))
-            return "\n".join(parts) if parts else json.dumps({"status": "done"})
+            return self._tool_result_to_text(result)
         except Exception as exc:
+            if is_mcp_connection_error(exc):
+                print(f"  {col(YELLOW,'!!')} MCP disconnected. Reconnecting...")
+                reconnect_attempts = 3
+                for attempt in range(reconnect_attempts):
+                    try:
+                        await self.disconnect_mcp()
+                    except Exception:
+                        pass
+                    try:
+                        await self.connect_mcp()
+                        result = await self.mcp_session.call_tool(name, args)
+                        return self._tool_result_to_text(result)
+                    except Exception as reconnect_exc:
+                        if attempt < reconnect_attempts - 1:
+                            await asyncio.sleep(attempt + 1)
+                            continue
+                        return json.dumps(
+                            {"error": f"MCP reconnect failed: {str(reconnect_exc)}"}
+                        )
             return json.dumps({"error": str(exc)})
 
     # ── LLM CALL ─────────────────────────────────────────────────────────────

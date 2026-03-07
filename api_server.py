@@ -96,6 +96,7 @@ app = FastAPI(
 
 client = None
 client_ready = False
+client_connect_lock = asyncio.Lock()
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", r"D:\reports"))
 
 
@@ -133,38 +134,57 @@ def _latest_report_path() -> Optional[Path]:
     return REPORTS_DIR / reports[0]["name"]
 
 
+async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
+    """Ensure the AI client has a live MCP connection."""
+    global client, client_ready
+
+    async with client_connect_lock:
+        try:
+            if client is None or not reuse_existing:
+                client = AI_CLIENT_CLASS()
+            else:
+                try:
+                    await client.disconnect_mcp()
+                except Exception:
+                    pass
+
+            await client.connect_mcp()
+            client_ready = True
+            return True, ""
+        except Exception as exc:
+            client_ready = False
+            return False, str(exc)[:160]
+
+
 @app.on_event("startup")
 async def startup_event():
-    global client, client_ready
     _ensure_reports_dir()
 
     max_retries = 5
     retry_delay = 2
     for attempt in range(max_retries):
-        try:
-            print(f"[Attempt {attempt + 1}/{max_retries}] Initializing AI client...")
-            client = AI_CLIENT_CLASS()
-            await client.connect_mcp()
-            client_ready = True
+        print(f"[Attempt {attempt + 1}/{max_retries}] Initializing AI client...")
+        ok, err = await _connect_client(reuse_existing=False)
+        if ok:
             print("API client initialized and ready.")
             return
-        except Exception as exc:
-            print(f"Attempt {attempt + 1} failed: {str(exc)[:120]}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-            else:
-                client_ready = False
-                print("Initial retries exhausted. Client will retry on first query.")
+        print(f"Attempt {attempt + 1} failed: {err}")
+        if attempt < max_retries - 1:
+            await asyncio.sleep(retry_delay)
+        else:
+            print("Initial retries exhausted. Client will retry on first query.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global client
+    global client, client_ready
     if client:
         try:
             await client.disconnect_mcp()
         except Exception:
             pass
+    client_ready = False
+    client = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -514,9 +534,7 @@ async def dashboard():
         <ul>
           <li>Show me all workspaces and teams</li>
           <li>Generate time tracking report for last week</li>
-          <li>Find all overdue tasks in my team</li>
-          <li>What's the productivity this month?</li>
-          <li>List all active projects</li>
+          <li>Can you provide this month's space task report for XYZ</li>
         </ul>
       </div>
 
@@ -884,19 +902,19 @@ async def dashboard():
 async def query_ai(req: QueryRequest):
     global client, client_ready
 
-    if not client_ready and client is None:
-        try:
-            client = AI_CLIENT_CLASS()
-            await client.connect_mcp()
-            client_ready = True
-        except Exception as exc:
+    if client is None or getattr(client, "mcp_session", None) is None:
+        client_ready = False
+
+    if not client_ready:
+        ok, err = await _connect_client(reuse_existing=True)
+        if not ok:
             return QueryResponse(
                 status="error",
                 question=req.question,
-                error=f"Client still initializing. Retry shortly. Details: {str(exc)[:120]}",
+                error=f"Client still initializing. Retry shortly. Details: {err}",
             )
 
-    if not client_ready or client is None:
+    if client is None:
         return QueryResponse(
             status="error",
             question=req.question,
@@ -932,6 +950,7 @@ async def query_ai(req: QueryRequest):
             report_download_url=report_url,
         )
     except Exception as exc:
+        client_ready = False
         return QueryResponse(
             status="error",
             question=req.question,

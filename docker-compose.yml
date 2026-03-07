@@ -5,6 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: clickup-mcp-server
+    restart: unless-stopped
     ports:
       - "8001:8001"
     environment:
@@ -41,7 +42,7 @@ services:
     networks:
       - clickup-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/sse"]
+      test: ["CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8001/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -53,6 +54,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: clickup-api-server
+    restart: unless-stopped
     ports:
       - "8003:8003"
     environment:
@@ -86,7 +88,7 @@ services:
       - clickup-net
     depends_on:
       mcp-server:
-        condition: service_started
+        condition: service_healthy
     command: python api_server.py
     develop:
       watch:
@@ -113,6 +115,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: clickup-ai-client
+    restart: unless-stopped
     stdin_open: true
     tty: true
     environment:
@@ -134,6 +137,7 @@ services:
     volumes:
       - ./zai_client.py:/app/zai_client.py
       - ./openrouter_client.py:/app/openrouter_client.py
+      - ./zai_system_prompt.md:/app/zai_system_prompt.md
       - ./openrouter_system_prompt.md:/app/openrouter_system_prompt.md
       - ./clickup_mcp:/app/clickup_mcp
       - ./app:/app/app
@@ -142,7 +146,7 @@ services:
       - clickup-net
     depends_on:
       mcp-server:
-        condition: service_started
+        condition: service_healthy
     command: sh -c "sleep 5 && python -m clickup_mcp.client"
     develop:
       watch:
