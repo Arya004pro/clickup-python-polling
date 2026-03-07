@@ -826,7 +826,7 @@ def register_task_report_tools(mcp: FastMCP):
                 f"## Space Report: {display_space_name}",
                 f"**Period:** {start_date} → {end_date}",
                 f"**Total Tracked:** {_format_duration(grand_tracked)}  |  "
-                f"**Total Estimated:** {_format_duration(grand_est)}",
+                f"**Total Estimate (Task-level):** {_format_duration(grand_est)}",
                 "",
                 "### AI Summary",
             ]
@@ -867,7 +867,9 @@ def register_task_report_tools(mcp: FastMCP):
             lines.append("")
 
             lines.append("### Employee Summary")
-            lines.append("| Member | Tasks | Time Tracked | Time Estimate |")
+            lines.append(
+                "| Member | Tasks | Time Tracked (Period) | Time Estimate (Task-level) |"
+            )
             lines.append("|--------|------:|-------------:|--------------:|")
             for row in employee_summary_table:
                 lines.append(
@@ -880,7 +882,7 @@ def register_task_report_tools(mcp: FastMCP):
                 lines.append(
                     f"Tasks worked on: **{fp['tasks_worked_on']}**  |  "
                     f"Tracked: **{fp['time_tracked']}**  |  "
-                    f"Estimated: **{fp['time_estimate']}**"
+                    f"Estimate (Task-level): **{fp['time_estimate']}**"
                 )
                 if fp["team_breakdown"]:
                     for mb, d in sorted(fp["team_breakdown"].items()):
@@ -888,10 +890,12 @@ def register_task_report_tools(mcp: FastMCP):
                         lines.append(
                             f"**{mb}** — {d['tasks']} task(s)  |  "
                             f"Tracked: {d['time_tracked']}  |  "
-                            f"Estimated: {d['time_estimate']}"
+                            f"Estimate (Task-level): {d['time_estimate']}"
                         )
                         lines.append("")
-                        lines.append("| Task | Status | Tracked | Estimated |")
+                        lines.append(
+                            "| Task | Status | Tracked (Period) | Estimate (Task-level) |"
+                        )
                         lines.append("|------|--------|--------:|----------:|")
                         for t in d["task_list"]:
                             lines.append(
@@ -1185,7 +1189,7 @@ def register_task_report_tools(mcp: FastMCP):
                 f"**Period:** {start_date} → {end_date}",
                 f"**Tasks worked on:** {total_tasks_worked}  |  "
                 f"**Time Tracked:** {_format_duration(grand_tracked_ms)}  |  "
-                f"**Estimated:** {_format_duration(grand_est_ms)}",
+                f"**Estimate (Task-level):** {_format_duration(grand_est_ms)}",
                 "",
                 "### AI Summary",
             ]
@@ -1203,7 +1207,7 @@ def register_task_report_tools(mcp: FastMCP):
                 [
                     "",
                     "### Employee Summary",
-                    "| Member | Tasks | Time Tracked | Time Estimate |",
+                    "| Member | Tasks | Time Tracked (Period) | Time Estimate (Task-level) |",
                     "|--------|------:|-------------:|--------------:|",
                 ]
             )
@@ -1226,10 +1230,12 @@ def register_task_report_tools(mcp: FastMCP):
                 lines.append(
                     f"**{mb}** — {d['tasks_count']} task(s)  |  "
                     f"Tracked: {d['time_tracked']}  |  "
-                    f"Estimated: {d['time_estimate']}"
+                    f"Estimate (Task-level): {d['time_estimate']}"
                 )
                 lines.append("")
-                lines.append("| Task | Status | Tracked | Estimated |")
+                lines.append(
+                    "| Task | Status | Tracked (Period) | Estimate (Task-level) |"
+                )
                 lines.append("|------|--------|--------:|----------:|")
                 for t in d["tasks"]:
                     lines.append(
@@ -1420,10 +1426,10 @@ def register_task_report_tools(mcp: FastMCP):
                 f"## Member Report: {member_name}",
                 f"**Scope:** {scope}  |  **Period:** {start_date} → {end_date}",
                 f"**Time Tracked:** {_format_duration(total_ms)}  |  "
-                f"**Estimated:** {_format_duration(total_est_ms)}  |  "
+                f"**Estimate (Task-level):** {_format_duration(total_est_ms)}  |  "
                 f"**Tasks:** {len(task_list)}  |  **Days active:** {len(days_active)}",
                 "",
-                "| Task | Status | Tracked | Estimated |",
+                "| Task | Status | Tracked (Period) | Estimate (Task-level) |",
                 "|------|--------|--------:|----------:|",
             ]
             for t in task_list:
