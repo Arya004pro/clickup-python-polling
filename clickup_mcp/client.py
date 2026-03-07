@@ -11,18 +11,9 @@ import sys
 
 
 def _resolve_client_main():
-    provider = os.getenv("AI_CLIENT_PROVIDER", "zai").strip().lower()
-    if provider == "openrouter":
-        from openrouter_client import main
+    from openrouter_client import main
 
-        return main
-    if provider == "zai":
-        from zai_client import main
-
-        return main
-    raise RuntimeError(
-        f"Unsupported AI_CLIENT_PROVIDER='{provider}'. Use 'zai' or 'openrouter'."
-    )
+    return main
 
 
 if __name__ == "__main__":

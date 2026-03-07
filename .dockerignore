@@ -32,7 +32,6 @@ README.md
 lm_studio_system_prompt.md
 monitoring_config.example.json
 project_map.example.json
-zai_system_prompt.md
 .dockerignore
 Dockerfile
 docker-compose.yml

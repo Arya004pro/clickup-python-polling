@@ -14,8 +14,6 @@ services:
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - DATABASE_URL=${DATABASE_URL:-}
       - MCP_SERVER_URL=http://mcp-server:8001/sse
-      - ZAI_API_KEY=${ZAI_API_KEY}
-      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
       - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
       - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-}
       - REPORTS_DIR=/app/reports
@@ -60,25 +58,18 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
-      - AI_CLIENT_PROVIDER=${AI_CLIENT_PROVIDER:-openrouter}
       - MCP_SERVER_URL=http://mcp-server:8001/sse
-      - ZAI_API_KEY=${ZAI_API_KEY}
-      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-qwen/qwen-2.5-7b-instruct}
       - OPENROUTER_MODEL_CHAIN=${OPENROUTER_MODEL_CHAIN:-}
       - OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER:-}
       - OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE:-ClickUp MCP}
-      - OPENROUTER_ENABLE_ZAI_FALLBACK=${OPENROUTER_ENABLE_ZAI_FALLBACK:-true}
-      - OPENROUTER_ZAI_FALLBACK_MODELS=${OPENROUTER_ZAI_FALLBACK_MODELS:-glm-4.7-flash,glm-4.5-flash}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - REPORTS_DIR=/app/reports
     volumes:
       - ./api_server.py:/app/api_server.py
-      - ./zai_client.py:/app/zai_client.py
       - ./openrouter_client.py:/app/openrouter_client.py
-      - ./zai_system_prompt.md:/app/zai_system_prompt.md
       - ./openrouter_system_prompt.md:/app/openrouter_system_prompt.md
       - ./lm_studio_system_prompt.md:/app/lm_studio_system_prompt.md
       - ./clickup_mcp:/app/clickup_mcp
@@ -94,11 +85,7 @@ services:
       watch:
         - path: ./api_server.py
           action: rebuild
-        - path: ./zai_client.py
-          action: rebuild
         - path: ./openrouter_client.py
-          action: rebuild
-        - path: ./zai_system_prompt.md
           action: rebuild
         - path: ./openrouter_system_prompt.md
           action: rebuild
@@ -109,7 +96,7 @@ services:
         - path: ./Dockerfile
           action: rebuild
 
-  # AI Client (Z.AI / OpenRouter) - runs interactively
+  # AI Client (OpenRouter) - runs interactively
   ai-client:
     build:
       context: .
@@ -120,10 +107,7 @@ services:
     tty: true
     environment:
       - PYTHONUNBUFFERED=1
-      - AI_CLIENT_PROVIDER=${AI_CLIENT_PROVIDER:-openrouter}
       - MCP_SERVER_URL=http://mcp-server:8001/sse
-      - ZAI_API_KEY=${ZAI_API_KEY}
-      - ZAI_BASE_URL=${ZAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
       - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
@@ -131,13 +115,9 @@ services:
       - OPENROUTER_MODEL_CHAIN=${OPENROUTER_MODEL_CHAIN:-}
       - OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER:-}
       - OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE:-ClickUp MCP}
-      - OPENROUTER_ENABLE_ZAI_FALLBACK=${OPENROUTER_ENABLE_ZAI_FALLBACK:-true}
-      - OPENROUTER_ZAI_FALLBACK_MODELS=${OPENROUTER_ZAI_FALLBACK_MODELS:-glm-4.7-flash,glm-4.5-flash}
       - REPORTS_DIR=/app/reports
     volumes:
-      - ./zai_client.py:/app/zai_client.py
       - ./openrouter_client.py:/app/openrouter_client.py
-      - ./zai_system_prompt.md:/app/zai_system_prompt.md
       - ./openrouter_system_prompt.md:/app/openrouter_system_prompt.md
       - ./clickup_mcp:/app/clickup_mcp
       - ./app:/app/app
@@ -150,11 +130,7 @@ services:
     command: sh -c "sleep 5 && python -m clickup_mcp.client"
     develop:
       watch:
-        - path: ./zai_client.py
-          action: rebuild
         - path: ./openrouter_client.py
-          action: rebuild
-        - path: ./zai_system_prompt.md
           action: rebuild
         - path: ./openrouter_system_prompt.md
           action: rebuild

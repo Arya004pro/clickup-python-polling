@@ -1,6 +1,6 @@
-# ClickUp MCP Server with Multi-Provider AI Client
+# ClickUp MCP Server with OpenRouter AI Client
 
-> **Transform ClickUp project management with natural language AI** - A production-ready Model Context Protocol (MCP) server with **81 specialized tools**, connecting to AI language models (Cerebras, Z.AI) via API.
+> **Transform ClickUp project management with natural language AI** - A production-ready Model Context Protocol (MCP) server with **81 specialized tools**, connected to OpenRouter-hosted LLMs via API.
 
 <div align="center">
 
@@ -17,7 +17,7 @@
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [AI Provider Comparison](#ai-provider-comparison)
+- [Model Configuration](#model-configuration)
 - [Features](#features)
 - [Quick Start Guide](#quick-start-guide)
 - [Detailed Setup Instructions](#detailed-setup-instructions)
@@ -29,7 +29,7 @@
 
 ## Overview
 
-This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The MCP server runs as a persistent HTTP service and exposes **81 ClickUp tools** via SSE transport. AI clients connect to the server, discover available tools, and call them on demand using natural language -- with the LLM powered via external API (Cerebras or Z.AI).
+This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The MCP server runs as a persistent HTTP service and exposes **81 ClickUp tools** via SSE transport. The OpenRouter AI client connects to the server, discovers available tools, and calls them on demand using natural language.
 
 ### What is MCP?
 
@@ -47,16 +47,13 @@ The Model Context Protocol (MCP) is an open standard that enables AI models to i
                                     |
                                     v
 +------------------------------------------------------------------+
-|                    AI CLIENT (zai_client.py)                     |
+|                AI CLIENT (openrouter_client.py)                  |
 |                                                                  |
 |  +------------------------------------------------------------+  |
-|  |              LLM Provider API (OpenAI-compatible)          |  |
+|  |             OpenRouter API (OpenAI-compatible)            |  |
 |  |                                                            |  |
-|  |  +--------------------+    +---------------------------+  |  |
-|  |  |      CEREBRAS      |    |          Z.AI             |  |  |
-|  |  |   gpt-oss-120b     |    |  glm-4.7-flash (primary)  |  |  |
-|  |  |  (alternative)     |    |  glm-4.5-flash (fallback) |  |  |
-|  |  +--------------------+    +---------------------------+  |  |
+|  |  Model chain from env: OPENROUTER_MODEL(_CHAIN)           |  |
+|  |  Example: qwen/qwen-2.5-7b-instruct -> backup model        |  |
 |  +------------------------------------------------------------+  |
 |                                                                  |
 |  +----------------------+   +--------------------------------+  |
@@ -99,37 +96,28 @@ The Model Context Protocol (MCP) is an open standard that enables AI models to i
 1. **MCP Server starts** as a persistent HTTP service on port `8001`, exposing 81 tools via SSE.
 2. **AI Client connects** to `http://127.0.0.1:8001/sse` using the MCP client session.
 3. **Tools are discovered** - the client loads all 81 tool schemas from the server.
-4. **User sends a query** - the client forwards it to the LLM provider (Z.AI or Cerebras) via their OpenAI-compatible API, attaching all tool schemas.
+4. **User sends a query** - the client forwards it to OpenRouter via OpenAI-compatible API, attaching all tool schemas.
 5. **LLM selects tools** - it returns a structured tool-call request with the right arguments.
 6. **Client executes the tool** - the MCP session calls the tool on the backend server, which queries the ClickUp API or Supabase.
 7. **Result returned to LLM** - the LLM produces the final natural-language response for the user.
 
 ---
 
-## AI Provider Comparison
+## Model Configuration
 
-| Provider       | Models                           | Context Window | Speed     | Best For                   |
-| -------------- | -------------------------------- | -------------- | --------- | -------------------------- |
-| **Z.AI (GLM)** | `glm-4.7-flash`, `glm-4.5-flash` | 128K tokens    | Fast      | **Primary (Recommended)**  |
-| **CEREBRAS**   | `gpt-oss-120b`                   | 128K tokens    | 2000+ t/s | **High-speed alternative** |
+OpenRouter is the only runtime provider in this repository.
 
-### Provider Feature Comparison
+| Variable                 | Purpose                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `OPENROUTER_MODEL`       | Primary model when `OPENROUTER_MODEL_CHAIN` is not set       |
+| `OPENROUTER_MODEL_CHAIN` | Comma-separated model fallback chain                         |
+| `OPENROUTER_API_KEY`     | OpenRouter API key                                           |
+| `OPENROUTER_BASE_URL`    | OpenRouter base URL (default `https://openrouter.ai/api/v1`) |
 
-| Feature              | Z.AI `glm-4.7-flash` | Z.AI `glm-4.5-flash` | Cerebras `gpt-oss-120b` |
-| -------------------- | -------------------- | -------------------- | ----------------------- |
-| **API Standard**     | OpenAI-compatible    | OpenAI-compatible    | OpenAI-compatible       |
-| **Tool Calling**     | Native support       | Native support       | Native support          |
-| **Context Window**   | 128K tokens          | 128K tokens          | 128K tokens             |
-| **Inference Speed**  | Fast                 | Fast                 | 2000+ tokens/sec        |
-| **Model Chain Role** | Primary              | Fallback             | Standalone alternative  |
-
-### Z.AI Waterfall Chain
-
-`zai_client.py` automatically falls back when a rate limit or error is hit:
+Example fallback chain:
 
 ```
-glm-4.7-flash  -->  glm-4.5-flash
-   (primary)          (fallback)
+OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
 ```
 
 ---
@@ -274,7 +262,7 @@ glm-4.7-flash  -->  glm-4.5-flash
 | `get_task_report_job_result`    | Retrieve result of a completed async report job     |
 
 **Async Report Pattern**: Large reports run as background jobs. Use `get_task_report_job_status`
-to poll (smart 3s interval in `zai_client.py`) and `get_task_report_job_result` once done.
+to poll (smart 3s interval in `openrouter_client.py`) and `get_task_report_job_result` once done.
 
 </details>
 
@@ -296,10 +284,9 @@ to poll (smart 3s interval in `zai_client.py`) and `get_task_report_job_result` 
 ### Setup in 5 Minutes
 
 ```bash
-# 1. Clone and switch to the Zai branch
+# 1. Clone repository
 git clone https://github.com/Arya004pro/clickup-python-polling.git
 cd clickup-python-polling
-git checkout Zai
 
 # 2. Create virtual environment
 python -m venv myenv
@@ -322,12 +309,11 @@ CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
 DATABASE_URL=postgresql://user:pass@host:6543/postgres
 MCP_SERVER_URL=http://127.0.0.1:8001/sse
 
-# Z.AI (primary - model chain: glm-4.7-flash -> glm-4.5-flash)
-ZAI_API_KEY=your_zai_key_here
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
-
-# Cerebras (alternative - model: gpt-oss-120b)
-# CEREBRAS_API_KEY=csk_YOUR_KEY_HERE
+# OpenRouter
+OPENROUTER_API_KEY=sk-or-v1_your_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
+# OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
 ```
 
 ---
@@ -395,19 +381,12 @@ python -c "from mcp import ClientSession; print('MCP client: OK')"
 
 Copy from your ClickUp URL: `https://app.clickup.com/{TEAM_ID}/v/...`
 
-#### Z.AI API Key (Primary LLM)
+#### OpenRouter API Key
 
-1. Sign up at the Z.AI platform
-2. Generate an API key from the API Keys section
-3. Set `ZAI_API_KEY` and `ZAI_BASE_URL=https://api.z.ai/api/paas/v4/` in `.env`
-4. Models used: `glm-4.7-flash` (primary), `glm-4.5-flash` (fallback)
-
-#### Cerebras API Key (Alternative LLM)
-
-1. Sign up at [Cerebras Cloud](https://cloud.cerebras.ai/) (free tier available)
-2. Create an API Key (starts with `csk_...`)
-3. Set `CEREBRAS_API_KEY` in `.env`
-4. Model used: `gpt-oss-120b`
+1. Sign up at [OpenRouter](https://openrouter.ai/)
+2. Generate an API key from the keys page
+3. Set `OPENROUTER_API_KEY` in `.env`
+4. Set `OPENROUTER_MODEL` or `OPENROUTER_MODEL_CHAIN` in `.env`
 
 #### Supabase / PostgreSQL
 
@@ -424,14 +403,15 @@ CLICKUP_API_TOKEN=pk_123456_XXXXXXXXXXXXXXXXXXXXXXXXXXXX
 DATABASE_URL=postgresql://postgres.xxxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
 MCP_SERVER_URL=http://127.0.0.1:8001/sse
 
-# Z.AI - Primary LLM Provider
-# Model chain: glm-4.7-flash (primary) -> glm-4.5-flash (fallback)
-ZAI_API_KEY=your_zai_api_key_here
-ZAI_BASE_URL=https://api.z.ai/api/paas/v4/
-
-# Cerebras - Alternative LLM Provider (model: gpt-oss-120b)
-# Uncomment to switch to Cerebras
-# CEREBRAS_API_KEY=csk_XXXXXXXXXXXXXXXXXXXXXXXX
+# OpenRouter - LLM Provider
+OPENROUTER_API_KEY=sk-or-v1_your_openrouter_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
+# Optional: comma-separated fallback chain
+# OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
+# Optional headers
+# OPENROUTER_HTTP_REFERER=https://your-app-url.example
+# OPENROUTER_APP_TITLE=ClickUp MCP
 
 # Optional
 CLICKUP_TEAM_ID=12345678
@@ -467,19 +447,19 @@ Keep this terminal open -- the server must stay running for the AI client to fun
 
 ```bash
 # Terminal 2
-python zai_client.py
+python openrouter_client.py
 ```
 
 Expected output:
 
 ```
 ========================================================================
-  ClickUp MCP - Z.AI GLM Client
+  ClickUp MCP Server  --  OpenRouter Client
 ========================================================================
-  OK System prompt     : zai_system_prompt.md  (X chars)
-  OK Connecting to MCP : http://127.0.0.1:8001/sse
-  OK Loaded 81 tools
-  OK LLM               : glm-4.7-flash
+  OK System prompt     : openrouter_system_prompt.md  (X chars)
+  OK MCP endpoint      : http://127.0.0.1:8001/sse
+  OK OpenRouter URL    : https://openrouter.ai/api/v1
+  OK Active model      : qwen/qwen-2.5-7b-instruct
 
 ========================================================================
   You:
@@ -548,7 +528,7 @@ When you type `quit`, the client prints a full session summary:
   Total tokens     : 32,700
   Reports saved    : 2
   Duration         : 4m 32s
-  Models used      :  glm-4.7-flash x10  glm-4.5-flash x2
+  Models used      :  qwen/qwen-2.5-7b-instruct x12
 ====================================================================
 ```
 
@@ -558,17 +538,20 @@ When you type `quit`, the client prints a full session summary:
 
 ### Environment Variables
 
-| Variable            | Required | Default                         | Description                           |
-| ------------------- | -------- | ------------------------------- | ------------------------------------- |
-| `CLICKUP_API_TOKEN` | Yes      | -                               | ClickUp personal API token            |
-| `DATABASE_URL`      | Yes      | -                               | PostgreSQL/Supabase connection string |
-| `MCP_SERVER_URL`    | Yes      | `http://127.0.0.1:8001/sse`     | MCP server SSE endpoint               |
-| `ZAI_API_KEY`       | LLM      | -                               | Z.AI API key                          |
-| `ZAI_BASE_URL`      | LLM      | `https://api.z.ai/api/paas/v4/` | Z.AI base URL                         |
-| `CEREBRAS_API_KEY`  | LLM      | -                               | Cerebras API key (alternative)        |
-| `CLICKUP_TEAM_ID`   | No       | Auto-detected                   | Default workspace/team ID             |
-| `CLICKUP_SPACE_ID`  | No       | -                               | Default space ID for filtering        |
-| `REPORTS_DIR`       | No       | `D:\reports`                    | Directory for saved Markdown reports  |
+| Variable                  | Required | Default                        | Description                            |
+| ------------------------- | -------- | ------------------------------ | -------------------------------------- |
+| `CLICKUP_API_TOKEN`       | Yes      | -                              | ClickUp personal API token             |
+| `DATABASE_URL`            | Yes      | -                              | PostgreSQL/Supabase connection string  |
+| `MCP_SERVER_URL`          | Yes      | `http://127.0.0.1:8001/sse`    | MCP server SSE endpoint                |
+| `OPENROUTER_API_KEY`      | Yes      | -                              | OpenRouter API key                     |
+| `OPENROUTER_BASE_URL`     | No       | `https://openrouter.ai/api/v1` | OpenRouter base URL                    |
+| `OPENROUTER_MODEL`        | No       | `qwen/qwen-2.5-7b-instruct`    | Primary model                          |
+| `OPENROUTER_MODEL_CHAIN`  | No       | -                              | Comma-separated model fallback chain   |
+| `OPENROUTER_HTTP_REFERER` | No       | -                              | Optional OpenRouter attribution header |
+| `OPENROUTER_APP_TITLE`    | No       | `ClickUp MCP`                  | Optional OpenRouter app title header   |
+| `CLICKUP_TEAM_ID`         | No       | Auto-detected                  | Default workspace/team ID              |
+| `CLICKUP_SPACE_ID`        | No       | -                              | Default space ID for filtering         |
+| `REPORTS_DIR`             | No       | `D:\reports`                   | Directory for saved Markdown reports   |
 
 ### Supported Period Types (for report tools)
 
@@ -621,18 +604,12 @@ pip install -r requirements.txt
 </details>
 
 <details>
-<summary><b>Z.AI API errors - Rate limit (429)</b></summary>
+<summary><b>OpenRouter API errors - Rate limit / quota</b></summary>
 
-The client automatically falls back from `glm-4.7-flash` to `glm-4.5-flash`. If both models are rate-limited, wait a few minutes. Both Z.AI models share the same API key quota.
-
-</details>
-
-<details>
-<summary><b>Cerebras API errors - Invalid key</b></summary>
-
-1. Verify key at [Cerebras Cloud](https://cloud.cerebras.ai/)
-2. Ensure the key starts with `csk_` and has no leading/trailing spaces in `.env`
-3. Confirm the model name is exactly `gpt-oss-120b`
+1. Check `OPENROUTER_API_KEY` is valid and has available credits/quota.
+2. If using `OPENROUTER_MODEL_CHAIN`, ensure each model slug is valid.
+3. If the primary model is rate-limited, the client rotates to the next model in chain.
+4. If all configured models fail, wait briefly or add an additional fallback model.
 
 </details>
 

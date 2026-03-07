@@ -26,23 +26,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-# Import the AI client provider dynamically
+# Import the AI client directly (OpenRouter-only mode)
 sys.path.insert(0, "/app")
 
 
 def _resolve_client_class():
-    provider = os.getenv("AI_CLIENT_PROVIDER", "zai").strip().lower()
-    if provider == "openrouter":
-        from openrouter_client import OpenRouterMCPClient
+    from openrouter_client import OpenRouterMCPClient
 
-        return provider, OpenRouterMCPClient
-    if provider == "zai":
-        from zai_client import ZaiMCPClient
-
-        return provider, ZaiMCPClient
-    raise RuntimeError(
-        f"Unsupported AI_CLIENT_PROVIDER='{provider}'. Use 'zai' or 'openrouter'."
-    )
+    return "openrouter", OpenRouterMCPClient
 
 
 AI_CLIENT_PROVIDER, AI_CLIENT_CLASS = _resolve_client_class()
@@ -1015,7 +1006,9 @@ async def download_report(report_name: str):
     if "/" in report_name or "\\" in report_name or ".." in report_name:
         raise HTTPException(status_code=400, detail="Invalid report name.")
     if not report_name.endswith(".md"):
-        raise HTTPException(status_code=400, detail="Only .md report files are supported.")
+        raise HTTPException(
+            status_code=400, detail="Only .md report files are supported."
+        )
 
     path = REPORTS_DIR / report_name
     if not path.exists() or not path.is_file():

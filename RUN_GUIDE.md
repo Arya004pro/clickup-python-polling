@@ -16,7 +16,6 @@ Example `.env` values (placeholders only):
 
 ```bash
 CLICKUP_API_TOKEN=pk_your_clickup_token
-AI_CLIENT_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
 OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
@@ -29,8 +28,6 @@ Optional OpenRouter headers:
 ```bash
 OPENROUTER_HTTP_REFERER=https://your-app-url.example
 OPENROUTER_APP_TITLE=ClickUp MCP
-OPENROUTER_ENABLE_ZAI_FALLBACK=true
-OPENROUTER_ZAI_FALLBACK_MODELS=glm-4.7-flash,glm-4.5-flash
 ```
 
 ## Start the stack
@@ -97,7 +94,7 @@ Example response fields:
 
 ## Where reports are stored
 
-Reports are written by `zai_client.py` to `REPORTS_DIR` (default: `/app/reports` in Docker).
+Reports are written by `openrouter_client.py` to `REPORTS_DIR` (default: `/app/reports` in Docker).
 Filenames now include report context:
 
 `report_<type>_<entity>_<period>_<timestamp>.md`
