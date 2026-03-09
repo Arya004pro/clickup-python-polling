@@ -156,6 +156,127 @@ def _render_markdown(markdown: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Space-wise summary table
+# ---------------------------------------------------------------------------
+
+
+def _parse_summary_from_markdown(markdown: str) -> dict:
+    """
+    Extract top-level metrics from the AI-generated space report markdown.
+    Parses the same data the AI produced — guaranteeing consistency with the report body.
+    """
+    result = {
+        "tracked": "—",
+        "estimated": "—",
+        "active_projects": "—",
+        "has_data": False,
+    }
+    if not markdown:
+        return result
+
+    # Total Tracked line: **Total Tracked:** 25h 36m  |  **Total Estimate...: 9h 20m
+    m = re.search(r"\*\*Total Tracked:\*\*\s*([\dh m]+)", markdown)
+    if m:
+        result["tracked"] = m.group(1).strip()
+        result["has_data"] = True
+
+    m = re.search(r"\*\*Total Estimate[^:]*:\*\*\s*([\dh m]+)", markdown)
+    if m:
+        result["estimated"] = m.group(1).strip()
+
+    # Count data rows in the Status Summary by Project table
+    in_status_table = False
+    project_count = 0
+    for line in markdown.splitlines():
+        if "Status Summary by Project" in line:
+            in_status_table = True
+            continue
+        if in_status_table:
+            s = line.strip()
+            if not s.startswith("|"):
+                if project_count > 0:  # we were inside the table, now it ended
+                    break
+                continue
+            # Skip header row and divider row
+            if "Project" in s or re.match(r"^\|[-:\s|]+\|$", s):
+                continue
+            cols = [c.strip() for c in s.strip("|").split("|")]
+            if len(cols) >= 1 and cols[0]:
+                project_count += 1
+
+    if project_count > 0:
+        result["active_projects"] = str(project_count)
+    return result
+
+
+def _build_summary_table(reports_markdown: List[dict]) -> str:
+    """Render a top-level space-wise summary table, parsing data from the AI markdown."""
+    headers = [
+        "Space",
+        "Active Projects",
+        "Time Tracked",
+        "Estimated",
+        "Status",
+    ]
+    rows = []
+    for entry in reports_markdown:
+        space = html.escape(entry.get("space", "Unknown"))
+        error = entry.get("error")
+        md = (entry.get("markdown") or "").strip()
+
+        if error:
+            rows.append((space, "—", "—", "—", "❌ Error"))
+        elif md:
+            m = _parse_summary_from_markdown(md)
+            if m["has_data"]:
+                rows.append(
+                    (space, m["active_projects"], m["tracked"], m["estimated"], "✅ OK")
+                )
+            else:
+                rows.append((space, "—", "0h 0m", "0h 0m", "⚪ No activity"))
+        else:
+            rows.append((space, "—", "—", "—", "⚠️ No data"))
+
+    t = (
+        '<div style="margin-bottom:28px;">'
+        '<h2 style="color:#79c0ff;font-size:15px;margin:0 0 10px;letter-spacing:.3px;">📋 Space Summary</h2>'
+        '<table style="border-collapse:collapse;width:100%;background:#161b22;border-radius:6px;'
+        'overflow:hidden;border:1px solid #30363d;">'
+        "<thead><tr>"
+    )
+    for h in headers:
+        t += (
+            '<th style="background:#21262d;color:#58a6ff;padding:9px 14px;'
+            'text-align:left;font-size:12px;font-weight:600;border-bottom:2px solid #30363d;white-space:nowrap;">'
+            f"{html.escape(h)}</th>"
+        )
+    t += "</tr></thead><tbody>"
+    for i, row in enumerate(rows):
+        row_bg = "#0d1117" if i % 2 == 0 else "#161b22"
+        t += f'<tr style="background:{row_bg};">'
+        for j, cell in enumerate(row):
+            color = "#c9d1d9"
+            extra = ""
+            if j == 0:
+                extra = "font-weight:600;"
+            if "✅" in cell:
+                color = "#3fb950"
+            elif "❌" in cell:
+                color = "#f85149"
+            elif "⚠️" in cell:
+                color = "#d29922"
+            elif "⚪" in cell:
+                color = "#8b949e"
+            t += (
+                f'<td style="padding:8px 14px;border-bottom:1px solid #21262d;'
+                f'font-size:13px;color:{color};{extra}">{cell}</td>'
+            )
+        t += "</tr>"
+    t += "</tbody></table></div>"
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Email content builders
 # ---------------------------------------------------------------------------
 
@@ -187,6 +308,9 @@ def _build_html_email(reports_markdown: List[dict], schedule_label: str) -> str:
     <p class="meta">Generated: {now_ist}&nbsp;&nbsp;|&nbsp;&nbsp;Reports via OpenRouter + ClickUp MCP (identical to localhost page)</p>
   </div>
 """
+
+    # Space-wise summary table (uses structured metrics fetched alongside the AI query)
+    body += _build_summary_table(reports_markdown)
 
     for entry in reports_markdown:
         space = entry.get("space", "Unknown")
@@ -483,4 +607,3 @@ def send_report_email_legacy(
             "error": str(e),
             "to": to_email,
         }
-

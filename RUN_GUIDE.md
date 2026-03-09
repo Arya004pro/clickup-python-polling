@@ -140,6 +140,36 @@ docker compose down
 docker compose restart
 ```
 
+## Manual trigger (one command)
+
+After `docker compose up -d --build`, run:
+
+```bash
+python trigger_reports.py --period today
+```
+
+Windows shortcut:
+
+```bat
+trigger_today_reports.cmd
+```
+
+Behavior:
+- Triggers reports for all monitored spaces except `AIX` (your "other spaces")
+- Uses Motia endpoint: `http://localhost:3111/trigger-report`
+- Existing automated cron triggers remain active:
+  - `9AM` -> yesterday report
+  - `2PM` -> today report
+  - `6PM` -> today report
+
+Optional:
+
+```bash
+python trigger_reports.py --period today --include-aix
+python trigger_reports.py --period yesterday
+python trigger_reports.py --period today --label "Manual Today Smoke"
+```
+
 ## Troubleshooting
 
 ### Dashboard not loading

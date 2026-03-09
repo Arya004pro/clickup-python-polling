@@ -26,7 +26,11 @@ SMTP_TO = os.getenv("SMTP_TO", "aryapatel.eng@gmail.com")
 MONITORED_SPACES = [
     {
         "name": "AIX",
-        "display": "AIX",
+        "display": "Monitored AIX",
+        # query_label is what gets sent to the AI model — must say "Monitored AIX"
+        # so the system-prompt Monitored Scope Exception fires and the model
+        # restricts the report to only the projects listed in monitoring_config.json.
+        "query_label": "Monitored AIX",
         "scope": "monitored",  # use monitoring_config.json scoped lists
     },
     {"name": "VibeScorer", "display": "VibeScorer", "scope": "full"},

@@ -7,6 +7,8 @@ exactly the same markdown report that is displayed on the localhost web UI.
 """
 
 import asyncio
+import os
+import time
 from typing import Any
 
 import requests
@@ -64,6 +66,9 @@ def _call_api_server_sync(api_url: str, query: str, timeout_s: int = 360) -> dic
         return {"status": "error", "error": str(exc)[:200]}
 
 
+_DEDUP_WINDOW_S = 300  # 5 minutes — suppress duplicate triggers within this window
+
+
 async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     """
     Generate reports for selected spaces via OpenRouter api-server and enqueue for email.
@@ -73,6 +78,23 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
     period = input_data.get("period", "today")
     schedule_label = input_data.get("schedule_label", "Report")
+
+    # --- Idempotency guard: skip if the same schedule already fired recently ---
+    # This prevents duplicate emails when both the iii CronModule and the motia
+    # Python worker fire the same cron step (two triggers → one email).
+    dedup_key = f"{schedule_label}::{period}"
+    last_run = await ctx.state.get("report_last_run", dedup_key)
+    now_ts = time.time()
+    if last_run is not None:
+        elapsed = now_ts - float(last_run)
+        if elapsed < _DEDUP_WINDOW_S:
+            ctx.logger.warning(
+                f"[DEDUP] Skipping duplicate trigger for '{dedup_key}' "
+                f"(last ran {elapsed:.0f}s ago, window={_DEDUP_WINDOW_S}s)"
+            )
+            return
+    await ctx.state.set("report_last_run", dedup_key, now_ts)
+    # -------------------------------------------------------------------------
     requested_spaces = input_data.get("spaces")
     requested_spaces_lc = {
         str(name).strip().lower()
@@ -98,39 +120,52 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     ctx.logger.info(f"API server URL: {API_SERVER_URL}")
     ctx.logger.info(f"Spaces to process: {[s['name'] for s in spaces_to_process]}")
 
-    reports_markdown = []
+    # Controlled parallelism can reduce end-to-end runtime significantly.
+    # Keep this bounded to avoid overloading api-server/OpenRouter.
+    try:
+        report_concurrency = int(os.getenv("REPORT_CONCURRENCY", "2"))
+    except ValueError:
+        report_concurrency = 2
+    report_concurrency = max(1, min(report_concurrency, 4))
+    ctx.logger.info(f"Report concurrency: {report_concurrency}")
 
-    for space_cfg in spaces_to_process:
+    semaphore = asyncio.Semaphore(report_concurrency)
+
+    async def _process_space(space_cfg: dict) -> dict:
         space_name = space_cfg["name"]
-        query = _build_query(space_name, period)
+        # Use query_label when set (e.g. "Monitored AIX" for the AIX monitored scope)
+        # so the AI model applies the correct Monitored Scope Exception from the system prompt.
+        query_label = space_cfg.get("query_label") or space_name
+        query = _build_query(query_label, period)
 
         ctx.logger.info(f"  [{space_name}] Querying api-server: {query!r}")
-
-        # Run synchronous HTTP call in a thread to avoid blocking the async event loop.
-        result = await asyncio.to_thread(_call_api_server_sync, API_SERVER_URL, query)
+        async with semaphore:
+            result = await asyncio.to_thread(
+                _call_api_server_sync, API_SERVER_URL, query
+            )
 
         if result.get("status") == "error":
             error_msg = result.get("error", "Unknown error")
             ctx.logger.error(f"  [FAIL] {space_name}: {error_msg}")
-            reports_markdown.append(
-                {
-                    "space": space_name,
-                    "markdown": None,
-                    "error": error_msg,
-                }
-            )
-        else:
-            markdown = result.get("response") or ""
-            ctx.logger.info(
-                f"  [OK] {space_name}: received {len(markdown):,} chars of markdown"
-            )
-            reports_markdown.append(
-                {
-                    "space": space_name,
-                    "markdown": markdown,
-                    "error": None,
-                }
-            )
+            return {
+                "space": space_name,
+                "markdown": None,
+                "error": error_msg,
+            }
+
+        markdown = result.get("response") or ""
+        ctx.logger.info(
+            f"  [OK] {space_name}: received {len(markdown):,} chars of markdown"
+        )
+        return {
+            "space": space_name,
+            "markdown": markdown,
+            "error": None,
+        }
+
+    reports_markdown = await asyncio.gather(
+        *[_process_space(s) for s in spaces_to_process]
+    )
 
     ctx.logger.info(
         f"All {len(reports_markdown)} space reports done. Enqueuing email step..."

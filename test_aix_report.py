@@ -32,7 +32,7 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_TO = os.getenv("SMTP_TO", "aryapatel.eng@gmail.com")
 
-QUERY = "Generate a space task report for AIX for today"
+QUERY = "Generate a space task report for Monitored AIX for today"
 SCHEDULE_LABEL = "AIX Report - Today"
 
 
@@ -67,7 +67,9 @@ def print_report(markdown: str):
     try:
         print(markdown)
     except UnicodeEncodeError:
-        print(markdown.encode("utf-8", errors="replace").decode("utf-8", errors="replace"))
+        print(
+            markdown.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        )
 
     print("=" * 72 + "\n")
 

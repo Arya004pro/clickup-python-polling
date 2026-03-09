@@ -67,6 +67,8 @@ services:
       - OPENROUTER_MODEL_CHAIN=${OPENROUTER_MODEL_CHAIN:-}
       - OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER:-}
       - OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE:-ClickUp MCP}
+      - TASK_REPORT_POLL_INTERVAL_S=${TASK_REPORT_POLL_INTERVAL_S:-1.5}
+      - TASK_REPORT_POLL_TIMEOUT_S=${TASK_REPORT_POLL_TIMEOUT_S:-300}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - REPORTS_DIR=/app/reports
     volumes:
@@ -118,6 +120,8 @@ services:
       - OPENROUTER_MODEL_CHAIN=${OPENROUTER_MODEL_CHAIN:-}
       - OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER:-}
       - OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE:-ClickUp MCP}
+      - TASK_REPORT_POLL_INTERVAL_S=${TASK_REPORT_POLL_INTERVAL_S:-1.5}
+      - TASK_REPORT_POLL_TIMEOUT_S=${TASK_REPORT_POLL_TIMEOUT_S:-300}
       - REPORTS_DIR=/app/reports
     volumes:
       - ./openrouter_client.py:/app/openrouter_client.py
@@ -165,6 +169,7 @@ services:
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
+      - REPORT_CONCURRENCY=${REPORT_CONCURRENCY:-2}
       # Points to the api-server which uses OpenRouter + MCP to generate reports
       # identical to what is shown on the localhost web UI
       - API_SERVER_URL=http://api-server:8003
@@ -180,7 +185,7 @@ services:
     develop:
       watch:
         - path: ./clickup-motia-reports/steps
-          action: sync
+          action: sync+restart
           target: /app/steps
 
 volumes:

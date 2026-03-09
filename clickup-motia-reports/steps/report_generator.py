@@ -66,14 +66,31 @@ def _ms_to_date_ist(ms: int) -> str:
 def get_date_range(period: str) -> tuple:
     """
     Returns (start_date_str, end_date_str) for the given period.
-    period: 'yesterday' or 'today'
+    Supports: today, yesterday, this_week, last_week, this_month, last_month.
     """
     now = datetime.now(IST)
     if period == "yesterday":
         target = now - timedelta(days=1)
         start = target.replace(hour=0, minute=0, second=0, microsecond=0)
         end = target.replace(hour=23, minute=59, second=59, microsecond=999999)
-    else:  # today
+    elif period == "this_week":
+        monday = now - timedelta(days=now.weekday())
+        start = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = now
+    elif period == "last_week":
+        last_monday = now - timedelta(days=now.weekday() + 7)
+        last_sunday = last_monday + timedelta(days=6)
+        start = last_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
+    elif period == "this_month":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = now
+    elif period == "last_month":
+        first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month_end = first_this_month - timedelta(minutes=1)
+        start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = last_month_end
+    else:  # today (default)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = now
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")

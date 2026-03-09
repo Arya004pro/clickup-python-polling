@@ -62,8 +62,8 @@ FALLBACK_PROMPT_FILE = ROOT_DIR / "lm_studio_system_prompt.md"
 
 RATE_LIMIT_CODES = {402, 429, 503}
 MAX_POLL_RETRIES = 5
-STATUS_CHECK_INTERVAL_S = 3
-STATUS_CHECK_TIMEOUT_S = 300
+STATUS_CHECK_INTERVAL_S = float(os.getenv("TASK_REPORT_POLL_INTERVAL_S", "1.5"))
+STATUS_CHECK_TIMEOUT_S = int(os.getenv("TASK_REPORT_POLL_TIMEOUT_S", "300"))
 
 CORE_PM_TOOLS: set[str] = {
     "find_project_anywhere",
@@ -606,6 +606,7 @@ class OpenRouterMCPClient:
                 status = find_in_json(parsed, "status") or "unknown"
             except json.JSONDecodeError:
                 status = "unknown"
+                parsed = {}
 
             if status != last_status:
                 print(
@@ -623,6 +624,28 @@ class OpenRouterMCPClient:
 
             if status == "finished":
                 print()
+                # Fast path: status endpoint already includes result/formatted_output.
+                if isinstance(parsed, dict):
+                    fo = parsed.get("formatted_output")
+                    if fo:
+                        path = save_report(fo, self.stats, query_text=query_text)
+                        total_wait = int(time.time() - started_at)
+                        print(
+                            f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
+                            f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n"
+                        )
+                        return fo
+                    status_result = parsed.get("result")
+                    if isinstance(status_result, dict):
+                        fo = status_result.get("formatted_output")
+                        if fo:
+                            path = save_report(fo, self.stats, query_text=query_text)
+                            total_wait = int(time.time() - started_at)
+                            print(
+                                f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
+                                f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n"
+                            )
+                            return fo
                 break
 
             if status in ("failed", "error"):
