@@ -1,0 +1,26 @@
+{
+    "last_maintenance_run": "2026-01-01 09:00:00 IST",
+    "monitored_projects": [
+        {
+            "alias": "My Project Alpha",
+            "clickup_id": "YOUR_FOLDER_ID",
+            "type": "folder",
+            "space": "MY_SPACE_NAME",
+            "last_synced": "2026-01-01 09:00:00 IST",
+            "list_ids": [
+                "YOUR_LIST_ID_1",
+                "YOUR_LIST_ID_2"
+            ]
+        },
+        {
+            "alias": "My Project Beta",
+            "clickup_id": "YOUR_FOLDER_ID_2",
+            "type": "folder",
+            "space": "MY_SPACE_NAME",
+            "last_synced": "2026-01-01 09:00:00 IST",
+            "list_ids": [
+                "YOUR_LIST_ID_3"
+            ]
+        }
+    ]
+}

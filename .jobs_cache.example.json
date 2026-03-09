@@ -1,0 +1,9 @@
+{
+    "job-id-example-1234": {
+        "status": "finished",
+        "created_at": 1773000000,
+        "result": {
+            "formatted_output": "Report output goes here..."
+        }
+    }
+}

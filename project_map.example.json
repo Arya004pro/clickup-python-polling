@@ -1,0 +1,30 @@
+{
+    "mapped_projects": {
+        "my-space": {
+            "alias": "my-space",
+            "clickup_id": "YOUR_SPACE_ID",
+            "clickup_type": "space",
+            "last_sync": "2026-01-01 09:00:00 IST",
+            "structure": {
+                "id": "YOUR_SPACE_ID",
+                "type": "space",
+                "name": "My Space",
+                "children": [
+                    {
+                        "id": "YOUR_FOLDER_ID",
+                        "type": "folder",
+                        "name": "My Folder",
+                        "children": [
+                            {
+                                "id": "YOUR_LIST_ID",
+                                "name": "My List",
+                                "type": "list"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    },
+    "discovery_cache": {}
+}
