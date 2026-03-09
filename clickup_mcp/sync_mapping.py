@@ -238,10 +238,9 @@ def _refresh_project_mapping(alias: str, project: dict) -> dict:
 
     updated = dict(project)
     updated["structure"] = new_structure
-    updated["last_sync"] = (
-        datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
-        .strftime("%Y-%m-%d %H:%M:%S IST")
-    )
+    updated["last_sync"] = datetime.now(
+        tz=timezone(timedelta(hours=5, minutes=30))
+    ).strftime("%Y-%m-%d %H:%M:%S IST")
     db.add_project(alias, updated)
     return {
         "alias": alias,
@@ -269,9 +268,8 @@ def _sync_monitoring_config_list_ids() -> dict:
 
     projects = cfg.get("monitored_projects", [])
     changed = 0
-    now_ist = (
-        datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
-        .strftime("%Y-%m-%d %H:%M:%S IST")
+    now_ist = datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+        "%Y-%m-%d %H:%M:%S IST"
     )
 
     for p in projects:
@@ -323,15 +321,34 @@ def run_mapping_maintenance_once() -> dict:
             return {"status": "skipped", "reason": "maintenance_already_running"}
         _maintenance_running = True
 
-    print(f"[sync_mapping] Starting maintenance — {len(db.projects)} project(s) to refresh...", flush=True)
+    print(
+        f"[sync_mapping] Starting maintenance — {len(db.projects)} project(s) to refresh...",
+        flush=True,
+    )
     try:
         refreshed = []
         failed = []
+
+        # --- Prune any non-space entries (folders/lists don't belong at top level) ---
+        pruned_non_spaces = []
+        for alias, project in list(db.projects.items()):
+            if project.get("clickup_type") != "space":
+                db.remove_project(alias)
+                pruned_non_spaces.append(alias)
+                print(
+                    f"[sync_mapping]   ⚠ Removed non-space entry '{alias}' "
+                    f"(type={project.get('clickup_type')}) — only spaces are top-level projects.",
+                    flush=True,
+                )
+
         for alias, project in list(db.projects.items()):
             result = _refresh_project_mapping(alias, project)
             if result.get("success"):
                 refreshed.append(result["alias"])
-                print(f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)", flush=True)
+                print(
+                    f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)",
+                    flush=True,
+                )
             else:
                 failed.append(
                     {"alias": alias, "error": result.get("error", "unknown_error")}
@@ -355,20 +372,30 @@ def run_mapping_maintenance_once() -> dict:
                         new_alias = f"{new_alias}-{space['id'][-4:]}"
                     structure = _fetch_full_structure(space["id"], "space")
                     if "name" not in structure:
-                        print(f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.", flush=True)
+                        print(
+                            f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.",
+                            flush=True,
+                        )
                         continue
-                    db.add_project(new_alias, {
-                        "alias": new_alias,
-                        "clickup_id": space["id"],
-                        "clickup_type": "space",
-                        "last_sync": (
-                            datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
-                            .strftime("%Y-%m-%d %H:%M:%S IST")
-                        ),
-                        "structure": structure,
-                    })
+                    db.add_project(
+                        new_alias,
+                        {
+                            "alias": new_alias,
+                            "clickup_id": space["id"],
+                            "clickup_type": "space",
+                            "last_sync": (
+                                datetime.now(
+                                    tz=timezone(timedelta(hours=5, minutes=30))
+                                ).strftime("%Y-%m-%d %H:%M:%S IST")
+                            ),
+                            "structure": structure,
+                        },
+                    )
                     auto_mapped.append(new_alias)
-                    print(f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'", flush=True)
+                    print(
+                        f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'",
+                        flush=True,
+                    )
 
         monitor_res = _sync_monitoring_config_list_ids()
         pruned = db.prune_expired_cache()
@@ -376,6 +403,7 @@ def run_mapping_maintenance_once() -> dict:
         print(
             f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
             f"{len(auto_mapped)} new space(s) auto-mapped, "
+            f"{len(pruned_non_spaces)} non-space entries pruned, "
             f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
             f"{pruned} cache entries pruned.",
             flush=True,
@@ -386,6 +414,7 @@ def run_mapping_maintenance_once() -> dict:
             "mapped_projects_refreshed": len(refreshed),
             "mapped_projects_failed": failed,
             "auto_mapped_spaces": auto_mapped,
+            "non_space_entries_pruned": pruned_non_spaces,
             "monitoring_config": monitor_res,
             "cache_entries_pruned": pruned,
             "ran_at": time.time(),
@@ -426,9 +455,14 @@ def start_mapping_maintenance_scheduler(
     _maintenance_scheduler.start()
 
     if run_on_startup:
+
         def _startup_sync():
-            print("[sync_mapping] Startup sync triggered — running in background...", flush=True)
+            print(
+                "[sync_mapping] Startup sync triggered — running in background...",
+                flush=True,
+            )
             run_mapping_maintenance_once()
+
         threading.Thread(target=_startup_sync, daemon=True).start()
 
     return True
@@ -700,19 +734,27 @@ def register_sync_mapping_tools(mcp: FastMCP):
     @mcp.tool()
     def map_project(id: str, type: str, alias: str = None) -> dict:
         """
-        Map a ClickUp entity (Space, Folder, or List) as a 'Project'.
-        Verifies ID/Name, fetches internal structure, and persists mapping.
+        Map a ClickUp Space as a top-level 'Project'.
+        Verifies the space ID/Name, fetches its full internal structure, and persists the mapping.
+
+        Only spaces can be mapped as top-level projects. Folders and lists are tracked
+        as sub-entities within their parent space's structure.
 
         Args:
-            id: Entity ID or Name (will auto-resolve names to IDs for spaces).
-            type: Entity type - must be 'space', 'folder', or 'list'.
-            alias: Optional custom alias for the project (auto-generated if not provided).
+            id: Space ID or Space Name (names are auto-resolved to IDs).
+            type: Must be 'space'.
+            alias: Optional custom alias (auto-generated from space name if not provided).
 
         Returns:
             Mapping confirmation with project details.
         """
-        if type not in ["space", "folder", "list"]:
-            return {"error": "Type must be 'space', 'folder', or 'list'."}
+        if type != "space":
+            return {
+                "error": "Only 'space' can be mapped as a top-level project. "
+                "Folders and lists are sub-entities within their parent space — "
+                "map the parent space instead.",
+                "hint": "Use discover_hierarchy() to find the space that contains this entity.",
+            }
 
         # Step 1: Resolve name to ID if needed (for spaces)
         resolved_id = id
@@ -762,8 +804,9 @@ def register_sync_mapping_tools(mcp: FastMCP):
             "clickup_id": resolved_id,
             "clickup_type": type,
             "last_sync": (
-                datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
-                .strftime("%Y-%m-%d %H:%M:%S IST")
+                datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+                    "%Y-%m-%d %H:%M:%S IST"
+                )
             ),
             "structure": structure,
         }

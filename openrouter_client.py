@@ -385,7 +385,10 @@ def _extract_report_name_parts(
 
 def save_report(content: str, stats: SessionStats, query_text: str = "") -> str:
     REPORTS_DIR.mkdir(exist_ok=True)
-    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    import datetime as _dt
+
+    _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+    timestamp = _dt.datetime.now(_IST).strftime("%Y-%m-%d_%H-%M-%S")
     kind, entity, period = _extract_report_name_parts(content, query_text=query_text)
     base_name = f"report_{kind}_{entity}_{period}_{timestamp}"
     report_file = REPORTS_DIR / f"{base_name}.md"

@@ -1,0 +1,39 @@
+FROM node:20-slim
+
+# Install Python, curl, and tzdata for local timezone support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv python3-pip curl tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (Python package manager used by motia)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+ENV TZ=Asia/Kolkata
+
+# Install motia engine globally (provides motia-iii CLI)
+RUN npm install -g motia@1.0.0-rc.24
+
+# Install iii engine CLI (the backend runtime that Python workers connect to)
+RUN apt-get update && apt-get install -y --no-install-recommends bash \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash \
+    && iii-cli update || true
+
+WORKDIR /app
+
+# Install Python dependencies first (layer caching)
+COPY clickup-motia-reports/pyproject.toml clickup-motia-reports/uv.lock ./
+RUN uv sync --frozen
+
+# Copy application
+COPY clickup-motia-reports/iii-config.yaml .
+COPY clickup-motia-reports/steps/ ./steps/
+
+# Ensure 'steps' package is importable from /app
+ENV PYTHONPATH=/app
+
+# Data directories for iii state/stream persistence
+RUN mkdir -p data/streams_store
+
+# Start iii engine — it manages Python workers via ExecModule in iii-config.yaml
+CMD ["iii", "-c", "iii-config.yaml"]

@@ -11,6 +11,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
+      - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - DATABASE_URL=${DATABASE_URL:-}
       - MCP_SERVER_URL=http://mcp-server:8001/sse
@@ -58,6 +59,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
+      - TZ=Asia/Kolkata
       - MCP_SERVER_URL=http://mcp-server:8001/sse
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
@@ -107,6 +109,7 @@ services:
     tty: true
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=Asia/Kolkata
       - MCP_SERVER_URL=http://mcp-server:8001/sse
       - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
@@ -143,8 +146,47 @@ services:
         - path: ./Dockerfile
           action: rebuild
 
+  # Motia Reports — automated email reports via iii engine
+  motia-reports:
+    build:
+      context: .
+      dockerfile: Dockerfile.motia
+    container_name: clickup-motia-reports
+    restart: unless-stopped
+    ports:
+      - "3111:3111"
+    environment:
+      - PYTHONPATH=/app
+      - TZ=Asia/Kolkata
+      - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-3301011}
+      - SMTP_EMAIL=${SMTP_EMAIL}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      # Points to the api-server which uses OpenRouter + MCP to generate reports
+      # identical to what is shown on the localhost web UI
+      - API_SERVER_URL=http://api-server:8003
+    volumes:
+      - ./clickup-motia-reports/steps:/app/steps
+      - ./monitoring_config.json:/app/monitoring_config.json:ro
+      - motia-data:/app/data
+    networks:
+      - clickup-net
+    depends_on:
+      api-server:
+        condition: service_started
+    develop:
+      watch:
+        - path: ./clickup-motia-reports/steps
+          action: sync
+          target: /app/steps
+
 volumes:
   reports:
+    driver: local
+  motia-data:
     driver: local
 
 networks:

@@ -66,6 +66,9 @@ if not any(
 class QueryRequest(BaseModel):
     question: str
     model: Optional[str] = None
+    reset_conversation: bool = (
+        False  # Clear conversation history before this query (use for batch reports)
+    )
 
 
 class QueryResponse(BaseModel):
@@ -918,6 +921,9 @@ async def query_ai(req: QueryRequest):
             question=req.question,
             error="Question cannot be empty.",
         )
+
+    if req.reset_conversation:
+        client.conversation = []
 
     before_saved = client.stats.reports_saved
     try:
