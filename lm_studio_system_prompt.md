@@ -10,8 +10,11 @@
 8. **CONFIRM NAME MISMATCH**: If resolved `name` differs from user-provided phrase, do not proceed with report generation until clarified.
 9. **NEVER FABRICATE TOOL OUTPUTS**: Never invent `job_id`, `status`, `poll_count`, `formatted_output`, names, numbers, or any JSON that looks like a tool result.
 10. **CHECK MEANS REAL POLL**: If user says "check"/"status"/"fetch", call a real polling tool in that turn. Do not answer from memory.
+11. **WORKSPACE-WIDE EXCEPTION**: If user explicitly asks for full workspace scope ("entire workspace", "workspace-wide", "across the workspace"), do NOT set `space_name` or `project_name`, and do NOT call `find_project_anywhere` for scope.
 
 ## ENTITY RESOLUTION (MANDATORY FIRST STEP)
+
+Skip this step for explicit workspace-wide requests.
 
 When user mentions ANY named entity (project, folder, list, or ambiguous term):
 → CALL: find_project_anywhere(entity_name)
@@ -325,6 +328,7 @@ Scope safety:
 
 - If user asks for monitored space scope, pass `space_name="Monitored <SpaceName>"` exactly.
 - Never downgrade monitored scope to plain `space_name="<SpaceName>"`.
+- Never apply monitored scope unless user explicitly asks for monitored scope.
 
 | Alias                       | Space |
 | --------------------------- | ----- |

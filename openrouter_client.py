@@ -88,6 +88,18 @@ CORE_PM_TOOLS: set[str] = {
 
 _ENTITY_PARAMS = ("space_name", "project_name", "entity_name")
 
+_WORKSPACE_WIDE_PATTERNS = (
+    r"\b(entire|whole|full)\s+workspace\b",
+    r"\bworkspace[\s-]?wide\b",
+    r"\bacross\s+(the\s+)?workspace\b",
+    r"\b(all|across all)\s+spaces\b",
+)
+
+_MONITORED_SCOPE_PATTERNS = (
+    r"\bmonitored\b",
+    r"\bmonitored\s+aix\b",
+)
+
 
 @dataclass
 class SessionStats:
@@ -278,6 +290,51 @@ def _is_entity_not_found(raw: str) -> bool:
         )
     except Exception:
         return False
+
+
+def _has_workspace_wide_intent(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(re.search(pat, lowered) for pat in _WORKSPACE_WIDE_PATTERNS)
+
+
+def _has_explicit_monitored_scope(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(re.search(pat, lowered) for pat in _MONITORED_SCOPE_PATTERNS)
+
+
+def _sanitize_scope_args_for_workspace_query(
+    tool_name: str, args: dict, user_message: str
+) -> dict:
+    """
+    Preserve explicit workspace-wide intent for low-hours reports.
+
+    If user asks for entire workspace and did not ask for monitored scope,
+    remove accidental space/project narrowing args from tool call.
+    """
+    if tool_name != "get_low_hours_report":
+        return args
+    if not _has_workspace_wide_intent(user_message):
+        return args
+    if _has_explicit_monitored_scope(user_message):
+        return args
+
+    sanitized = dict(args or {})
+    removed = {}
+    for key in ("space_name", "project_name"):
+        if key in sanitized and sanitized.get(key) not in (None, ""):
+            removed[key] = sanitized.pop(key)
+
+    if removed:
+        print(
+            f"  {col(YELLOW, '!!')} Workspace-wide request detected; "
+            f"removed scope args: {col(DIM, json.dumps(removed, ensure_ascii=False))}"
+        )
+
+    return sanitized
 
 
 def _slugify(text: str, fallback: str = "na", max_len: int = 40) -> str:
@@ -647,6 +704,10 @@ class OpenRouterMCPClient:
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
+
+                args = _sanitize_scope_args_for_workspace_query(
+                    name, args, user_message
+                )
 
                 preview = json.dumps(args, ensure_ascii=False)[:80]
                 print(

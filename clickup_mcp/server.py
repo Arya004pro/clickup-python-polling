@@ -65,7 +65,7 @@ def create_mcp_app():
     register_project_intelligence_tools(mcp)
     register_sync_mapping_tools(mcp)
     register_task_report_tools(mcp)
-    start_mapping_maintenance_scheduler()
+    start_mapping_maintenance_scheduler(run_on_startup=True)
 
     mcp_http_app = mcp.http_app(transport="sse")
 

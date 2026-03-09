@@ -11,6 +11,7 @@ import os
 import time
 import re
 import threading
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 import requests
 from fastmcp import FastMCP
@@ -237,7 +238,10 @@ def _refresh_project_mapping(alias: str, project: dict) -> dict:
 
     updated = dict(project)
     updated["structure"] = new_structure
-    updated["last_sync"] = time.time()
+    updated["last_sync"] = (
+        datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
+        .strftime("%Y-%m-%d %H:%M:%S IST")
+    )
     db.add_project(alias, updated)
     return {
         "alias": alias,
@@ -265,6 +269,10 @@ def _sync_monitoring_config_list_ids() -> dict:
 
     projects = cfg.get("monitored_projects", [])
     changed = 0
+    now_ist = (
+        datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
+        .strftime("%Y-%m-%d %H:%M:%S IST")
+    )
 
     for p in projects:
         if p.get("type") != "folder" or not p.get("clickup_id"):
@@ -282,16 +290,20 @@ def _sync_monitoring_config_list_ids() -> dict:
             p["list_ids"] = live_ids
             changed += 1
 
-    if changed:
-        try:
-            with open(MONITORING_CONFIG_FILE, "w") as f:
-                json.dump(cfg, f, indent=2)
-        except Exception as e:
-            return {
-                "updated_projects": 0,
-                "status": "error",
-                "reason": f"write_failed: {e}",
-            }
+        # Always stamp when this project's lists were last checked
+        p["last_synced"] = now_ist
+
+    # Always write top-level maintenance timestamp + per-project stamps
+    cfg["last_maintenance_run"] = now_ist
+    try:
+        with open(MONITORING_CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        return {
+            "updated_projects": 0,
+            "status": "error",
+            "reason": f"write_failed: {e}",
+        }
 
     return {"updated_projects": changed, "status": "ok"}
 
@@ -300,15 +312,18 @@ def run_mapping_maintenance_once() -> dict:
     """
     Internal maintenance:
     1) Refresh every mapped project structure.
-    2) Refresh monitored folder list_ids.
-    3) Prune expired cache.
+    2) Auto-discover and map any new ClickUp spaces not yet in project_map.json.
+    3) Refresh monitored folder list_ids.
+    4) Prune expired cache.
     """
     global _maintenance_running
     with _maintenance_lock:
         if _maintenance_running:
+            print("[sync_mapping] Maintenance already running — skipped.", flush=True)
             return {"status": "skipped", "reason": "maintenance_already_running"}
         _maintenance_running = True
 
+    print(f"[sync_mapping] Starting maintenance — {len(db.projects)} project(s) to refresh...", flush=True)
     try:
         refreshed = []
         failed = []
@@ -316,18 +331,61 @@ def run_mapping_maintenance_once() -> dict:
             result = _refresh_project_mapping(alias, project)
             if result.get("success"):
                 refreshed.append(result["alias"])
+                print(f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)", flush=True)
             else:
                 failed.append(
                     {"alias": alias, "error": result.get("error", "unknown_error")}
                 )
+                print(f"[sync_mapping]   ✗ {alias}: {result.get('error')}", flush=True)
+
+        # --- Auto-discover new spaces ---
+        auto_mapped = []
+        teams_data = _api_get("/team")
+        if teams_data and teams_data.get("teams"):
+            team_id = teams_data["teams"][0]["id"]
+            spaces_data = _api_get(f"/team/{team_id}/space")
+            if spaces_data:
+                existing_ids = {p["clickup_id"] for p in db.projects.values()}
+                for space in spaces_data.get("spaces", []):
+                    if space["id"] in existing_ids:
+                        continue
+                    # New space found — auto-map it
+                    new_alias = _slugify(space["name"])
+                    if new_alias in db.projects:
+                        new_alias = f"{new_alias}-{space['id'][-4:]}"
+                    structure = _fetch_full_structure(space["id"], "space")
+                    if "name" not in structure:
+                        print(f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.", flush=True)
+                        continue
+                    db.add_project(new_alias, {
+                        "alias": new_alias,
+                        "clickup_id": space["id"],
+                        "clickup_type": "space",
+                        "last_sync": (
+                            datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
+                            .strftime("%Y-%m-%d %H:%M:%S IST")
+                        ),
+                        "structure": structure,
+                    })
+                    auto_mapped.append(new_alias)
+                    print(f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'", flush=True)
 
         monitor_res = _sync_monitoring_config_list_ids()
         pruned = db.prune_expired_cache()
+
+        print(
+            f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
+            f"{len(auto_mapped)} new space(s) auto-mapped, "
+            f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
+            f"{pruned} cache entries pruned.",
+            flush=True,
+        )
 
         return {
             "status": "success",
             "mapped_projects_refreshed": len(refreshed),
             "mapped_projects_failed": failed,
+            "auto_mapped_spaces": auto_mapped,
             "monitoring_config": monitor_res,
             "cache_entries_pruned": pruned,
             "ran_at": time.time(),
@@ -368,7 +426,10 @@ def start_mapping_maintenance_scheduler(
     _maintenance_scheduler.start()
 
     if run_on_startup:
-        threading.Thread(target=run_mapping_maintenance_once, daemon=True).start()
+        def _startup_sync():
+            print("[sync_mapping] Startup sync triggered — running in background...", flush=True)
+            run_mapping_maintenance_once()
+        threading.Thread(target=_startup_sync, daemon=True).start()
 
     return True
 
@@ -700,7 +761,10 @@ def register_sync_mapping_tools(mcp: FastMCP):
             "alias": final_alias,
             "clickup_id": resolved_id,
             "clickup_type": type,
-            "last_sync": time.time(),
+            "last_sync": (
+                datetime.now(tz=timezone(timedelta(hours=5, minutes=30)))
+                .strftime("%Y-%m-%d %H:%M:%S IST")
+            ),
             "structure": structure,
         }
 
@@ -723,7 +787,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
                     "alias": alias,
                     "clickup_id": data.get("clickup_id"),
                     "type": data.get("clickup_type"),
-                    "last_sync": time.ctime(data.get("last_sync", 0)),
+                    "last_sync": data.get("last_sync"),
                 }
             )
         return output
