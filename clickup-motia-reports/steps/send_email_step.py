@@ -6,6 +6,7 @@ an HTML email (same styling as localhost page) with a combined .md attachment,
 and sends via Gmail SMTP.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -23,14 +24,26 @@ config = {
     "enqueues": [],
 }
 
+_EMAIL_DEDUP_LOCK = asyncio.Lock()
+_CRON_EMAIL_DEDUP_WINDOW_S = 3600
+_MANUAL_EMAIL_DEDUP_WINDOW_S = 120
+
 
 async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     """Format and send the report email."""
-    from steps.config import SMTP_EMAIL, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_TO
+    from steps.config import (
+        API_SERVER_URL,
+        SMTP_EMAIL,
+        SMTP_HOST,
+        SMTP_PASSWORD,
+        SMTP_PORT,
+        SMTP_TO,
+    )
     from steps.email_sender import send_report_email
 
     reports_markdown = input_data.get("reports_markdown", [])
     schedule_label = input_data.get("schedule_label", "Report")
+    period = str(input_data.get("period", "") or "")
     timing_meta = dict(input_data.get("timing_meta") or {})
     email_started_epoch_ms = int(time.time() * 1000)
     email_started_iso = datetime.now(timezone.utc).isoformat()
@@ -59,6 +72,27 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
             f"generation_elapsed_s={generation_elapsed}"
         )
 
+    trigger_source = str(timing_meta.get("trigger_source") or "unknown")
+    dedup_window_s = (
+        _CRON_EMAIL_DEDUP_WINDOW_S
+        if trigger_source.startswith("cron")
+        else _MANUAL_EMAIL_DEDUP_WINDOW_S
+    )
+    dedup_period = str(timing_meta.get("period") or period or "unknown")
+    dedup_key = f"{schedule_label}::{dedup_period}::{'cron' if trigger_source.startswith('cron') else 'manual'}"
+    now_ts = time.time()
+    async with _EMAIL_DEDUP_LOCK:
+        last_sent = await ctx.state.get("report_email_last_sent", dedup_key)
+        if last_sent is not None:
+            elapsed = now_ts - float(last_sent)
+            if elapsed < dedup_window_s:
+                ctx.logger.warning(
+                    f"[DEDUP] Skipping duplicate email for '{dedup_key}' "
+                    f"(last sent {elapsed:.0f}s ago, window={dedup_window_s}s)"
+                )
+                return
+        await ctx.state.set("report_email_last_sent", dedup_key, now_ts)
+
     result = send_report_email(
         reports_markdown=reports_markdown,
         schedule_label=schedule_label,
@@ -67,6 +101,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         smtp_email=SMTP_EMAIL,
         smtp_password=SMTP_PASSWORD,
         to_email=SMTP_TO,
+        pdf_render_base_url=API_SERVER_URL,
     )
 
     if result["status"] == "sent":

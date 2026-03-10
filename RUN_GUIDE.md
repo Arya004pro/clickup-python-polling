@@ -1,197 +1,137 @@
 # ClickUp MCP Docker Run Guide
 
-This guide covers running the Docker stack, using the web dashboard/API, and locating generated report files.
+This guide reflects the current working runtime (March 2026).
+
+## What runs in Docker
+- `mcp-server` on `:8001` (FastMCP ClickUp tools)
+- `api-server` on `:8003` (dashboard + REST API)
+- `motia-reports` on `:3111` (scheduled/manual report flow + email)
 
 ## Prerequisites
-
-- Docker Desktop installed and running
-- `.env` file present in project root
-- `monitoring_config.json` present in project root if you use monitored-scope queries
-- `project_map.json` present in project root for mapped-project resolution/sync
-- Required values in `.env`:
+- Docker Desktop running
+- `.env` in project root with at least:
   - `CLICKUP_API_TOKEN`
-  - `OPENROUTER_API_KEY` (for OpenRouter testing)
-
-Example `.env` values (placeholders only):
-
-```bash
-CLICKUP_API_TOKEN=pk_your_clickup_token
-OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
-OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-MCP_SERVER_URL=http://mcp-server:8001/sse
-REPORTS_DIR=/app/reports
-```
-
-Optional OpenRouter headers:
-
-```bash
-OPENROUTER_HTTP_REFERER=https://your-app-url.example
-OPENROUTER_APP_TITLE=ClickUp MCP
-```
+  - `OPENROUTER_API_KEY`
+  - SMTP variables if email sending is required (`SMTP_EMAIL`, `SMTP_PASSWORD`, `SMTP_TO`)
+- `monitoring_config.json` and `project_map.json` present in project root
 
 ## Start the stack
-
 ```bash
 docker compose up --build --watch
 ```
 
-When services are healthy:
-
-- MCP server: `http://localhost:8001/sse`
+Healthy URLs:
+- MCP SSE: `http://localhost:8001/sse`
 - API dashboard: `http://localhost:8003`
 
-Notes:
+Dashboard highlights:
+- Query tab for natural-language requests
+- Reports tab with paginated saved reports
+- One-click send of any saved report to email (`SMTP_TO` by default, optional recipient override)
 
-- `docker-compose.yml` bind-mounts `./monitoring_config.json` and
-  `./project_map.json` into MCP server runtime.
-- If either file is missing, monitored reports can become broad or fail scope checks.
-- With `--watch`, code/config changes trigger container rebuild/restart automatically.
-- The dashboard auto-refreshes when API comes back after restart.
+## Current report flow
+- Motia generate step calls API direct endpoint `POST /report/space`
+- API server calls MCP report tool and returns markdown
+- Email step sends summary table + full report markdown
+- No separate manager-summary endpoint is active in the current system
 
-## Dashboard behavior
+## API endpoints you should use
 
-Open `http://localhost:8003` and submit a query.
-
-- Responses are rendered as Markdown in the browser.
-- Markdown tables are shown as HTML tables with readable styling.
-- Press `Enter` to submit quickly (`Shift+Enter` adds a new line).
-- If a report is generated and saved, the UI shows:
-  - saved file name
-  - direct link to open/download the saved file
-
-## API endpoints
-
-### Query
-
+### 1) Natural-language query
 `POST /query`
 
 ```bash
 curl -X POST http://localhost:8003/query \
   -H "Content-Type: application/json" \
-  -d '{"question":"Generate last month space task report for BlogManager"}'
+  -d '{"question":"Generate yesterday space task report for BlogManager"}'
 ```
 
-Example response fields:
+### 2) Direct report generation (recommended for automation)
+`POST /report/space`
 
-- `status`
-- `response`
-- `tokens_used`
-- `report_saved`
-- `report_file`
-- `report_download_url`
+```bash
+curl -X POST http://localhost:8003/report/space \
+  -H "Content-Type: application/json" \
+  -d '{"space_name":"Monitored AIX","period_type":"yesterday","include_archived":true}'
+```
 
-### Health and stats
-
+### 3) Health/stats/reports
 - `GET /status`
 - `GET /stats`
+- `GET /reports`
+- `GET /reports/latest`
+- `GET /reports/{name}`
+- `POST /reports/send`
 
-### Reports
-
-- `GET /reports` (list saved reports)
-- `GET /reports/latest` (download latest markdown report)
-- `GET /reports/{report_name}` (download a specific report)
-
-## Where reports are stored
-
-Reports are written by `openrouter_client.py` to `REPORTS_DIR` (default: `/app/reports` in Docker).
-Filenames now include report context:
-
-`report_<type>_<entity>_<period>_<timestamp>.md`
-
-In this compose setup, `/app/reports` is backed by a Docker named volume:
-
-```yaml
-volumes:
-  reports:
-```
-
-Useful commands:
-
+Send a saved report by email:
 ```bash
-# list reports inside container
-docker compose exec api-server ls -lah /app/reports
-
-# list reports via API
-curl http://localhost:8003/reports
-
-# copy reports from container to host folder
-docker compose cp api-server:/app/reports ./reports-export
+curl -X POST http://localhost:8003/reports/send \
+  -H "Content-Type: application/json" \
+  -d '{"report_name":"report_space_blogmanager_2026-03-10-2026-03-10_2026-03-10_16-35-48.md","to_email":"manager@example.com"}'
 ```
+Note: this endpoint sends the report as a `.pdf` attachment (falls back to `.md` only if PDF render fails).
 
-## Optional: store reports directly on host filesystem
-
-If you want testers to see report files directly on disk, replace `reports:/app/reports` with `./reports:/app/reports` in `docker-compose.yml` for services that use reports.
-
-Then create host folder once:
-
-```bash
-mkdir reports
-```
-
-## Logs and operations
-
-```bash
-docker compose ps
-docker compose logs -f
-docker compose logs -f api-server
-docker compose logs -f mcp-server
-docker compose down
-docker compose restart
-```
-
-## Manual trigger (one command)
-
-After `docker compose up -d --build`, run:
+## Manual trigger for Motia flow
+After stack is up:
 
 ```bash
 python trigger_reports.py --period today
 ```
 
-Windows shortcut:
-
-```bat
-trigger_today_reports.cmd
+Useful variants:
+```bash
+python trigger_reports.py --period yesterday
+python trigger_reports.py --period today --no-aix
+python trigger_reports.py --period this_week --label "Manual weekly check"
 ```
 
-Behavior:
-- Triggers reports for all monitored spaces except `AIX` (your "other spaces")
-- Uses Motia endpoint: `http://localhost:3111/trigger-report`
-- Existing automated cron triggers remain active:
-  - `9AM` -> yesterday report
-  - `2PM` -> today report
-  - `6PM` -> today report
+Notes:
+- Default includes all monitored spaces (including AIX as monitored scope)
+- Use `--no-aix` to exclude AIX
 
-Optional:
+## Scheduled triggers (current)
+- `9AM` -> yesterday report
+- `2PM` -> today report
+- `6PM` -> today report
 
+## Reports storage
+Reports are saved under `/app/reports` inside containers and backed by Docker volume `reports`.
+
+Useful commands:
 ```bash
-python trigger_reports.py --period today --include-aix
-python trigger_reports.py --period yesterday
-python trigger_reports.py --period today --label "Manual Today Smoke"
+docker compose exec api-server ls -lah /app/reports
+curl http://localhost:8003/reports
+docker compose cp api-server:/app/reports ./reports-export
+```
+
+## Common operations
+```bash
+docker compose ps
+docker compose logs -f
+docker compose logs -f api-server
+docker compose logs -f mcp-server
+docker compose logs -f motia-reports
+docker compose restart api-server
+docker compose down
 ```
 
 ## Troubleshooting
 
-### Dashboard not loading
+### 1) Dashboard not loading
+- Check: `docker compose ps`
+- Check logs: `docker compose logs -f api-server`
+- Ensure port `8003` is free
 
-- Verify API container is up: `docker compose ps`
-- Check API logs: `docker compose logs -f api-server`
-- Confirm port `8003` is free
+### 2) Report includes wrong scope
+- For AIX monitored mode use `space_name: "Monitored AIX"`
+- Verify `monitoring_config.json` has correct `list_ids`
 
-### Reports not appearing
+### 3) No reports appearing
+- Call `GET /reports`
+- Check container path: `docker compose exec api-server ls -lah /app/reports`
+- Confirm `REPORTS_DIR=/app/reports` in compose env
 
-- Check API list endpoint: `GET /reports`
-- Check report directory in container: `docker compose exec api-server ls -lah /app/reports`
-- Verify `REPORTS_DIR` is set consistently in compose env
-
-### Monitored scope returns extra projects
-
-- Confirm monitored config exists on host: `ls monitoring_config.json`
-- Check MCP startup logs for missing config warning
-- Verify monitored entries use correct `space` and `list_ids`
-- Retry with explicit scope phrase: `Monitored AIX`
-
-### MCP client not ready
-
-- MCP may still be initializing; retry in a few seconds
-- Check logs: `docker compose logs -f mcp-server`
+### 4) Motia trigger fails
+- Verify `motia-reports` container is up
+- Check endpoint: `http://localhost:3111/trigger-report`
+- Re-run with retries from `trigger_reports.py`

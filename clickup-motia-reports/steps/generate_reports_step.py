@@ -235,6 +235,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 "schedule_label": schedule_label,
                 "timing_meta": {
                     "trigger_source": trigger_source,
+                    "period": period,
+                    "schedule_label": schedule_label,
                     "triggered_at_epoch_ms": trigger_epoch_ms,
                     "triggered_at_iso": trigger_iso,
                     "generation_started_epoch_ms": generation_started_epoch_ms,

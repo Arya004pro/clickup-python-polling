@@ -15,16 +15,28 @@ HTTP endpoints:
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
+import re
+import smtplib
 import sys
 from datetime import datetime
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # Import the AI client directly (OpenRouter-only mode)
 sys.path.insert(0, "/app")
@@ -97,6 +109,26 @@ class SpaceReportResponse(BaseModel):
     error: Optional[str] = None
 
 
+class SendReportEmailRequest(BaseModel):
+    report_name: str
+    to_email: Optional[str] = None
+    subject: Optional[str] = None
+
+
+class SendReportEmailResponse(BaseModel):
+    status: str
+    report_name: str
+    to_email: Optional[str] = None
+    subject: Optional[str] = None
+    error: Optional[str] = None
+
+
+class RenderPdfRequest(BaseModel):
+    markdown: str
+    title: Optional[str] = None
+    filename: Optional[str] = None
+
+
 app = FastAPI(
     title="ClickUp MCP REST API",
     description="Query ClickUp via MCP + AI provider",
@@ -144,6 +176,299 @@ def _latest_report_path() -> Optional[Path]:
     if not reports:
         return None
     return REPORTS_DIR / reports[0]["name"]
+
+
+def _looks_like_email(value: str) -> bool:
+    if not value:
+        return False
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value))
+
+
+def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> None:
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_email = os.getenv("SMTP_EMAIL", "")
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+
+    if not smtp_email or not smtp_password:
+        raise RuntimeError(
+            "SMTP_EMAIL/SMTP_PASSWORD not configured in environment."
+        )
+
+    report_content = report_path.read_text(encoding="utf-8")
+    report_title = report_path.stem
+
+    msg = MIMEMultipart("mixed")
+    msg["From"] = smtp_email
+    msg["To"] = to_email
+    msg["Subject"] = subject
+
+    body = (
+        "Hello,\n\n"
+        "Please find the requested ClickUp report attached.\n\n"
+        f"Report: {report_title}\n"
+        f"Generated from API dashboard at {datetime.now().isoformat(timespec='seconds')}\n\n"
+        "Regards,\n"
+        "ClickUp MCP API"
+    )
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    pdf_bytes = _markdown_to_pdf_bytes(report_content, report_path.stem)
+    if pdf_bytes:
+        pdf_name = f"{report_title}.pdf"
+        attachment = MIMEBase("application", "pdf")
+        attachment.set_payload(pdf_bytes)
+        encoders.encode_base64(attachment)
+        attachment.add_header(
+            "Content-Disposition", f'attachment; filename="{pdf_name}"'
+        )
+        msg.attach(attachment)
+    else:
+        # Fallback to markdown attachment if PDF conversion fails for any reason.
+        attachment = MIMEBase("text", "markdown")
+        attachment.set_payload(report_content.encode("utf-8"))
+        encoders.encode_base64(attachment)
+        fallback_name = f"{report_title}.md"
+        attachment.add_header("Content-Disposition", f'attachment; filename="{fallback_name}"')
+        msg.attach(attachment)
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_email, smtp_password)
+        server.send_message(msg)
+
+
+def _markdown_to_pdf_bytes(markdown_content: str, title: str) -> Optional[bytes]:
+    try:
+        out = io.BytesIO()
+        doc = SimpleDocTemplate(
+            out,
+            pagesize=A4,
+            leftMargin=14 * mm,
+            rightMargin=14 * mm,
+            topMargin=16 * mm,
+            bottomMargin=16 * mm,
+        )
+        styles = getSampleStyleSheet()
+        normal = ParagraphStyle(
+            "ReportBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=10,
+            leading=14,
+            textColor=colors.HexColor("#1f2937"),
+            spaceAfter=2,
+        )
+        h1 = ParagraphStyle(
+            "H1",
+            parent=styles["Heading1"],
+            fontName="Helvetica-Bold",
+            fontSize=17,
+            leading=21,
+            textColor=colors.HexColor("#0f3d71"),
+            spaceBefore=8,
+            spaceAfter=5,
+        )
+        h2 = ParagraphStyle(
+            "H2",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=13,
+            leading=17,
+            textColor=colors.HexColor("#144f93"),
+            spaceBefore=6,
+            spaceAfter=4,
+        )
+        h3 = ParagraphStyle(
+            "H3",
+            parent=styles["Heading3"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=15,
+            textColor=colors.HexColor("#1e3a5f"),
+            spaceBefore=5,
+            spaceAfter=3,
+        )
+        meta_style = ParagraphStyle(
+            "Meta",
+            parent=normal,
+            fontSize=8.5,
+            leading=11,
+            textColor=colors.HexColor("#64748b"),
+        )
+        code_style = ParagraphStyle(
+            "Code",
+            parent=normal,
+            fontName="Courier",
+            fontSize=8.8,
+            leading=11,
+            backColor=colors.HexColor("#0f172a"),
+            textColor=colors.HexColor("#e2e8f0"),
+            leftIndent=6,
+            rightIndent=6,
+            spaceBefore=4,
+            spaceAfter=6,
+        )
+
+        def _inline_markup(text: str) -> str:
+            escaped = (
+                text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+            escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+            escaped = re.sub(r"__(.+?)__", r"<b>\1</b>", escaped)
+            escaped = re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
+            escaped = re.sub(r"`(.+?)`", r"<font face='Courier'>\1</font>", escaped)
+            return escaped
+
+        page_width = doc.width
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header_data = [
+            [Paragraph("<b>ClickUp Report</b>", h2)],
+            [Paragraph(_inline_markup(title), h1)],
+            [Paragraph(f"Generated: {generated_at}", meta_style)],
+        ]
+        header = Table(header_data, colWidths=[page_width])
+        header.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fbff")),
+                    ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d5e3f5")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+
+        lines = (markdown_content or "").splitlines()
+        story = [header, Spacer(1, 10)]
+        i = 0
+        in_code_block = False
+        code_lines: list[str] = []
+
+        def _flush_code_block() -> None:
+            if not code_lines:
+                return
+            block = "\n".join(code_lines)
+            escaped = (
+                block.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+            story.append(Paragraph(escaped.replace("\n", "<br/>"), code_style))
+            code_lines.clear()
+
+        while i < len(lines):
+            line = (lines[i] or "").strip()
+
+            if line.startswith("```"):
+                if in_code_block:
+                    _flush_code_block()
+                    in_code_block = False
+                else:
+                    in_code_block = True
+                i += 1
+                continue
+            if in_code_block:
+                code_lines.append(lines[i] or "")
+                i += 1
+                continue
+
+            if not line:
+                story.append(Spacer(1, 6))
+                i += 1
+                continue
+
+            if re.match(r"^[-*_]{3,}$", line):
+                story.append(Spacer(1, 4))
+                rule = Table([[""]], colWidths=[page_width], rowHeights=[1.2])
+                rule.setStyle(
+                    TableStyle(
+                        [("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#dce5f3"))]
+                    )
+                )
+                story.append(rule)
+                story.append(Spacer(1, 6))
+                i += 1
+                continue
+
+            if line.startswith("# "):
+                story.append(Paragraph(_inline_markup(line[2:].strip()), h1))
+                i += 1
+                continue
+            if line.startswith("## "):
+                story.append(Paragraph(_inline_markup(line[3:].strip()), h2))
+                i += 1
+                continue
+            if line.startswith("### "):
+                story.append(Paragraph(_inline_markup(line[4:].strip()), h3))
+                i += 1
+                continue
+
+            if re.match(r"^[-*]\s+", line):
+                bullet_text = re.sub(r"^[-*]\s+", "", line)
+                story.append(Paragraph(f"&bull; {_inline_markup(bullet_text)}", normal))
+                i += 1
+                continue
+
+            if "|" in line and i + 1 < len(lines):
+                divider = (lines[i + 1] or "").strip()
+                if re.match(r"^[\s|:\-]+$", divider) and "|" in divider:
+                    headers = [c.strip() for c in line.strip("|").split("|")]
+                    rows = [headers]
+                    i += 2
+                    while i < len(lines):
+                        row_line = (lines[i] or "").strip()
+                        if "|" not in row_line:
+                            break
+                        rows.append([c.strip() for c in row_line.strip("|").split("|")])
+                        i += 1
+
+                    header_cells = [
+                        Paragraph(f"<b>{_inline_markup(c)}</b>", normal)
+                        for c in headers
+                    ]
+                    body_rows = [
+                        [Paragraph(_inline_markup(c), normal) for c in r]
+                        for r in rows[1:]
+                    ]
+                    table_rows = [header_cells, *body_rows]
+                    column_count = max(1, len(headers))
+                    col_width = page_width / column_count
+                    table = Table(
+                        table_rows,
+                        repeatRows=1,
+                        colWidths=[col_width] * column_count,
+                    )
+                    table.setStyle(
+                        TableStyle(
+                            [
+                                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf9")),
+                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f2f57")),
+                                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8d6ea")),
+                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7faff")]),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                            ]
+                        )
+                    )
+                    story.append(table)
+                    story.append(Spacer(1, 8))
+                    continue
+
+            story.append(Paragraph(_inline_markup(line), normal))
+            i += 1
+
+        _flush_code_block()
+        doc.build(story)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
 async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
@@ -208,213 +533,126 @@ async def dashboard():
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ClickUp MCP - AI Query Interface</title>
+  <title>ClickUp MCP Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(135deg, #355c7d 0%, #6c5b7b 50%, #c06c84 100%);
       min-height: 100vh;
       padding: 20px;
+      color: #1f2937;
     }
     .container {
-      max-width: 1100px;
+      max-width: 1320px;
       margin: 0 auto;
       background: #fff;
       border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
     }
     .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(95deg, #1f3b68, #2d5f8b);
       color: #fff;
-      padding: 28px;
+      padding: 22px 24px;
     }
-    .header h1 { font-size: 30px; margin-bottom: 8px; }
-    .header p { opacity: 0.95; font-size: 14px; }
-    .content { padding: 24px; }
-    .form-group { margin-bottom: 16px; }
-    label { display: block; font-weight: 600; margin-bottom: 8px; color: #333; }
-    textarea {
-      width: 100%;
-      min-height: 110px;
-      border: 2px solid #e2e4ea;
-      border-radius: 8px;
-      padding: 12px;
-      font-size: 14px;
-      resize: vertical;
+    .header h1 { font-size: 26px; margin-bottom: 6px; }
+    .header p { opacity: 0.95; font-size: 13px; }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 16px 20px 0;
+      background: #f6f8ff;
+      border-bottom: 1px solid #e1e8f5;
     }
-    textarea:focus { outline: none; border-color: #667eea; }
-    .button-group { display: flex; gap: 10px; }
-    button {
-      flex: 1;
-      border: 0;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 16px;
-      font-weight: 600;
+    .tab-btn {
+      border: 1px solid #cdd8ee;
+      background: #edf2ff;
+      color: #1d3b66;
+      padding: 8px 14px;
+      border-radius: 8px 8px 0 0;
+      font-weight: 700;
+      font-size: 13px;
       cursor: pointer;
     }
-    .btn-submit {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #fff;
+    .tab-btn.active {
+      background: #fff;
+      border-bottom-color: #fff;
     }
-    .btn-clear { background: #eceef4; color: #222; }
-    .btn-submit[disabled] {
-      opacity: 0.75;
-      cursor: not-allowed;
+    .content { padding: 20px; }
+    .page { display: none; }
+    .page.active { display: block; }
+    .card {
+      background: #f9fbff;
+      border: 1px solid #dce5f5;
+      border-radius: 10px;
+      padding: 14px;
     }
-    .examples {
-      margin-top: 16px;
-      border-left: 4px solid #667eea;
-      background: #f0f4ff;
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 13px; }
+    textarea, input {
+      width: 100%;
+      border: 1px solid #c6d2ea;
       border-radius: 8px;
-      padding: 12px 14px;
-      color: #444;
+      padding: 10px;
       font-size: 13px;
     }
-    .examples strong { color: #5866d8; display: block; margin-bottom: 8px; }
-    .examples ul { margin-left: 18px; }
-    .examples li { margin-bottom: 4px; }
+    textarea { min-height: 110px; resize: vertical; }
+    textarea:focus, input:focus {
+      outline: none;
+      border-color: #4d73b9;
+      box-shadow: 0 0 0 2px rgba(77, 115, 185, 0.12);
+    }
+    .button-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary { background: #2d5f8b; color: #fff; }
+    .btn-secondary { background: #e4eaf7; color: #1f2f49; }
+    .btn-small { padding: 6px 10px; font-size: 12px; }
+    .btn-primary[disabled], .btn-secondary[disabled] {
+      opacity: 0.7; cursor: not-allowed;
+    }
     .loader {
       display: none;
-      margin-top: 16px;
+      margin-top: 14px;
+      background: #eef4ff;
+      border: 1px solid #cfdbf4;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #27456f;
     }
     .loader.show { display: block; }
-    .loader-card {
-      background: radial-gradient(circle at 20% 15%, rgba(102,126,234,0.2), rgba(118,75,162,0.1));
-      border: 1px solid #d8dcf5;
-      border-radius: 12px;
-      padding: 16px;
-      text-align: center;
-      position: relative;
-      overflow: hidden;
-    }
-    .loader-card::before {
-      content: "";
-      position: absolute;
-      inset: -120% -40%;
-      background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.7) 50%, transparent 70%);
-      animation: sheen 2.4s linear infinite;
-      pointer-events: none;
-    }
-    .loader-orbit {
-      width: 74px;
-      height: 74px;
-      margin: 0 auto 10px;
-      border-radius: 50%;
-      border: 2px solid rgba(102,126,234,0.2);
-      border-top-color: #667eea;
-      position: relative;
-      animation: spin 1.15s linear infinite;
-    }
-    .loader-orbit::after {
-      content: "";
-      position: absolute;
-      inset: 14px;
-      border-radius: 50%;
-      border: 2px dashed rgba(118,75,162,0.5);
-      animation: spin-reverse 1.8s linear infinite;
-    }
-    .loader-core {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: #764ba2;
-      box-shadow: 0 0 0 0 rgba(118,75,162,0.35);
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      animation: pulse 1.2s ease-out infinite;
-    }
-    .loader-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #334155;
-      margin-bottom: 5px;
-    }
-    .loader-subtitle {
-      font-size: 12px;
-      color: #59667f;
-      margin-bottom: 10px;
-    }
-    .loader-meta {
-      width: min(360px, 92%);
-      margin: 0 auto 8px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      font-size: 12px;
-      color: #46536b;
-    }
-    .loader-phase {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 260px;
-      text-align: left;
-    }
-    .loader-percent {
-      font-weight: 700;
-      color: #3f4eb2;
-      min-width: 36px;
-      text-align: right;
-    }
-    .loader-bar {
-      width: min(320px, 90%);
-      height: 8px;
-      border-radius: 999px;
-      margin: 0 auto;
-      background: #e8ebf9;
-      overflow: hidden;
-    }
-    .loader-bar span {
-      display: block;
-      width: 8%;
-      height: 100%;
-      background: linear-gradient(90deg, #667eea, #764ba2);
-      border-radius: inherit;
-      transition: width 0.35s ease;
-      box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
-    }
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-    @keyframes spin-reverse {
-      from { transform: rotate(360deg); }
-      to { transform: rotate(0deg); }
-    }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(118,75,162,0.4); }
-      70% { box-shadow: 0 0 0 14px rgba(118,75,162,0); }
-      100% { box-shadow: 0 0 0 0 rgba(118,75,162,0); }
-    }
-    @keyframes sheen {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(100%); }
-    }
     .error {
       display: none;
-      margin-top: 14px;
-      background: #ffebee;
-      color: #c62828;
+      margin-top: 12px;
+      background: #ffecec;
+      color: #992323;
       border-radius: 8px;
-      padding: 12px;
-      font-size: 14px;
+      border: 1px solid #f6bbbb;
+      padding: 10px;
+      font-size: 13px;
     }
     .error.show { display: block; }
     .response-box {
       display: none;
-      margin-top: 20px;
-      background: #f9f9fb;
-      border-left: 4px solid #667eea;
-      border-radius: 8px;
-      padding: 16px;
-      max-height: 65vh;
+      margin-top: 16px;
+      background: #fff;
+      border: 1px solid #d7e1f5;
+      border-radius: 10px;
+      padding: 14px;
+      max-height: 70vh;
       overflow: auto;
     }
     .response-box.show { display: block; }
@@ -422,80 +660,83 @@ async def dashboard():
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
+      gap: 10px;
     }
-    .response-title { color: #667eea; font-weight: 700; }
+    .response-title { color: #204974; font-weight: 800; font-size: 14px; }
     .response-actions { display: flex; gap: 8px; }
-    .download-btn {
-      background: #667eea;
-      color: #fff;
-      padding: 6px 10px;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      flex: 0 0 auto;
-    }
-    .clear-report-btn {
-      background: #e9edf7;
-      color: #222;
-      padding: 6px 10px;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      flex: 0 0 auto;
-    }
-    .response-content { color: #333; font-size: 13px; line-height: 1.7; }
-    .response-content h1, .response-content h2, .response-content h3 { margin: 14px 0 6px; }
+    .response-content { color: #1f2937; font-size: 13px; line-height: 1.6; }
     .response-content table {
       width: 100%;
       border-collapse: collapse;
-      margin: 12px 0;
+      margin: 10px 0;
       font-size: 12px;
       background: #fff;
     }
     .response-content th, .response-content td {
-      border: 1px solid #d9dce6;
-      padding: 8px 10px;
+      border: 1px solid #dce3f3;
+      padding: 7px 9px;
       text-align: left;
       vertical-align: top;
     }
-    .response-content th { background: #667eea; color: #fff; }
-    .response-content tr:nth-child(even) td { background: #f5f7ff; }
-    .response-content ul { margin: 8px 0 8px 18px; }
-    .response-content p { margin: 6px 0; }
-    .status { margin-top: 10px; font-size: 12px; color: #666; }
-    .status a { color: #4a57cf; }
-    .reports-panel {
-      margin-top: 20px;
-      background: #f9f9fb;
-      border-left: 4px solid #56a3ff;
-      border-radius: 8px;
-      padding: 14px;
+    .response-content th { background: #2d5f8b; color: #fff; }
+    .response-content tr:nth-child(even) td { background: #f7faff; }
+    .status-line { margin-top: 8px; font-size: 12px; color: #475569; }
+    .status-line a { color: #2d5f8b; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
     }
-    .reports-title {
-      color: #2c6fc2;
-      font-weight: 700;
-      margin-bottom: 10px;
+    .reports-wrap {
+      border: 1px solid #d7e1f5;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fff;
     }
     .reports-table {
       width: 100%;
       border-collapse: collapse;
-      background: #fff;
       font-size: 12px;
     }
     .reports-table th, .reports-table td {
-      border: 1px solid #d9dce6;
+      border-bottom: 1px solid #e4eaf7;
       padding: 8px 10px;
       text-align: left;
-      vertical-align: top;
+      vertical-align: middle;
     }
-    .reports-table th {
-      background: #eaf3ff;
-      color: #2b4f75;
+    .reports-table thead th {
+      background: #f2f6ff;
+      color: #27456f;
+      font-weight: 800;
     }
-    .reports-empty { font-size: 12px; color: #666; }
+    .reports-table tbody tr:nth-child(even) td { background: #fbfcff; }
+    .actions { display: flex; gap: 6px; }
+    .pager {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      border-top: 1px solid #e4eaf7;
+      background: #fafcff;
+      font-size: 12px;
+    }
+    .toast {
+      margin-top: 10px;
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      display: none;
+    }
+    .toast.show { display: block; }
+    .toast.ok { background: #e9f9ee; color: #115d2f; border: 1px solid #b6e3c6; }
+    .toast.err { background: #ffecec; color: #8f1f1f; border: 1px solid #f0b7b7; }
+    .reports-empty {
+      padding: 16px;
+      color: #6b7280;
+      font-size: 13px;
+    }
     .live-status {
       position: fixed;
       top: 12px;
@@ -520,79 +761,105 @@ async def dashboard():
       0%, 100% { opacity: 1; }
       50% { opacity: 0.45; }
     }
+    @media (max-width: 980px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      .response-header { flex-direction: column; align-items: flex-start; }
+      .pager { flex-direction: column; align-items: flex-start; gap: 8px; }
+    }
   </style>
 </head>
 <body>
   <div class="live-status" id="liveStatus">API Connected</div>
   <div class="container">
     <div class="header">
-      <h1>ClickUp MCP AI Query</h1>
-      <p>REST dashboard for querying ClickUp tools and viewing saved reports.</p>
+      <h1>ClickUp MCP Dashboard</h1>
+      <p>Query ClickUp tools, browse saved reports, and send a selected report to email.</p>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" id="tabQueryBtn" onclick="showTab('query')">Query</button>
+      <button class="tab-btn" id="tabReportsBtn" onclick="showTab('reports')">Reports</button>
     </div>
     <div class="content">
-      <form id="queryForm">
-        <div class="form-group">
-          <label for="question">Your Query</label>
-          <textarea id="question" name="question" required
-            placeholder="Example: Can you generate last month's space task report for BlogManager"></textarea>
-        </div>
-        <div class="button-group">
-          <button type="submit" class="btn-submit" id="submitBtn">Send Query</button>
-          <button type="button" class="btn-clear" onclick="clearQueryInput()">Clear</button>
-        </div>
-      </form>
-
-      <div class="examples">
-        <strong>Example Queries:</strong>
-        <ul>
-          <li>Show me all workspaces and teams</li>
-          <li>Generate time tracking report for last week</li>
-          <li>Can you provide this month's space task report for XYZ</li>
-        </ul>
-      </div>
-
-      <div class="loader" id="loader">
-        <div class="loader-card">
-          <div class="loader-orbit"><div class="loader-core"></div></div>
-          <div class="loader-title">Analyzing Query and Building Report</div>
-          <div class="loader-subtitle">Calling tools and preparing your report output.</div>
-          <div class="loader-meta">
-            <span class="loader-phase" id="loaderPhase">Preparing request...</span>
-            <span class="loader-percent" id="loaderPercent">0%</span>
-          </div>
-          <div class="loader-bar"><span id="loaderProgress"></span></div>
-        </div>
-      </div>
-      <div class="error" id="error"></div>
-
-      <div class="response-box" id="responseBox">
-        <div class="response-header">
-          <div class="response-title">Response</div>
-          <div class="response-actions">
-            <button class="download-btn" onclick="downloadReport()" id="downloadBtn" style="display:none;">Download Markdown</button>
-            <button class="clear-report-btn" onclick="clearReportView()" id="clearReportBtn" style="display:none;">Clear Report</button>
+      <section class="page active" id="pageQuery">
+        <div class="card">
+          <form id="queryForm">
+            <div class="form-group">
+              <label for="question">Your Query</label>
+              <textarea id="question" name="question" required placeholder="Example: Generate yesterday space task report for Monitored AIX"></textarea>
+            </div>
+            <div class="button-row">
+              <button type="submit" class="btn-primary" id="submitBtn">Send Query</button>
+              <button type="button" class="btn-secondary" onclick="clearQueryInput()">Clear</button>
+              <button type="button" class="btn-secondary" onclick="showTab('reports')">Go to Reports</button>
+            </div>
+          </form>
+          <div class="loader" id="loader">Working on your request...</div>
+          <div class="error" id="error"></div>
+          <div class="response-box" id="responseBox">
+            <div class="response-header">
+              <div class="response-title">Response</div>
+              <div class="response-actions">
+                <button class="btn-primary btn-small" onclick="downloadReport()" id="downloadBtn" style="display:none;">Download</button>
+                <button class="btn-secondary btn-small" onclick="clearReportView()" id="clearReportBtn" style="display:none;">Clear</button>
+              </div>
+            </div>
+            <div class="response-content" id="responseContent"></div>
+            <div class="status-line" id="responseStatus"></div>
           </div>
         </div>
-        <div class="response-content" id="responseContent"></div>
-        <div class="status" id="responseStatus"></div>
-      </div>
+      </section>
 
-      <div class="reports-panel">
-        <div class="reports-title">Saved Reports</div>
-        <div id="reportsContainer" class="reports-empty">Loading saved reports...</div>
-      </div>
+      <section class="page" id="pageReports">
+        <div class="card">
+          <div class="grid-2">
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="recipientEmail">Send report to email (optional override)</label>
+              <input id="recipientEmail" type="email" placeholder="Leave blank to use SMTP_TO from .env" />
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="emailSubject">Email subject (optional)</label>
+              <input id="emailSubject" type="text" placeholder="ClickUp Report - <report-name>" />
+            </div>
+          </div>
+          <div class="button-row" style="margin-bottom:10px;">
+            <button class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
+            <button class="btn-secondary" onclick="showTab('query')">Back to Query</button>
+          </div>
+          <div class="reports-wrap">
+            <div id="reportsContainer" class="reports-empty">Loading reports...</div>
+            <div class="pager" id="reportsPager" style="display:none;">
+              <div id="reportsPageInfo">Page 1</div>
+              <div class="button-row">
+                <button class="btn-secondary btn-small" id="prevPageBtn">Previous</button>
+                <button class="btn-secondary btn-small" id="nextPageBtn">Next</button>
+              </div>
+            </div>
+          </div>
+          <div class="toast" id="mailToast"></div>
+        </div>
+      </section>
     </div>
   </div>
 
   <script>
     let lastResponse = '';
-    let progressTimer = null;
-    let progressValue = 0;
     let backendWasOffline = false;
     let heartbeatTimer = null;
+    let reportsData = [];
+    let reportsPage = 1;
+    const REPORTS_PAGE_SIZE = 15;
     const HEARTBEAT_ONLINE_MS = 10000;
     const HEARTBEAT_OFFLINE_MS = 2500;
     const HEARTBEAT_HIDDEN_MS = 30000;
+
+    function showTab(tab) {
+      const isQuery = tab === 'query';
+      document.getElementById('pageQuery').classList.toggle('active', isQuery);
+      document.getElementById('pageReports').classList.toggle('active', !isQuery);
+      document.getElementById('tabQueryBtn').classList.toggle('active', isQuery);
+      document.getElementById('tabReportsBtn').classList.toggle('active', !isQuery);
+      if (!isQuery) refreshReports();
+    }
 
     function escapeHtml(text) {
       return (text || '')
@@ -603,66 +870,6 @@ async def dashboard():
         .replace(/'/g, '&#39;');
     }
 
-    function basicMarkdownToHtml(markdown) {
-      const lines = (markdown || '').replace(/\\r/g, '').split('\\n');
-      const html = [];
-      let i = 0;
-
-      while (i < lines.length) {
-        const line = lines[i] || '';
-        const next = i + 1 < lines.length ? (lines[i + 1] || '') : '';
-        const trimmed = line.trim();
-
-        const isTableHeader = line.includes('|');
-        const isTableDivider = /^\\s*\\|?[\\s:-]+(\\|[\\s:-]+)+\\|?\\s*$/.test(next.trim());
-        if (isTableHeader && isTableDivider) {
-          const headCells = line.trim().replace(/^\\||\\|$/g, '').split('|').map(c => escapeHtml(c.trim()));
-          html.push('<table><thead><tr>' + headCells.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>');
-          i += 2;
-          while (i < lines.length && lines[i].includes('|')) {
-            const rowCells = (lines[i] || '').trim().replace(/^\\||\\|$/g, '').split('|').map(c => `<td>${escapeHtml(c.trim())}</td>`).join('');
-            html.push('<tr>' + rowCells + '</tr>');
-            i += 1;
-          }
-          html.push('</tbody></table>');
-          continue;
-        }
-
-        if (!trimmed) {
-          i += 1;
-          continue;
-        }
-        if (/^###\\s+/.test(trimmed)) {
-          html.push('<h3>' + escapeHtml(trimmed.replace(/^###\\s+/, '')) + '</h3>');
-          i += 1;
-          continue;
-        }
-        if (/^##\\s+/.test(trimmed)) {
-          html.push('<h2>' + escapeHtml(trimmed.replace(/^##\\s+/, '')) + '</h2>');
-          i += 1;
-          continue;
-        }
-        if (/^#\\s+/.test(trimmed)) {
-          html.push('<h1>' + escapeHtml(trimmed.replace(/^#\\s+/, '')) + '</h1>');
-          i += 1;
-          continue;
-        }
-        if (/^[-*]\\s+/.test(trimmed)) {
-          html.push('<ul>');
-          while (i < lines.length && /^[-*]\\s+/.test((lines[i] || '').trim())) {
-            html.push('<li>' + escapeHtml((lines[i] || '').trim().replace(/^[-*]\\s+/, '')) + '</li>');
-            i += 1;
-          }
-          html.push('</ul>');
-          continue;
-        }
-        html.push('<p>' + escapeHtml(trimmed) + '</p>');
-        i += 1;
-      }
-
-      return html.join('\\n');
-    }
-
     function markdownToHtml(markdown) {
       if (window.marked && typeof window.marked.parse === 'function') {
         if (typeof window.marked.setOptions === 'function') {
@@ -670,7 +877,7 @@ async def dashboard():
         }
         return window.marked.parse(markdown || '');
       }
-      return basicMarkdownToHtml(markdown);
+      return `<pre>${escapeHtml(markdown || '')}</pre>`;
     }
 
     function formatBytes(bytes) {
@@ -680,42 +887,111 @@ async def dashboard():
       return `${(value / (1024 * 1024)).toFixed(1)} MB`;
     }
 
-    async function refreshReports() {
-      const container = document.getElementById('reportsContainer');
-      try {
-        const response = await fetch('/reports');
-        const data = await response.json();
-        const reports = Array.isArray(data.reports) ? data.reports : [];
-        if (!reports.length) {
-          container.innerHTML = '<div class="reports-empty">No saved reports found yet.</div>';
-          return;
-        }
+    function showToast(message, ok=true) {
+      const el = document.getElementById('mailToast');
+      el.textContent = message;
+      el.className = `toast show ${ok ? 'ok' : 'err'}`;
+      setTimeout(() => {
+        el.classList.remove('show');
+      }, 4000);
+    }
 
-        const rows = reports.map((r) => {
-          const name = escapeHtml(r.name || '');
-          const modified = escapeHtml(r.modified || '');
-          const size = formatBytes(r.size_bytes || 0);
-          return `<tr>
+    function renderReports() {
+      const container = document.getElementById('reportsContainer');
+      const pager = document.getElementById('reportsPager');
+      const pageInfo = document.getElementById('reportsPageInfo');
+      const prevBtn = document.getElementById('prevPageBtn');
+      const nextBtn = document.getElementById('nextPageBtn');
+
+      if (!reportsData.length) {
+        container.innerHTML = '<div class="reports-empty">No reports found.</div>';
+        pager.style.display = 'none';
+        return;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(reportsData.length / REPORTS_PAGE_SIZE));
+      reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
+      const start = (reportsPage - 1) * REPORTS_PAGE_SIZE;
+      const pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
+
+      const rows = pageRows.map((r) => {
+        const name = escapeHtml(r.name || '');
+        const modified = escapeHtml(r.modified || '');
+        const size = formatBytes(r.size_bytes || 0);
+        return `
+          <tr>
             <td><a href="/reports/${name}" target="_blank">${name}</a></td>
             <td>${modified}</td>
             <td>${size}</td>
-          </tr>`;
-        }).join('');
-
-        container.innerHTML = `
-          <table class="reports-table">
-            <thead>
-              <tr>
-                <th>Report</th>
-                <th>Modified</th>
-                <th>Size</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
+            <td>
+              <div class="actions">
+                <a class="btn-secondary btn-small" href="/reports/${name}" target="_blank">Open</a>
+                <button class="btn-primary btn-small send-btn" data-report="${name}">Send</button>
+              </div>
+            </td>
+          </tr>
         `;
+      }).join('');
+
+      container.innerHTML = `
+        <table class="reports-table">
+          <thead>
+            <tr><th>Report</th><th>Modified</th><th>Size</th><th>Actions</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+
+      pager.style.display = 'flex';
+      pageInfo.textContent = `Page ${reportsPage} / ${totalPages} (${reportsData.length} reports)`;
+      prevBtn.disabled = reportsPage <= 1;
+      nextBtn.disabled = reportsPage >= totalPages;
+
+      document.querySelectorAll('.send-btn').forEach((btn) => {
+        btn.addEventListener('click', () => sendReportByEmail(btn.dataset.report, btn));
+      });
+    }
+
+    async function refreshReports() {
+      const container = document.getElementById('reportsContainer');
+      container.innerHTML = '<div class="reports-empty">Loading reports...</div>';
+      try {
+        const response = await fetch('/reports?limit=500', { cache: 'no-store' });
+        const data = await response.json();
+        reportsData = Array.isArray(data.reports) ? data.reports : [];
+        renderReports();
       } catch (err) {
         container.innerHTML = '<div class="reports-empty">Unable to load reports list.</div>';
+      }
+    }
+
+    async function sendReportByEmail(reportName, btn) {
+      if (!reportName) return;
+      const toEmail = (document.getElementById('recipientEmail').value || '').trim();
+      const subject = (document.getElementById('emailSubject').value || '').trim();
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      try {
+        const response = await fetch('/reports/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            report_name: reportName,
+            to_email: toEmail || null,
+            subject: subject || null,
+          }),
+        });
+        const data = await response.json();
+        if (data.status === 'success') {
+          showToast(`Sent ${reportName} to ${data.to_email}`, true);
+        } else {
+          showToast(`Send failed: ${data.error || 'unknown error'}`, false);
+        }
+      } catch (err) {
+        showToast(`Send failed: ${err.message}`, false);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send';
       }
     }
 
@@ -756,49 +1032,6 @@ async def dashboard():
       }
     }
 
-    function setLoaderProgress(value, phase) {
-      const progress = Math.max(0, Math.min(100, Math.round(value || 0)));
-      document.getElementById('loaderProgress').style.width = `${progress}%`;
-      document.getElementById('loaderPercent').textContent = `${progress}%`;
-      if (phase) document.getElementById('loaderPhase').textContent = phase;
-    }
-
-    function stopProgressSimulation() {
-      if (progressTimer) {
-        clearInterval(progressTimer);
-        progressTimer = null;
-      }
-    }
-
-    function startProgressSimulation() {
-      stopProgressSimulation();
-      progressValue = 6;
-      setLoaderProgress(progressValue, 'Preparing request...');
-      progressTimer = setInterval(() => {
-        progressValue = Math.min(92, progressValue + Math.max(1, Math.round((100 - progressValue) / 16)));
-        let phase = 'Calling MCP tools...';
-        if (progressValue >= 30) phase = 'Fetching and aggregating tasks...';
-        if (progressValue >= 55) phase = 'Waiting for report job completion...';
-        if (progressValue >= 78) phase = 'Formatting report output...';
-        setLoaderProgress(progressValue, phase);
-      }, 850);
-    }
-
-    async function completeProgressAndHide(loader) {
-      stopProgressSimulation();
-      setLoaderProgress(100, 'Completed');
-      await new Promise((resolve) => setTimeout(resolve, 180));
-      loader.classList.remove('show');
-    }
-
-    const questionInput = document.getElementById('question');
-    questionInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        document.getElementById('queryForm').requestSubmit();
-      }
-    });
-
     function scheduleHeartbeat(delayMs) {
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
       heartbeatTimer = setTimeout(heartbeatCheck, delayMs);
@@ -823,14 +1056,20 @@ async def dashboard():
       }
     }
 
-    function startHeartbeat() {
-      if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      heartbeatCheck();
-    }
+    document.getElementById('prevPageBtn').addEventListener('click', () => {
+      reportsPage = Math.max(1, reportsPage - 1);
+      renderReports();
+    });
+    document.getElementById('nextPageBtn').addEventListener('click', () => {
+      reportsPage += 1;
+      renderReports();
+    });
 
-    document.addEventListener('visibilitychange', () => {
-      if (!backendWasOffline) {
-        scheduleHeartbeat(document.hidden ? HEARTBEAT_HIDDEN_MS : HEARTBEAT_ONLINE_MS);
+    const questionInput = document.getElementById('question');
+    questionInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.getElementById('queryForm').requestSubmit();
       }
     });
 
@@ -847,7 +1086,6 @@ async def dashboard():
       const submitBtn = document.getElementById('submitBtn');
 
       loader.classList.add('show');
-      startProgressSimulation();
       error.classList.remove('show');
       responseBox.classList.remove('show');
       downloadBtn.style.display = 'none';
@@ -862,7 +1100,7 @@ async def dashboard():
           body: JSON.stringify({ question }),
         });
         const data = await response.json();
-        await completeProgressAndHide(loader);
+        loader.classList.remove('show');
 
         if (data.status === 'error') {
           error.textContent = 'Error: ' + (data.error || 'Unknown error');
@@ -887,13 +1125,11 @@ async def dashboard():
           }
         }
         statusEl.innerHTML = statusHtml;
-
         downloadBtn.style.display = 'inline-block';
         clearReportBtn.style.display = 'inline-block';
         responseBox.classList.add('show');
         refreshReports();
       } catch (err) {
-        stopProgressSimulation();
         loader.classList.remove('show');
         error.textContent = 'Request failed: ' + err.message;
         error.classList.add('show');
@@ -904,12 +1140,11 @@ async def dashboard():
     });
 
     refreshReports();
-    startHeartbeat();
+    heartbeatCheck();
   </script>
 </body>
 </html>
     """
-
 
 @app.post("/query", response_model=QueryResponse)
 async def query_ai(req: QueryRequest):
@@ -1111,13 +1346,78 @@ async def get_stats():
 
 
 @app.get("/reports")
-async def list_reports():
-    reports = _list_reports()
+async def list_reports(limit: int = 200):
+    safe_limit = max(1, min(limit, 1000))
+    reports = _list_reports(limit=safe_limit)
     return {
         "reports_dir": str(REPORTS_DIR),
         "count": len(reports),
         "reports": reports,
     }
+
+
+@app.post("/reports/send", response_model=SendReportEmailResponse)
+async def send_report_to_email(req: SendReportEmailRequest):
+    report_name = (req.report_name or "").strip()
+    if not report_name:
+        return SendReportEmailResponse(
+            status="error", report_name="", error="report_name is required."
+        )
+    if "/" in report_name or "\\" in report_name or ".." in report_name:
+        return SendReportEmailResponse(
+            status="error", report_name=report_name, error="Invalid report name."
+        )
+
+    report_path = REPORTS_DIR / report_name
+    if not report_path.exists() or not report_path.is_file():
+        return SendReportEmailResponse(
+            status="error", report_name=report_name, error="Report not found."
+        )
+
+    to_email = (req.to_email or os.getenv("SMTP_TO", "")).strip()
+    if not _looks_like_email(to_email):
+        return SendReportEmailResponse(
+            status="error",
+            report_name=report_name,
+            to_email=to_email or None,
+            error="Valid recipient email is required.",
+        )
+
+    default_title = Path(report_name).stem
+    subject = (req.subject or f"ClickUp Report - {default_title}").strip()
+    try:
+        await asyncio.to_thread(_send_report_via_smtp, report_path, to_email, subject)
+        return SendReportEmailResponse(
+            status="success",
+            report_name=report_name,
+            to_email=to_email,
+            subject=subject,
+        )
+    except Exception as exc:
+        return SendReportEmailResponse(
+            status="error",
+            report_name=report_name,
+            to_email=to_email,
+            subject=subject,
+            error=str(exc)[:220],
+        )
+
+
+@app.post("/render/pdf")
+async def render_pdf(req: RenderPdfRequest):
+    title = (req.title or "ClickUp Report").strip()
+    filename = (req.filename or f"{title}.pdf").strip()
+    safe_filename = re.sub(r"[^\w\-. ]+", "_", filename).replace(" ", "_")
+    if not safe_filename.lower().endswith(".pdf"):
+        safe_filename = f"{safe_filename}.pdf"
+    pdf_bytes = _markdown_to_pdf_bytes(req.markdown or "", title=title)
+    if not pdf_bytes:
+        raise HTTPException(status_code=500, detail="PDF rendering failed.")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 
 @app.get("/reports/latest")
@@ -1154,3 +1454,5 @@ if __name__ == "__main__":
     print("=" * 70)
 
     uvicorn.run(app, host="0.0.0.0", port=8003, log_level="info")
+
+

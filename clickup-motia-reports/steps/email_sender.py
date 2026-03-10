@@ -9,6 +9,7 @@ report is identical to what you see on the local page.
 import html
 import re
 import smtplib
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -372,6 +373,12 @@ def _build_combined_md(reports_markdown: List[dict], schedule_label: str) -> str
 # ---------------------------------------------------------------------------
 
 
+def _slugify_filename(value: str, fallback: str = "clickup_report") -> str:
+    clean = re.sub(r"[^\w\-. ]+", "_", (value or "").strip()).strip(" ._")
+    clean = clean.replace(" ", "_")
+    return clean or fallback
+
+
 def send_report_email(
     reports_markdown: List[dict],
     schedule_label: str,
@@ -380,6 +387,7 @@ def send_report_email(
     smtp_email: str,
     smtp_password: str,
     to_email: str,
+    pdf_render_base_url: str = "",
 ) -> dict:
     """
     Format and send the report email.
@@ -394,6 +402,12 @@ def send_report_email(
 
     html_body = _build_html_email(reports_markdown, schedule_label)
     md_content = _build_combined_md(reports_markdown, schedule_label)
+    report_base = _slugify_filename(
+        f"clickup_report_{schedule_label.lower()}_{date_str}",
+        fallback=f"clickup_report_{date_str}",
+    )
+    pdf_filename = f"{report_base}.pdf"
+    md_filename = f"{report_base}.md"
 
     msg = MIMEMultipart("mixed")
     msg["From"] = smtp_email
@@ -403,15 +417,37 @@ def send_report_email(
     # HTML body part
     msg.attach(MIMEText(html_body, "html"))
 
-    # .md attachment
-    md_filename = (
-        f"clickup_report_{schedule_label.lower().replace(' ', '_')}_{date_str}.md"
-    )
-    md_part = MIMEBase("application", "octet-stream")
-    md_part.set_payload(md_content.encode("utf-8"))
-    encoders.encode_base64(md_part)
-    md_part.add_header("Content-Disposition", f'attachment; filename="{md_filename}"')
-    msg.attach(md_part)
+    pdf_attached = False
+    if pdf_render_base_url:
+        try:
+            render_url = f"{pdf_render_base_url.rstrip('/')}/render/pdf"
+            render_resp = requests.post(
+                render_url,
+                json={
+                    "markdown": md_content,
+                    "title": f"ClickUp Report - {schedule_label}",
+                    "filename": pdf_filename,
+                },
+                timeout=90,
+            )
+            render_resp.raise_for_status()
+            pdf_part = MIMEBase("application", "pdf")
+            pdf_part.set_payload(render_resp.content)
+            encoders.encode_base64(pdf_part)
+            pdf_part.add_header(
+                "Content-Disposition", f'attachment; filename="{pdf_filename}"'
+            )
+            msg.attach(pdf_part)
+            pdf_attached = True
+        except Exception:
+            pdf_attached = False
+
+    if not pdf_attached:
+        md_part = MIMEBase("application", "octet-stream")
+        md_part.set_payload(md_content.encode("utf-8"))
+        encoders.encode_base64(md_part)
+        md_part.add_header("Content-Disposition", f'attachment; filename="{md_filename}"')
+        msg.attach(md_part)
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -423,6 +459,7 @@ def send_report_email(
             "to": to_email,
             "subject": msg["Subject"],
             "spaces_included": len(reports_markdown),
+            "attachment_type": "pdf" if pdf_attached else "md",
             "sent_at": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
         }
     except Exception as exc:

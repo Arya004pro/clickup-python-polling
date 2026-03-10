@@ -81,6 +81,12 @@ services:
       # For /report/space direct mode, use isolated clients to allow safe parallel jobs.
       - REPORT_DIRECT_ISOLATED_CLIENT=${REPORT_DIRECT_ISOLATED_CLIENT:-true}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      # SMTP for dashboard action: POST /reports/send
+      - SMTP_EMAIL=${SMTP_EMAIL}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_TO=${SMTP_TO:-}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
       - REPORTS_DIR=/app/reports
     volumes:
       - ./api_server.py:/app/api_server.py

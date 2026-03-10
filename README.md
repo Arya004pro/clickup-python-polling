@@ -31,6 +31,27 @@
 
 This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The MCP server runs as a persistent HTTP service and exposes **81 ClickUp tools** via SSE transport. The OpenRouter AI client connects to the server, discovers available tools, and calls them on demand using natural language.
 
+### Current Runtime (March 2026)
+
+- Docker-first stack with three active services:
+  - `mcp-server` (`:8001`)
+  - `api-server` (`:8003`)
+  - `motia-reports` (`:3111`)
+- Automated report generation uses **direct API mode** via `POST /report/space` (no chat round-trip required for scheduled reports).
+- Report email flow is:
+  - `report::generate` -> `report::send-email`
+- Supported dashboard/API endpoints currently include:
+  - `POST /query`
+  - `POST /report/space`
+  - `GET /status`, `GET /stats`, `GET /reports`, `GET /reports/latest`, `GET /reports/{name}`
+  - `POST /reports/send` (send a saved report email with PDF attachment)
+- Dashboard now includes:
+  - Query view for interactive prompts
+  - Reports view with pagination for large report history
+  - Per-report email action with optional recipient override (falls back to `SMTP_TO`)
+
+See `RUN_GUIDE.md` for exact run/trigger commands and troubleshooting aligned with the current setup.
+
 ### What is MCP?
 
 The Model Context Protocol (MCP) is an open standard that enables AI models to interact with external tools and data sources in a structured, secure way. This server exposes ClickUp-related tools; the AI client connects to the backend over HTTP/SSE, discovers all 81 available tools, and calls them automatically based on the user's query.
