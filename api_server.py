@@ -91,6 +91,9 @@ app = FastAPI(
 client = None
 client_ready = False
 client_connect_lock = asyncio.Lock()
+# The MCP SSE client (anyio cancel scopes) is NOT safe for concurrent use.
+# Serialise all /query requests behind this lock.
+query_lock = asyncio.Lock()
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", r"D:\reports"))
 
 
@@ -134,14 +137,15 @@ async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
 
     async with client_connect_lock:
         try:
-            if client is None or not reuse_existing:
-                client = AI_CLIENT_CLASS()
-            else:
+            # Always create a fresh instance so anyio TaskGroup cancel-scope state
+            # from a previous failed/cancelled connection is never reused.
+            old_client = client
+            client = AI_CLIENT_CLASS()
+            if old_client is not None:
                 try:
-                    await client.disconnect_mcp()
+                    await old_client.disconnect_mcp()
                 except Exception:
                     pass
-
             await client.connect_mcp()
             client_ready = True
             return True, ""
@@ -154,8 +158,8 @@ async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
 async def startup_event():
     _ensure_reports_dir()
 
-    max_retries = 5
-    retry_delay = 2
+    max_retries = 8
+    retry_delay = 3
     for attempt in range(max_retries):
         print(f"[Attempt {attempt + 1}/{max_retries}] Initializing AI client...")
         ok, err = await _connect_client(reuse_existing=False)
@@ -900,7 +904,14 @@ async def query_ai(req: QueryRequest):
         client_ready = False
 
     if not client_ready:
-        ok, err = await _connect_client(reuse_existing=True)
+        # The MCP server may have just restarted — retry a few times before failing.
+        ok, err = False, "not attempted"
+        for _attempt in range(4):
+            ok, err = await _connect_client(reuse_existing=True)
+            if ok:
+                break
+            if _attempt < 3:
+                await asyncio.sleep(3)
         if not ok:
             return QueryResponse(
                 status="error",
@@ -926,33 +937,34 @@ async def query_ai(req: QueryRequest):
         client.conversation = []
 
     before_saved = client.stats.reports_saved
-    try:
-        answer = await client.chat(req.question)
-        after_saved = client.stats.reports_saved
-        latest = _latest_report_path()
-        report_saved = after_saved > before_saved and latest is not None
-        report_file = latest.name if latest else None
-        report_url = f"/reports/{latest.name}" if latest else None
+    async with query_lock:
+        try:
+            answer = await client.chat(req.question)
+            after_saved = client.stats.reports_saved
+            latest = _latest_report_path()
+            report_saved = after_saved > before_saved and latest is not None
+            report_file = latest.name if latest else None
+            report_url = f"/reports/{latest.name}" if latest else None
 
-        return QueryResponse(
-            status="success",
-            question=req.question,
-            response=answer,
-            tokens_used={
-                "input": client.stats.total_input_tokens,
-                "output": client.stats.total_output_tokens,
-            },
-            report_saved=report_saved,
-            report_file=report_file,
-            report_download_url=report_url,
-        )
-    except Exception as exc:
-        client_ready = False
-        return QueryResponse(
-            status="error",
-            question=req.question,
-            error=f"Error: {str(exc)[:200]}",
-        )
+            return QueryResponse(
+                status="success",
+                question=req.question,
+                response=answer,
+                tokens_used={
+                    "input": client.stats.total_input_tokens,
+                    "output": client.stats.total_output_tokens,
+                },
+                report_saved=report_saved,
+                report_file=report_file,
+                report_download_url=report_url,
+            )
+        except Exception as exc:
+            client_ready = False
+            return QueryResponse(
+                status="error",
+                question=req.question,
+                error=f"Error: {str(exc)[:200]}",
+            )
 
 
 @app.get("/status")

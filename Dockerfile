@@ -32,9 +32,8 @@ ENV PATH=/root/.local/bin:$PATH \
 # Expose MCP server port
 EXPOSE 8001
 
-# Health check for MCP server
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=5 \
-    CMD curl -sS -m 3 -o /dev/null http://localhost:8001/ || exit 1
+# Health check disabled at image level; defined per-service in docker-compose.yml
+HEALTHCHECK NONE
 
 # Default to MCP server (can be overridden for AI client)
 CMD ["python", "-m", "clickup_mcp.server"]

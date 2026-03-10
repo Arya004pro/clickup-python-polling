@@ -24,20 +24,6 @@ services:
       - ./monitoring_config.json:/app/monitoring_config.json
       - ./project_map.json:/app/project_map.json
       - reports:/app/reports
-    develop:
-      watch:
-        - path: ./clickup_mcp
-          action: rebuild
-        - path: ./app
-          action: rebuild
-        - path: ./monitoring_config.json
-          action: rebuild
-        - path: ./project_map.json
-          action: rebuild
-        - path: ./requirements.txt
-          action: rebuild
-        - path: ./Dockerfile
-          action: rebuild
     networks:
       - clickup-net
     healthcheck:
@@ -46,6 +32,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    command:
+      - watchmedo
+      - auto-restart
+      # Only restart MCP server when its own Python sources change.
+      # Watching *.json or *.md caused both containers to restart during report runs.
+      - --patterns=*.py
+      - --directory=/app/clickup_mcp
+      - --recursive
+      - --ignore-patterns=*/__pycache__/*;*.pyc
+      - "--"
+      - python
+      - -m
+      - clickup_mcp.server
+    develop:
+      watch:
+        - path: ./requirements.txt
+          action: rebuild
+        - path: ./Dockerfile
+          action: rebuild
 
   # API Server - REST endpoint for browser queries
   api-server:
@@ -84,24 +89,34 @@ services:
     depends_on:
       mcp-server:
         condition: service_healthy
-    command: python api_server.py
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8003/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    command:
+      - watchmedo
+      - auto-restart
+      # Watch only the two Python files and system-prompt MDs directly in /app.
+      # No --recursive so *.py under clickup_mcp/ and *.md under reports/ never trigger a restart.
+      - --patterns=*.py;*.md
+      - --directory=/app
+      - --ignore-patterns=*/__pycache__/*;*.pyc
+      - "--"
+      - python
+      - api_server.py
     develop:
       watch:
-        - path: ./api_server.py
-          action: rebuild
-        - path: ./openrouter_client.py
-          action: rebuild
-        - path: ./openrouter_system_prompt.md
-          action: rebuild
-        - path: ./lm_studio_system_prompt.md
-          action: rebuild
         - path: ./requirements.txt
           action: rebuild
         - path: ./Dockerfile
           action: rebuild
 
   # AI Client (OpenRouter) - runs interactively
+  # Start manually with: docker compose --profile interactive up ai-client
   ai-client:
+    profiles: [interactive]
     build:
       context: .
       dockerfile: Dockerfile
@@ -138,12 +153,15 @@ services:
     develop:
       watch:
         - path: ./openrouter_client.py
-          action: rebuild
+          action: sync+restart
+          target: /app/openrouter_client.py
         - path: ./openrouter_system_prompt.md
-          action: rebuild
-        - path: ./lm_studio_system_prompt.md
-          action: rebuild
+          action: sync+restart
+          target: /app/openrouter_system_prompt.md
         - path: ./clickup_mcp
+          action: sync+restart
+          target: /app/clickup_mcp
+        - path: ./lm_studio_system_prompt.md
           action: rebuild
         - path: ./requirements.txt
           action: rebuild
@@ -169,10 +187,14 @@ services:
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
-      - REPORT_CONCURRENCY=${REPORT_CONCURRENCY:-2}
+      # Limit to 1 concurrent report so the api-server / MCP session is never hit by
+      # parallel requests, which can corrupt anyio TaskGroup internal state.
+      - REPORT_CONCURRENCY=1
       # Points to the api-server which uses OpenRouter + MCP to generate reports
       # identical to what is shown on the localhost web UI
       - API_SERVER_URL=http://api-server:8003
+      # Suppress noisy iii engine info/trace logs; use 'info' to re-enable
+      - RUST_LOG=${RUST_LOG:-warn}
     volumes:
       - ./clickup-motia-reports/steps:/app/steps
       - ./monitoring_config.json:/app/monitoring_config.json:ro
@@ -187,6 +209,9 @@ services:
         - path: ./clickup-motia-reports/steps
           action: sync+restart
           target: /app/steps
+        - path: ./monitoring_config.json
+          action: sync+restart
+          target: /app/monitoring_config.json
 
 volumes:
   reports:

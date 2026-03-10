@@ -525,6 +525,11 @@ class OpenRouterMCPClient:
             return raw
 
         except Exception as exc:
+            # CancelledError must never be swallowed — it means the request was
+            # cancelled (e.g. client disconnected or concurrent lock contention).
+            # Swallowing it causes anyio cancel-scope corruption across tasks.
+            if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)):
+                raise
             if is_mcp_connection_error(exc):
                 print(f"  {col(YELLOW, '!!')} MCP disconnected. Reconnecting...")
                 reconnect_attempts = 3
@@ -754,13 +759,16 @@ class OpenRouterMCPClient:
                     messages.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": raw}
                     )
+                    # Inform the LLM that client is handling polling – do NOT
+                    # let it call get_task_report_job_status itself (wastes tokens).
                     messages.append(
                         {
                             "role": "user",
                             "content": (
                                 f"Job {job_id} queued. Client is handling polling. "
-                                "Use get_task_report_job_result only when asked. "
-                                "Render formatted_output verbatim when delivered."
+                                "Do NOT call get_task_report_job_status or "
+                                "get_task_report_job_result yourself. "
+                                "Wait for the result to be delivered to you."
                             ),
                         }
                     )
@@ -773,7 +781,12 @@ class OpenRouterMCPClient:
                             {"role": "assistant", "content": formatted}
                         )
                         return formatted
-                    continue
+                    # smart_poll_job failed/timed out – return error immediately
+                    # instead of re-entering the LLM loop (which causes the model
+                    # to call get_task_report_job_status with hallucinated IDs).
+                    err_msg = f"Report job {job_id} did not complete within the timeout. No data available."
+                    self.conversation.append({"role": "assistant", "content": err_msg})
+                    return err_msg
 
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": raw})
 

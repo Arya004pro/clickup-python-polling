@@ -321,10 +321,7 @@ def run_mapping_maintenance_once() -> dict:
             return {"status": "skipped", "reason": "maintenance_already_running"}
         _maintenance_running = True
 
-    print(
-        f"[sync_mapping] Starting maintenance — {len(db.projects)} project(s) to refresh...",
-        flush=True,
-    )
+    _verbose = os.getenv("SYNC_MAPPING_VERBOSE", "").lower() in ("1", "true", "yes")
     try:
         refreshed = []
         failed = []
@@ -345,10 +342,11 @@ def run_mapping_maintenance_once() -> dict:
             result = _refresh_project_mapping(alias, project)
             if result.get("success"):
                 refreshed.append(result["alias"])
-                print(
-                    f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)",
-                    flush=True,
-                )
+                if _verbose:
+                    print(
+                        f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)",
+                        flush=True,
+                    )
             else:
                 failed.append(
                     {"alias": alias, "error": result.get("error", "unknown_error")}
@@ -400,14 +398,15 @@ def run_mapping_maintenance_once() -> dict:
         monitor_res = _sync_monitoring_config_list_ids()
         pruned = db.prune_expired_cache()
 
-        print(
-            f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
-            f"{len(auto_mapped)} new space(s) auto-mapped, "
-            f"{len(pruned_non_spaces)} non-space entries pruned, "
-            f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
-            f"{pruned} cache entries pruned.",
-            flush=True,
-        )
+        if _verbose or failed or auto_mapped or pruned_non_spaces:
+            print(
+                f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
+                f"{len(auto_mapped)} new space(s) auto-mapped, "
+                f"{len(pruned_non_spaces)} non-space entries pruned, "
+                f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
+                f"{pruned} cache entries pruned.",
+                flush=True,
+            )
 
         return {
             "status": "success",
@@ -457,10 +456,6 @@ def start_mapping_maintenance_scheduler(
     if run_on_startup:
 
         def _startup_sync():
-            print(
-                "[sync_mapping] Startup sync triggered — running in background...",
-                flush=True,
-            )
             run_mapping_maintenance_once()
 
         threading.Thread(target=_startup_sync, daemon=True).start()
