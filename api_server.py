@@ -104,24 +104,24 @@ def _ensure_reports_dir() -> None:
 def _list_reports(limit: int = 50) -> list[dict]:
     if not REPORTS_DIR.exists():
         return []
-    files = sorted(
-        REPORTS_DIR.glob("report_*.md"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    items = []
-    for p in files[:limit]:
-        st = p.stat()
-        items.append(
-            {
-                "name": p.name,
-                "size_bytes": st.st_size,
-                "modified": datetime.fromtimestamp(st.st_mtime).isoformat(
-                    timespec="seconds"
-                ),
-            }
-        )
-    return items
+    report_entries: list[tuple[Path, os.stat_result]] = []
+    for p in REPORTS_DIR.glob("report_*.md"):
+        try:
+            report_entries.append((p, p.stat()))
+        except OSError:
+            continue
+
+    report_entries.sort(key=lambda pair: pair[1].st_mtime, reverse=True)
+    return [
+        {
+            "name": p.name,
+            "size_bytes": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime).isoformat(
+                timespec="seconds"
+            ),
+        }
+        for p, st in report_entries[:limit]
+    ]
 
 
 def _latest_report_path() -> Optional[Path]:
@@ -1004,10 +1004,11 @@ async def get_stats():
 
 @app.get("/reports")
 async def list_reports():
+    reports = _list_reports()
     return {
         "reports_dir": str(REPORTS_DIR),
-        "count": len(_list_reports()),
-        "reports": _list_reports(),
+        "count": len(reports),
+        "reports": reports,
     }
 
 

@@ -203,16 +203,7 @@ services:
       - clickup-net
     depends_on:
       api-server:
-        condition: service_started
-    develop:
-      watch:
-        - path: ./clickup-motia-reports/steps
-          action: sync+restart
-          target: /app/steps
-        - path: ./monitoring_config.json
-          action: sync+restart
-          target: /app/monitoring_config.json
-
+        condition: service_healthy
 volumes:
   reports:
     driver: local
