@@ -28,6 +28,7 @@ import sys
 import time
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
@@ -72,14 +73,8 @@ def _ms_to_date_ist(ms: int, tz_offset_hours: float = 5.5) -> str:
 
 
 def _resolve_space_id(space_name: str) -> Optional[str]:
-    team_id = _get_team_id()
-    data, _ = _api_call("GET", f"/team/{team_id}/space")
-    if not data:
-        return None
-    for s in data.get("spaces", []):
-        if s["name"].lower() == space_name.lower():
-            return s["id"]
-    return None
+    # Uses cached team/space discovery in shared client.
+    return _client.resolve_space_id(space_name)
 
 
 def _resolve_space_lists(space_id: str) -> Dict[str, Dict]:
@@ -89,19 +84,30 @@ def _resolve_space_lists(space_id: str) -> Dict[str, Dict]:
     """
     projects: Dict[str, Dict] = {}
 
-    resp_f, _ = _api_call("GET", f"/space/{space_id}/folder")
-    for folder in (resp_f or {}).get("folders", []):
-        # Prefer live folder-list fetch to avoid stale embedded folder payloads.
-        lid_list: List[str] = []
-        live_lists, _ = _api_call("GET", f"/folder/{folder['id']}/list")
-        if live_lists and live_lists.get("lists"):
-            lid_list = [str(lst["id"]) for lst in live_lists.get("lists", [])]
-        else:
-            lid_list = [str(lst["id"]) for lst in folder.get("lists", [])]
-        if lid_list:
-            projects[folder["name"]] = {"type": "folder", "lists": lid_list}
+    resp_f, _ = _client.get(f"/space/{space_id}/folder", cache_ttl=300)
+    folders = (resp_f or {}).get("folders", [])
 
-    resp_l, _ = _api_call("GET", f"/space/{space_id}/list")
+    def _fetch_folder_lists(folder: Dict[str, Any]) -> Tuple[str, List[str]]:
+        live_lists, _ = _client.get(f"/folder/{folder['id']}/list", cache_ttl=300)
+        if live_lists and live_lists.get("lists"):
+            lids = [str(lst["id"]) for lst in live_lists.get("lists", [])]
+        else:
+            lids = [str(lst["id"]) for lst in folder.get("lists", [])]
+        return folder.get("name", "Unnamed"), lids
+
+    if folders:
+        workers = min(8, len(folders))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_fetch_folder_lists, f) for f in folders]
+            for fut in as_completed(futures):
+                try:
+                    folder_name, lid_list = fut.result()
+                    if lid_list:
+                        projects[folder_name] = {"type": "folder", "lists": lid_list}
+                except Exception:
+                    continue
+
+    resp_l, _ = _client.get(f"/space/{space_id}/list", cache_ttl=300)
     for lst in (resp_l or {}).get("lists", []):
         lname = lst["name"]
         if lname not in projects:
@@ -120,6 +126,32 @@ _MONITORING_CONFIG_PATH = _os.getenv(
     "MONITORING_CONFIG_PATH",
     _os.path.join(_os.path.dirname(__file__), "..", "monitoring_config.json"),
 )
+_MONITORING_CONFIG_CACHE: Dict[str, Any] = {"mtime": None, "data": None}
+_MONITORING_CACHE_LOCK = threading.Lock()
+
+
+def _load_monitoring_config() -> Optional[Dict[str, Any]]:
+    try:
+        mtime = _os.path.getmtime(_MONITORING_CONFIG_PATH)
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+        return None
+
+    with _MONITORING_CACHE_LOCK:
+        if (
+            _MONITORING_CONFIG_CACHE["data"] is not None
+            and _MONITORING_CONFIG_CACHE["mtime"] == mtime
+        ):
+            return _MONITORING_CONFIG_CACHE["data"]
+
+        try:
+            with open(_MONITORING_CONFIG_PATH, "r", encoding="utf-8") as _f:
+                parsed = _json.load(_f)
+        except _json.JSONDecodeError:
+            return None
+
+        _MONITORING_CONFIG_CACHE["mtime"] = mtime
+        _MONITORING_CONFIG_CACHE["data"] = parsed
+        return parsed
 
 
 def _split_monitored_scope(raw_name: str):
@@ -155,15 +187,9 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
     _name_lower = _name.lower()
     _is_monitored_scope, _monitored_target = _split_monitored_scope(_name)
 
-    try:
-        with open(_MONITORING_CONFIG_PATH, "r", encoding="utf-8") as _f:
-            _cfg = _json.load(_f)
-    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+    _cfg = _load_monitoring_config()
+    if _cfg is None:
         # Explicit monitored scopes should not silently broaden to full-space data.
-        if _name_lower == "monitored" or (_is_monitored_scope and _monitored_target):
-            return []
-        return None
-    except _json.JSONDecodeError:
         if _name_lower == "monitored" or (_is_monitored_scope and _monitored_target):
             return []
         return None
@@ -173,7 +199,7 @@ def _load_monitored_list_ids(project_name: str) -> Optional[List[str]]:
     def _collect_project_list_ids(_p: Dict[str, Any]) -> List[str]:
         _ids: List[str] = [str(_id) for _id in (_p.get("list_ids") or []) if _id]
         if _p.get("clickup_id") and _p.get("type") == "folder":
-            _resp, _ = _api_call("GET", f"/folder/{_p['clickup_id']}/list")
+            _resp, _ = _client.get(f"/folder/{_p['clickup_id']}/list", cache_ttl=300)
             _ids.extend(
                 [str(_l["id"]) for _l in (_resp or {}).get("lists", []) if _l.get("id")]
             )

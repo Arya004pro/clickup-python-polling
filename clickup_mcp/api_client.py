@@ -14,6 +14,7 @@ Key optimizations over raw requests calls:
 import time
 import threading
 import sys
+import os
 from typing import Dict, List, Optional, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -176,6 +177,15 @@ class ClickUpClient:
         self.limiter = RateLimiter(requests_per_minute=1000)
         self.cache = TTLCache()
         self._team_id = CLICKUP_TEAM_ID
+        self.time_entries_cache_ttl_s = max(
+            0, int(os.getenv("CLICKUP_TIME_ENTRIES_CACHE_TTL_S", "300"))
+        )
+        self.tasks_fetch_max_workers = max(
+            1, int(os.getenv("CLICKUP_TASK_FETCH_MAX_WORKERS", "10"))
+        )
+        self.time_entries_max_workers = max(
+            1, int(os.getenv("CLICKUP_TIME_ENTRIES_MAX_WORKERS", "60"))
+        )
 
     # ------------------------------------------------------------------
     # Core HTTP Methods
@@ -322,7 +332,7 @@ class ClickUpClient:
         list_ids: List[str],
         base_params: Dict = None,
         include_archived: bool = True,
-        max_workers: int = 10,
+        max_workers: Optional[int] = None,
     ) -> List[Dict]:
         """
         Fetch ALL tasks from multiple lists CONCURRENTLY with deduplication.
@@ -360,7 +370,7 @@ class ClickUpClient:
                     page += 1
             return local
 
-        workers = min(max_workers, len(list_ids))
+        workers = min(max_workers or self.tasks_fetch_max_workers, len(list_ids))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_fetch_one_list, lid): lid for lid in list_ids}
             for future in as_completed(futures):
@@ -381,7 +391,7 @@ class ClickUpClient:
     # ------------------------------------------------------------------
 
     def fetch_time_entries_batch(
-        self, task_ids: List[str], max_workers: int = 60
+        self, task_ids: List[str], max_workers: Optional[int] = None
     ) -> Dict[str, List]:
         """
         Per-task concurrent fetch with connection pooling.
@@ -391,15 +401,35 @@ class ClickUpClient:
         if not task_ids:
             return {}
 
-        total = len(task_ids)
-        workers = min(max_workers, total)  # capped at 60 by default
+        cache_ttl = self.time_entries_cache_ttl_s
+        cached_count = 0
+        ids_to_fetch: List[str] = []
         result: Dict[str, list] = {}
+        if cache_ttl > 0:
+            for tid in task_ids:
+                hit = self.cache.get(f"te:{tid}")
+                if hit is not None:
+                    result[tid] = hit
+                    cached_count += 1
+                else:
+                    ids_to_fetch.append(tid)
+        else:
+            ids_to_fetch = list(task_ids)
+
+        if not ids_to_fetch:
+            return result
+
+        total = len(ids_to_fetch)
+        workers = min(max_workers or self.time_entries_max_workers, total)
         processed = 0
         errors = 0
         t0 = time.time()
         log_every = max(100, total // 20)
 
-        print(f"\n⏳ Fetching time entries for {total:,} tasks (pooled connections)...")
+        print(
+            f"\n⏳ Fetching time entries for {len(task_ids):,} tasks "
+            f"(cache hits: {cached_count:,}, fetching: {total:,})..."
+        )
         print(f"🚀 {workers} concurrent workers (pool_maxsize=80)")
         sys.stdout.flush()
 
@@ -444,10 +474,12 @@ class ClickUpClient:
             return tid, [], "Max retries"
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_one, t) for t in task_ids]
+            futures = [executor.submit(_one, t) for t in ids_to_fetch]
             for f in as_completed(futures):
                 tid, entries, err = f.result()
                 result[tid] = entries
+                if err is None and cache_ttl > 0:
+                    self.cache.set(f"te:{tid}", entries, cache_ttl)
                 processed += 1
                 if err:
                     errors += 1

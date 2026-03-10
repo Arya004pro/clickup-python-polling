@@ -18,6 +18,10 @@ services:
       - CEREBRAS_API_KEY=${CEREBRAS_API_KEY:-}
       - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-}
       - REPORTS_DIR=/app/reports
+      # MCP fetch tuning (latency vs API pressure). Defaults are conservative.
+      - CLICKUP_TIME_ENTRIES_CACHE_TTL_S=${CLICKUP_TIME_ENTRIES_CACHE_TTL_S:-300}
+      - CLICKUP_TASK_FETCH_MAX_WORKERS=${CLICKUP_TASK_FETCH_MAX_WORKERS:-10}
+      - CLICKUP_TIME_ENTRIES_MAX_WORKERS=${CLICKUP_TIME_ENTRIES_MAX_WORKERS:-60}
     volumes:
       - ./clickup_mcp:/app/clickup_mcp
       - ./app:/app/app
