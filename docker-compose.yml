@@ -74,6 +74,8 @@ services:
       - OPENROUTER_APP_TITLE=${OPENROUTER_APP_TITLE:-ClickUp MCP}
       - TASK_REPORT_POLL_INTERVAL_S=${TASK_REPORT_POLL_INTERVAL_S:-1.5}
       - TASK_REPORT_POLL_TIMEOUT_S=${TASK_REPORT_POLL_TIMEOUT_S:-300}
+      # For /report/space direct mode, use isolated clients to allow safe parallel jobs.
+      - REPORT_DIRECT_ISOLATED_CLIENT=${REPORT_DIRECT_ISOLATED_CLIENT:-true}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - REPORTS_DIR=/app/reports
     volumes:
@@ -187,9 +189,11 @@ services:
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
-      # Limit to 1 concurrent report so the api-server / MCP session is never hit by
-      # parallel requests, which can corrupt anyio TaskGroup internal state.
-      - REPORT_CONCURRENCY=1
+      # Direct mode + isolated API clients allows safe parallel generation.
+      - REPORT_CONCURRENCY=${REPORT_CONCURRENCY:-2}
+      - REPORT_API_MODE=${REPORT_API_MODE:-direct}
+      # Disable support-ticket cron noise unless explicitly needed.
+      - SUPPORT_CRONS_ENABLED=${SUPPORT_CRONS_ENABLED:-false}
       # Points to the api-server which uses OpenRouter + MCP to generate reports
       # identical to what is shown on the localhost web UI
       - API_SERVER_URL=http://api-server:8003
@@ -204,6 +208,19 @@ services:
     depends_on:
       api-server:
         condition: service_healthy
+    develop:
+      watch:
+        # Rebuild motia image when dependency/runtime definition changes.
+        - path: ./Dockerfile.motia
+          action: rebuild
+        - path: ./clickup-motia-reports/pyproject.toml
+          action: rebuild
+        - path: ./clickup-motia-reports/uv.lock
+          action: rebuild
+        # Sync and restart container when iii engine config changes.
+        - path: ./clickup-motia-reports/iii-config.yaml
+          action: sync+restart
+          target: /app/iii-config.yaml
 volumes:
   reports:
     driver: local

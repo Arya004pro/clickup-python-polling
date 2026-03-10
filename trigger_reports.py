@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime
 
 import requests
@@ -63,6 +64,18 @@ def main() -> int:
         default=os.getenv("MOTIA_TRIGGER_URL", "http://localhost:3111/trigger-report"),
         help="Motia trigger endpoint",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=int(os.getenv("MOTIA_TRIGGER_RETRIES", "8")),
+        help="Retry attempts for transient connection/startup failures",
+    )
+    parser.add_argument(
+        "--retry-delay-s",
+        type=float,
+        default=float(os.getenv("MOTIA_TRIGGER_RETRY_DELAY_S", "2")),
+        help="Delay between retries in seconds",
+    )
     args = parser.parse_args()
 
     spaces = _load_spaces(include_aix=not args.no_aix)
@@ -81,9 +94,32 @@ def main() -> int:
     print(f"Label       : {label}")
     print(f"Spaces({len(spaces)}): {spaces}")
 
-    resp = requests.post(args.url, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    data = None
+    last_err: Exception | None = None
+    attempts = max(1, args.retries)
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.post(args.url, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.HTTPError,
+        ) as exc:
+            last_err = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"Trigger attempt {attempt}/{attempts} failed ({exc.__class__.__name__}). "
+                f"Retrying in {args.retry_delay_s}s..."
+            )
+            time.sleep(max(0.1, args.retry_delay_s))
+
+    if data is None:
+        raise RuntimeError(f"Trigger failed after {attempts} attempts: {last_err}")
+
     print("\nTrigger response:")
     print(json.dumps(data, indent=2))
     return 0

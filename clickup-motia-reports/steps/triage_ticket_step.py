@@ -4,6 +4,7 @@ Demonstrates a single step responding to three trigger types using ctx.match().
 """
 
 from datetime import datetime, timezone
+import os
 from typing import Any
 
 from motia import ApiRequest, ApiResponse, FlowContext, cron, http, queue
@@ -12,11 +13,18 @@ config = {
     "name": "TriageTicket",
     "description": "Multi-trigger: auto-triage from queue, manual triage via API, sweep via cron",
     "flows": ["support-ticket-flow"],
-    "triggers": [
-        queue("ticket::created"),
-        http("POST", "/tickets/triage"),
-        cron("0 */5 * * * * *"),
-    ],
+    "triggers": (
+        [
+            queue("ticket::created"),
+            http("POST", "/tickets/triage"),
+        ]
+        + (
+            []
+            if os.getenv("SUPPORT_CRONS_ENABLED", "false").strip().lower()
+            in {"0", "false", "no"}
+            else [cron("0 */5 * * * * *")]
+        )
+    ),
     "enqueues": ["ticket::triaged"],
 }
 

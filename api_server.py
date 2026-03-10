@@ -82,6 +82,21 @@ class QueryResponse(BaseModel):
     error: Optional[str] = None
 
 
+class SpaceReportRequest(BaseModel):
+    space_name: str
+    period_type: str = "today"
+    include_archived: bool = True
+
+
+class SpaceReportResponse(BaseModel):
+    status: str
+    space_name: str
+    period_type: str
+    response: Optional[str] = None
+    elapsed_s: Optional[float] = None
+    error: Optional[str] = None
+
+
 app = FastAPI(
     title="ClickUp MCP REST API",
     description="Query ClickUp via MCP + AI provider",
@@ -965,6 +980,99 @@ async def query_ai(req: QueryRequest):
                 question=req.question,
                 error=f"Error: {str(exc)[:200]}",
             )
+
+
+@app.post("/report/space", response_model=SpaceReportResponse)
+async def generate_space_report(req: SpaceReportRequest):
+    global client, client_ready
+
+    if client is None or getattr(client, "mcp_session", None) is None:
+        client_ready = False
+
+    if not client_ready:
+        ok, err = False, "not attempted"
+        for _attempt in range(4):
+            ok, err = await _connect_client(reuse_existing=True)
+            if ok:
+                break
+            if _attempt < 3:
+                await asyncio.sleep(3)
+        if not ok:
+            return SpaceReportResponse(
+                status="error",
+                space_name=req.space_name,
+                period_type=req.period_type,
+                error=f"Client still initializing. Retry shortly. Details: {err}",
+            )
+
+    if client is None:
+        return SpaceReportResponse(
+            status="error",
+            space_name=req.space_name,
+            period_type=req.period_type,
+            error="MCP client not ready. Please retry in a few seconds.",
+        )
+
+    started = asyncio.get_running_loop().time()
+    use_isolated_client = (
+        os.getenv("REPORT_DIRECT_ISOLATED_CLIENT", "true").strip().lower()
+        not in {"0", "false", "no"}
+    )
+
+    async def _run_with_client(active_client) -> Optional[str]:
+        return await active_client.generate_space_report_direct(
+            space_name=req.space_name,
+            period_type=req.period_type,
+            include_archived=req.include_archived,
+        )
+
+    try:
+        if use_isolated_client:
+            temp_client = AI_CLIENT_CLASS()
+            await temp_client.connect_mcp()
+            try:
+                report_text = await _run_with_client(temp_client)
+            finally:
+                try:
+                    await temp_client.disconnect_mcp()
+                except Exception:
+                    pass
+        else:
+            async with query_lock:
+                report_text = await _run_with_client(client)
+
+        elapsed = round(asyncio.get_running_loop().time() - started, 2)
+        if not report_text:
+            return SpaceReportResponse(
+                status="error",
+                space_name=req.space_name,
+                period_type=req.period_type,
+                elapsed_s=elapsed,
+                error="No report content returned.",
+            )
+        if report_text.startswith("Error:"):
+            return SpaceReportResponse(
+                status="error",
+                space_name=req.space_name,
+                period_type=req.period_type,
+                elapsed_s=elapsed,
+                error=report_text[6:].strip() or report_text,
+            )
+        return SpaceReportResponse(
+            status="success",
+            space_name=req.space_name,
+            period_type=req.period_type,
+            response=report_text,
+            elapsed_s=elapsed,
+        )
+    except Exception as exc:
+        client_ready = False
+        return SpaceReportResponse(
+            status="error",
+            space_name=req.space_name,
+            period_type=req.period_type,
+            error=f"Error: {str(exc)[:200]}",
+        )
 
 
 @app.get("/status")

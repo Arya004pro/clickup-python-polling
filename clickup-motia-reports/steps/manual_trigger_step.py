@@ -10,6 +10,8 @@ POST /trigger-report with optional body:
 """
 
 from typing import Any
+import time
+from datetime import datetime, timezone
 from motia import ApiRequest, ApiResponse, FlowContext, http
 
 
@@ -30,6 +32,8 @@ async def handler(request: ApiRequest[dict[str, Any]], ctx: FlowContext[Any]) ->
     period = body.get("period", "today")
     schedule_label = body.get("schedule_label", "Manual Test")
     spaces = body.get("spaces")
+    triggered_at_epoch_ms = int(time.time() * 1000)
+    triggered_at_iso = datetime.now(timezone.utc).isoformat()
 
     ctx.logger.info(
         f"Manual trigger - period={period}, label={schedule_label}, spaces={spaces or 'ALL'}"
@@ -42,6 +46,9 @@ async def handler(request: ApiRequest[dict[str, Any]], ctx: FlowContext[Any]) ->
                 "period": period,
                 "schedule_label": schedule_label,
                 "spaces": spaces,
+                "trigger_source": "manual",
+                "triggered_at_epoch_ms": triggered_at_epoch_ms,
+                "triggered_at_iso": triggered_at_iso,
             },
         }
     )
@@ -53,6 +60,7 @@ async def handler(request: ApiRequest[dict[str, Any]], ctx: FlowContext[Any]) ->
             "period": period,
             "schedule_label": schedule_label,
             "spaces": spaces or "ALL",
+            "triggered_at": triggered_at_iso,
             "message": "Report generation enqueued. Check logs for progress.",
         },
     )

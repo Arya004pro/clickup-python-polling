@@ -694,6 +694,51 @@ class OpenRouterMCPClient:
         print(f"  {col(YELLOW, '!!')} Result fetched but no formatted_output found.")
         return raw_result or None
 
+    async def generate_space_report_direct(
+        self,
+        space_name: str,
+        period_type: str = "today",
+        include_archived: bool = True,
+    ) -> str | None:
+        """
+        Fast path for scheduled report generation.
+        Calls MCP report tool directly (no LLM round-trip), then smart-polls async jobs.
+        """
+        query_text = f"Generate a space task report for {space_name} for {period_type}"
+        args = {
+            "space_name": space_name,
+            "period_type": period_type,
+            "include_archived": include_archived,
+            "async_job": True,
+        }
+        raw = await self.call_mcp_tool("get_space_task_report", args)
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = {}
+
+        if isinstance(parsed, dict):
+            formatted = find_in_json(parsed, "formatted_output")
+            if formatted:
+                save_report(formatted, self.stats, query_text=query_text)
+                return formatted
+
+            job_id = find_in_json(parsed, "job_id")
+            if job_id:
+                return await self.smart_poll_job(
+                    str(job_id), messages=[], query_text=query_text
+                )
+
+            err = find_in_json(parsed, "error")
+            if err:
+                return f"Error: {err}"
+
+        if raw and len(raw) > 200:
+            save_report(raw, self.stats, query_text=query_text)
+            return raw
+        return None
+
     async def chat(self, user_message):
         self.conversation.append({"role": "user", "content": user_message})
         messages = [

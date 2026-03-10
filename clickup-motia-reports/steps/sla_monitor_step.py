@@ -1,5 +1,6 @@
 """SLA Monitor Step - cron job that checks for SLA breaches on open tickets."""
 
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,9 +17,10 @@ config = {
     "name": "SlaMonitor",
     "description": "Cron job that checks for SLA breaches on open tickets",
     "flows": ["support-ticket-flow"],
-    "triggers": [
-        cron("0/30 * * * * *"),
-    ],
+    "triggers": []
+    if os.getenv("SUPPORT_CRONS_ENABLED", "false").strip().lower()
+    in {"0", "false", "no"}
+    else [cron("0/30 * * * * *")],
     "enqueues": ["ticket::sla-breached"],
 }
 

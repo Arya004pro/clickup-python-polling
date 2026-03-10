@@ -1,6 +1,9 @@
-"""Cron Report Trigger — 6:00 PM IST (12:30 PM UTC). Sends today's EOD report."""
+"""Cron Report Trigger - 6:00 PM IST (12:30 PM UTC). Sends today's EOD report."""
 
+import time
+from datetime import datetime, timezone
 from typing import Any
+
 from motia import FlowContext, cron
 
 config = {
@@ -13,10 +16,18 @@ config = {
 
 
 async def handler(input_data: None, ctx: FlowContext[Any]) -> None:
-    ctx.logger.info("Cron 6PM triggered — generating today's EOD report")
+    triggered_at_epoch_ms = int(time.time() * 1000)
+    triggered_at_iso = datetime.now(timezone.utc).isoformat()
+    ctx.logger.info("Cron 6PM triggered - generating today's EOD report")
     await ctx.enqueue(
         {
             "topic": "report::generate",
-            "data": {"period": "today", "schedule_label": "6PM Today"},
+            "data": {
+                "period": "today",
+                "schedule_label": "6PM Today",
+                "trigger_source": "cron_6pm",
+                "triggered_at_epoch_ms": triggered_at_epoch_ms,
+                "triggered_at_iso": triggered_at_iso,
+            },
         }
     )
