@@ -1,0 +1,39 @@
+# Custom .dockerignore for Dockerfile.pm
+# Same as .dockerignore but intentionally INCLUDES:
+#   monitoring_config.json  (baked into PM image)
+#   project_map.json        (baked into PM image)
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+.env.example
+.git
+.gitignore
+.github/
+.vscode/
+.idea/
+*.log
+.DS_Store
+myenv/
+venv/
+.jobs_cache.json
+node_modules/
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite
+*.db
+tree-viewer.html
+README.md
+lm_studio_system_prompt.md
+monitoring_config.example.json
+project_map.example.json
+.dockerignore
+Dockerfile
+docker-compose.yml

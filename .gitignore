@@ -7,3 +7,6 @@ __pycache__/
 project_map.json
 monitoring_config.json
 .jobs_cache.json
+
+# PM deployment file — contains real API keys hardcoded, never commit
+docker-compose.pm.yml

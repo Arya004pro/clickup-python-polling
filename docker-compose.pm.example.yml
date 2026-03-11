@@ -1,0 +1,117 @@
+# ============================================================
+# ClickUp MCP — PROJECT MANAGER COMPOSE FILE (EXAMPLE)
+# ============================================================
+# This is the TEMPLATE file. The real file (docker-compose.pm.yml)
+# is gitignored because it contains real API keys.
+#
+# To use:
+#   1. Copy this file → docker-compose.pm.yml
+#   2. Fill in all FILL_YOUR_..._HERE values
+#   3. Run: docker compose -f docker-compose.pm.yml up
+# ============================================================
+
+services:
+
+  mcp-server:
+    image: arya004/clickup-mcp-pm:latest
+    container_name: clickup-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Kolkata
+      - CLICKUP_API_TOKEN=FILL_YOUR_CLICKUP_TOKEN_HERE
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
+      - CLICKUP_TEAM_ID=FILL_YOUR_TEAM_ID_HERE
+      - REPORTS_DIR=/app/reports
+    volumes:
+      - reports:/app/reports
+    networks:
+      - clickup-net
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8001/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    command:
+      - python
+      - -m
+      - clickup_mcp.server
+
+  api-server:
+    image: arya004/clickup-mcp-pm:latest
+    container_name: clickup-api-server
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Kolkata
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
+      - CLICKUP_API_TOKEN=FILL_YOUR_CLICKUP_TOKEN_HERE
+      - OPENROUTER_API_KEY=FILL_YOUR_OPENROUTER_KEY_HERE
+      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+      - OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
+      - OPENROUTER_MODEL_CHAIN=
+      - SMTP_EMAIL=FILL_YOUR_GMAIL_HERE
+      - SMTP_PASSWORD=FILL_YOUR_GMAIL_APP_PASSWORD_HERE
+      - SMTP_TO=FILL_RECIPIENT_EMAIL_HERE
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - REPORTS_DIR=/app/reports
+    volumes:
+      - reports:/app/reports
+    networks:
+      - clickup-net
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8003/ || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    command:
+      - python
+      - api_server.py
+
+  motia-reports:
+    image: arya004/clickup-motia:latest
+    container_name: clickup-motia-reports
+    restart: unless-stopped
+    ports:
+      - "3111:3111"
+    environment:
+      - PYTHONPATH=/app
+      - TZ=Asia/Kolkata
+      - CLICKUP_API_TOKEN=FILL_YOUR_CLICKUP_TOKEN_HERE
+      - CLICKUP_TEAM_ID=FILL_YOUR_TEAM_ID_HERE
+      - SMTP_EMAIL=FILL_YOUR_GMAIL_HERE
+      - SMTP_PASSWORD=FILL_YOUR_GMAIL_APP_PASSWORD_HERE
+      - SMTP_TO=FILL_RECIPIENT_EMAIL_HERE
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - API_SERVER_URL=http://api-server:8003
+      - REPORT_CONCURRENCY=2
+      - REPORT_API_MODE=direct
+      - RUST_LOG=warn
+    volumes:
+      - motia-data:/app/data
+    networks:
+      - clickup-net
+    depends_on:
+      api-server:
+        condition: service_healthy
+
+volumes:
+  reports:
+    driver: local
+  motia-data:
+    driver: local
+
+networks:
+  clickup-net:
+    driver: bridge
