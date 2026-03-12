@@ -51,6 +51,9 @@ services:
       - clickup_mcp.server
     develop:
       watch:
+        - path: ./clickup_mcp
+          action: sync+restart
+          target: /app/clickup_mcp
         - path: ./requirements.txt
           action: rebuild
         - path: ./Dockerfile
