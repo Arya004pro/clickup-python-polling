@@ -98,6 +98,9 @@ class SpaceReportRequest(BaseModel):
     space_name: str
     period_type: str = "today"
     include_archived: bool = True
+    schedule_label: Optional[str] = None
+    custom_start: Optional[str] = None
+    custom_end: Optional[str] = None
 
 
 class SpaceReportResponse(BaseModel):
@@ -1259,6 +1262,9 @@ async def generate_space_report(req: SpaceReportRequest):
             space_name=req.space_name,
             period_type=req.period_type,
             include_archived=req.include_archived,
+            schedule_label=req.schedule_label,
+            custom_start=req.custom_start,
+            custom_end=req.custom_end,
         )
 
     try:

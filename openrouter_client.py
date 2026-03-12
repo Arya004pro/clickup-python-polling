@@ -347,7 +347,7 @@ def _slugify(text: str, fallback: str = "na", max_len: int = 40) -> str:
 
 
 def _extract_report_name_parts(
-    content: str, query_text: str = ""
+    content: str, query_text: str = "", schedule_label: str = ""
 ) -> tuple[str, str, str]:
     kind = "generic"
     entity = _slugify(query_text, fallback="query", max_len=44)
@@ -379,17 +379,22 @@ def _extract_report_name_parts(
     )
     if period_match:
         period = _slugify(period_match.group(1), fallback="period-na", max_len=36)
+        
+    if schedule_label:
+        label_slug = _slugify(schedule_label, fallback="", max_len=20)
+        if label_slug:
+            kind = f"{label_slug}_{kind}"
 
     return kind, entity, period
 
 
-def save_report(content: str, stats: SessionStats, query_text: str = "") -> str:
+def save_report(content: str, stats: SessionStats, query_text: str = "", schedule_label: str = "") -> str:
     REPORTS_DIR.mkdir(exist_ok=True)
     import datetime as _dt
 
     _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
     timestamp = _dt.datetime.now(_IST).strftime("%Y-%m-%d_%H-%M-%S")
-    kind, entity, period = _extract_report_name_parts(content, query_text=query_text)
+    kind, entity, period = _extract_report_name_parts(content, query_text=query_text, schedule_label=schedule_label)
     base_name = f"report_{kind}_{entity}_{period}_{timestamp}"
     report_file = REPORTS_DIR / f"{base_name}.md"
     suffix = 1
@@ -398,6 +403,11 @@ def save_report(content: str, stats: SessionStats, query_text: str = "") -> str:
         suffix += 1
     report_file.write_text(content, encoding="utf-8")
     stats.reports_saved += 1
+    try:
+        import reports_supabase
+        reports_supabase.upsert_report(report_file.name, content)
+    except Exception as e:
+        print(f"[{col(YELLOW, 'WARNING')}] Database sync skipped: {e}")
     return str(report_file)
 
 
@@ -584,7 +594,7 @@ class OpenRouterMCPClient:
                     "OpenRouter quota/rate limit reached for all configured models."
                 ) from exc
 
-    async def smart_poll_job(self, job_id: str, messages: list, query_text: str = ""):
+    async def smart_poll_job(self, job_id: str, messages: list, query_text: str = "", schedule_label: str = ""):
         short_id = job_id[:20] + "..."
         started_at = time.time()
 
@@ -633,7 +643,7 @@ class OpenRouterMCPClient:
                 if isinstance(parsed, dict):
                     fo = parsed.get("formatted_output")
                     if fo:
-                        path = save_report(fo, self.stats, query_text=query_text)
+                        path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
                         total_wait = int(time.time() - started_at)
                         print(
                             f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -644,7 +654,7 @@ class OpenRouterMCPClient:
                     if isinstance(status_result, dict):
                         fo = status_result.get("formatted_output")
                         if fo:
-                            path = save_report(fo, self.stats, query_text=query_text)
+                            path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
                             total_wait = int(time.time() - started_at)
                             print(
                                 f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -675,7 +685,7 @@ class OpenRouterMCPClient:
             parsed = json.loads(raw_result)
             fo = find_in_json(parsed, "formatted_output")
             if fo:
-                path = save_report(fo, self.stats, query_text=query_text)
+                path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
                 total_wait = int(time.time() - started_at)
                 print(
                     f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -684,7 +694,7 @@ class OpenRouterMCPClient:
                 return fo
         except json.JSONDecodeError:
             if len(raw_result) > 200:
-                path = save_report(raw_result, self.stats, query_text=query_text)
+                path = save_report(raw_result, self.stats, query_text=query_text, schedule_label=schedule_label)
                 print(
                     f"  {col(GREEN, 'OK')} Result received. "
                     f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n"
@@ -699,17 +709,25 @@ class OpenRouterMCPClient:
         space_name: str,
         period_type: str = "today",
         include_archived: bool = True,
+        schedule_label: str = "",
+        custom_start: str | None = None,
+        custom_end: str | None = None,
     ) -> str | None:
         """
         Fast path for scheduled report generation.
         Calls MCP report tool directly (no LLM round-trip), then smart-polls async jobs.
         """
         query_text = f"Generate a space task report for {space_name} for {period_type}"
+        if period_type == "custom" and custom_start and custom_end:
+            query_text += f" ({custom_start} to {custom_end})"
+            
         args = {
             "space_name": space_name,
             "period_type": period_type,
             "include_archived": include_archived,
             "async_job": True,
+            "custom_start": custom_start,
+            "custom_end": custom_end,
         }
         raw = await self.call_mcp_tool("get_space_task_report", args)
 
@@ -721,13 +739,13 @@ class OpenRouterMCPClient:
         if isinstance(parsed, dict):
             formatted = find_in_json(parsed, "formatted_output")
             if formatted:
-                save_report(formatted, self.stats, query_text=query_text)
+                save_report(formatted, self.stats, query_text=query_text, schedule_label=schedule_label)
                 return formatted
 
             job_id = find_in_json(parsed, "job_id")
             if job_id:
                 return await self.smart_poll_job(
-                    str(job_id), messages=[], query_text=query_text
+                    str(job_id), messages=[], query_text=query_text, schedule_label=schedule_label
                 )
 
             err = find_in_json(parsed, "error")
@@ -735,7 +753,7 @@ class OpenRouterMCPClient:
                 return f"Error: {err}"
 
         if raw and len(raw) > 200:
-            save_report(raw, self.stats, query_text=query_text)
+            save_report(raw, self.stats, query_text=query_text, schedule_label=schedule_label)
             return raw
         return None
 

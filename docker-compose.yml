@@ -84,6 +84,7 @@ services:
       # For /report/space direct mode, use isolated clients to allow safe parallel jobs.
       - REPORT_DIRECT_ISOLATED_CLIENT=${REPORT_DIRECT_ISOLATED_CLIENT:-true}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      - DATABASE_URL=${DATABASE_URL:-}
       # SMTP for dashboard action: POST /reports/send
       - SMTP_EMAIL=${SMTP_EMAIL}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
@@ -96,6 +97,7 @@ services:
       - ./openrouter_client.py:/app/openrouter_client.py
       - ./openrouter_system_prompt.md:/app/openrouter_system_prompt.md
       - ./lm_studio_system_prompt.md:/app/lm_studio_system_prompt.md
+      - ./reports_supabase.py:/app/reports_supabase.py
       - ./clickup_mcp:/app/clickup_mcp
       - ./app:/app/app
       - reports:/app/reports

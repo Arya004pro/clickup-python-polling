@@ -46,6 +46,7 @@ def main() -> int:
             "last_week",
             "this_month",
             "last_month",
+            "custom",
         ],
         help="Report period",
     )
@@ -58,6 +59,16 @@ def main() -> int:
         "--label",
         default="",
         help="Optional schedule label override",
+    )
+    parser.add_argument(
+        "--custom-start",
+        default="",
+        help="Custom start date (YYYY-MM-DD), required if period is custom",
+    )
+    parser.add_argument(
+        "--custom-end",
+        default="",
+        help="Custom end date (YYYY-MM-DD), required if period is custom",
     )
     parser.add_argument(
         "--url",
@@ -88,6 +99,13 @@ def main() -> int:
         or f"Manual {args.period} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
     payload = {"period": args.period, "schedule_label": label, "spaces": spaces}
+    
+    if args.period == "custom":
+        if not args.custom_start or not args.custom_end:
+            print("Error: --custom-start and --custom-end are required when --period is custom")
+            return 1
+        payload["custom_start"] = args.custom_start
+        payload["custom_end"] = args.custom_end
 
     print(f"Trigger URL : {args.url}")
     print(f"Period      : {args.period}")

@@ -49,6 +49,9 @@ def _call_api_server_sync(
     period: str,
     timeout_s: int = 360,
     use_direct_endpoint: bool = True,
+    schedule_label: str = "",
+    custom_start: str = "",
+    custom_end: str = "",
 ) -> dict:
     """
     Synchronous POST to api-server endpoint for report generation.
@@ -63,6 +66,9 @@ def _call_api_server_sync(
                     "space_name": space_name,
                     "period_type": period,
                     "include_archived": True,
+                    "schedule_label": schedule_label,
+                    "custom_start": custom_start or None,
+                    "custom_end": custom_end or None,
                 },
                 timeout=timeout_s,
             )
@@ -100,6 +106,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
     period = input_data.get("period", "today")
     schedule_label = input_data.get("schedule_label", "Report")
+    custom_start = input_data.get("custom_start", "")
+    custom_end = input_data.get("custom_end", "")
     trigger_epoch_ms = int(input_data.get("triggered_at_epoch_ms") or time.time() * 1000)
     trigger_source = str(input_data.get("trigger_source") or "unknown")
     trigger_iso = str(
@@ -191,6 +199,9 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 period,
                 360,
                 use_direct_endpoint,
+                schedule_label,
+                custom_start,
+                custom_end,
             )
         elapsed_s = round(time.perf_counter() - started_at, 2)
 
