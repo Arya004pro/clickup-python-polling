@@ -44,6 +44,7 @@ from .status_helpers import (
     filter_time_entries_by_user_and_date_range,
     parse_time_period_filter,
     get_workspace_members,
+    resolve_assignee_name_to_id,
 )
 from .pm_analytics import (
     _api_call,
@@ -1065,7 +1066,7 @@ def register_task_report_tools(mcp: FastMCP):
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
             # No date params: ClickUp drops manual (empty-intervals) entries from
             # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
-            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
+            entries_map = _fetch_time_entries_smart([t["id"] for t in timed], start_ms, end_ms)
             metrics = _calculate_task_metrics(all_tasks)
 
             # Build per-member report with task detail
@@ -1378,7 +1379,14 @@ def register_task_report_tools(mcp: FastMCP):
                     else space_name
                 )
             else:
-                return {"error": "Provide either project_name or space_name"}
+                # Entire workspace
+                team_id = _get_team_id()
+                data, _ = _api_call("GET", f"/team/{team_id}/space")
+                list_ids = []
+                for s in (data or {}).get("spaces", []):
+                    pm = _resolve_space_lists(s["id"])
+                    list_ids += [lid for pdata in pm.values() for lid in pdata["lists"]]
+                scope = "entire workspace"
 
             if not list_ids:
                 return {"error": f"No lists found for scope '{scope}'"}
@@ -1394,56 +1402,133 @@ def register_task_report_tools(mcp: FastMCP):
                 }
 
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
-            # No date params: ClickUp drops manual (empty-intervals) entries from
-            # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
-            entries_map = _fetch_time_entries_smart([t["id"] for t in timed])
-            metrics = _calculate_task_metrics(all_tasks)
+            # =========================================================
+            # SINGLE MEMBER MODE
+            # Uses GET /team/{team_id}/time_entries?assignee=X&start_date=Y&end_date=Z
+            # = 1 API call instead of fetching all workspace tasks + N per-task calls.
+            # =========================================================
 
+            # Step 1: Resolve member name → user_id
             member_lower = member_name.lower()
+            user_id = resolve_assignee_name_to_id(member_name)
+            if not user_id:
+                # Fuzzy fallback: partial match against all workspace members
+                members_data = get_workspace_members()
+                for m in members_data.get("members", []):
+                    uname = (m.get("username") or "").lower()
+                    email = (m.get("email") or "").lower()
+                    if member_lower in uname or member_lower in email:
+                        user_id = m["id"]
+                        member_name = m.get("username", member_name)
+                        break
+
+            if not user_id:
+                return {
+                    "member_name": member_name,
+                    "period": f"{start_date} to {end_date}",
+                    "message": f"Member '{member_name}' not found in workspace.",
+                }
+
+            print(f"[DEBUG] Resolved '{member_name}' → user_id={user_id}")
+            sys.stdout.flush()
+
+            # Step 2: ONE API call — all time entries for this user in date range
+            team_id = _get_team_id()
+            entries_resp, entries_err = _api_call(
+                "GET",
+                f"/team/{team_id}/time_entries",
+                params={
+                    "start_date": str(start_ms),
+                    "end_date": str(end_ms),
+                    "assignee": str(user_id),
+                },
+            )
+            if entries_err or not entries_resp:
+                return {"error": f"Failed to fetch time entries: {entries_err}"}
+
+            raw_entries = entries_resp.get("data", [])
+            print(f"[DEBUG] Team time entries API: {len(raw_entries)} entries for {member_name}")
+            sys.stdout.flush()
+
+            # Step 3: Build task_id → tracked_ms from intervals
+            task_tracked: Dict[str, int] = {}
+            task_days_map: Dict[str, set] = {}
+            seen_fps: set = set()
             total_ms = 0
-            total_est_ms = 0
-            task_list = []
-            days_active = set()
 
-            for task in all_tasks:
-                task_id = task["id"]
-                user_time = filter_time_entries_by_user_and_date_range(
-                    entries_map.get(task_id, []), start_ms, end_ms
-                )
-
-                # Match member (case-insensitive, partial)
-                matched_ms = 0
-                for uname, t_ms in user_time.items():
-                    if member_lower in uname.lower():
-                        matched_ms += t_ms
-
-                if matched_ms == 0:
+            for entry in raw_entries:
+                task_obj = entry.get("task") or {}
+                task_id = task_obj.get("id")
+                if not task_id:
                     continue
 
-                total_ms += matched_ms
-                est = metrics.get(task_id, {}).get("est_direct", 0)
-                total_est_ms += est
-
-                # Collect which days the work happened (from raw intervals)
-                raw_entries = entries_map.get(task_id, [])
-                for entry in raw_entries:
-                    uname = (entry.get("user") or {}).get("username", "")
-                    if member_lower not in uname.lower():
-                        continue
-                    for iv in entry.get("intervals", []):
+                intervals = entry.get("intervals", []) or []
+                if intervals:
+                    for iv in intervals:
                         iv_start = int(iv.get("start") or 0)
-                        if start_ms <= iv_start <= end_ms:
-                            days_active.add(_ms_to_date_ist(iv_start))
+                        if not (start_ms <= iv_start <= end_ms):
+                            continue
+                        iv_end = int(iv.get("end") or 0)
+                        iv_time = int(iv.get("time") or 0)
+                        if iv_time <= 0:
+                            iv_time = iv_end - iv_start if iv_end > iv_start else 0
+                        if iv_time <= 0:
+                            continue
+                        iv_id = iv.get("id")
+                        fp = f"id:{iv_id}" if iv_id else f"t:{iv_start}:{iv_end}:{iv_time}"
+                        if fp in seen_fps:
+                            continue
+                        seen_fps.add(fp)
+                        task_tracked[task_id] = task_tracked.get(task_id, 0) + iv_time
+                        task_days_map.setdefault(task_id, set()).add(_ms_to_date_ist(iv_start))
+                        total_ms += iv_time
+                else:
+                    # No intervals — use entry-level fields
+                    e_start = int(entry.get("start") or 0)
+                    e_duration = int(entry.get("duration") or 0)
+                    if e_duration > 0 and start_ms <= e_start <= end_ms:
+                        fp = f"entry:{entry.get('id', e_start)}"
+                        if fp not in seen_fps:
+                            seen_fps.add(fp)
+                            task_tracked[task_id] = task_tracked.get(task_id, 0) + e_duration
+                            task_days_map.setdefault(task_id, set()).add(_ms_to_date_ist(e_start))
+                            total_ms += e_duration
 
-                task_list.append(
-                    {
-                        "task_name": task.get("name", "Unnamed"),
-                        "status": _extract_status_name(task),
-                        "time_tracked": _format_duration(matched_ms),
-                        "time_estimate": _format_duration(est),
-                        "time_tracked_ms": matched_ms,
-                    }
-                )
+            # Step 4: Fetch task details only for tasks with tracked time (small set)
+            task_details: Dict[str, Dict] = {}
+            if task_tracked:
+                def _fetch_task_detail(tid: str):
+                    data, _ = _api_call("GET", f"/task/{tid}")
+                    return tid, data
+
+                with ThreadPoolExecutor(max_workers=min(20, len(task_tracked))) as pool:
+                    futures = {pool.submit(_fetch_task_detail, tid): tid for tid in task_tracked}
+                    for fut in as_completed(futures):
+                        try:
+                            tid, data = fut.result()
+                            if data:
+                                task_details[tid] = data
+                        except Exception:
+                            pass
+
+            # Step 5: Build output
+            days_active: set = set()
+            for d in task_days_map.values():
+                days_active.update(d)
+
+            total_est_ms = 0
+            task_list = []
+            for tid, tracked_ms in task_tracked.items():
+                task_data = task_details.get(tid, {})
+                est = int(task_data.get("time_estimate") or 0)
+                total_est_ms += est
+                task_list.append({
+                    "task_name": task_data.get("name", f"Task {tid}"),
+                    "status": _extract_status_name(task_data) if task_data else "unknown",
+                    "time_tracked": _format_duration(tracked_ms),
+                    "time_estimate": _format_duration(est),
+                    "time_tracked_ms": tracked_ms,
+                })
 
             task_list.sort(key=lambda x: x.pop("time_tracked_ms"), reverse=True)
 
