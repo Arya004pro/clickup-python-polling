@@ -1,9 +1,7 @@
-"""
-Send Email Step - queue-triggered, formats and sends the report email.
+"""Send Email Step - queue-triggered, formats and sends the report email.
 
-Receives OpenRouter-generated markdown reports from the generate step, builds
-an HTML email (same styling as localhost page) with a combined .md attachment,
-and sends via Gmail SMTP.
+Receives markdown reports from the generate step, builds
+an HTML email with attachment(s), and sends via SMTP.
 """
 
 import asyncio
@@ -16,7 +14,7 @@ from motia import FlowContext, queue
 
 config = {
     "name": "SendReportEmail",
-    "description": "Renders OpenRouter markdown reports as HTML email + .md attachment and sends via SMTP",
+    "description": "Renders markdown reports as HTML email + attachments and sends via SMTP",
     "flows": ["clickup-daily-reports"],
     "triggers": [
         queue("report::send-email"),
@@ -54,14 +52,13 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         )
         return
 
-    ok_count = sum(
-        1 for r in reports_markdown if not r.get("error") and r.get("markdown")
-    )
+    ok_count = sum(1 for r in reports_markdown if not r.get("error") and r.get("markdown"))
     err_count = sum(1 for r in reports_markdown if r.get("error"))
     ctx.logger.info(
         f"Sending email - {len(reports_markdown)} spaces "
         f"({ok_count} OK, {err_count} errors), label={schedule_label}"
     )
+
     if timing_meta:
         trigger_iso = timing_meta.get("triggered_at_iso", "unknown")
         trigger_source = timing_meta.get("trigger_source", "unknown")
@@ -79,8 +76,12 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         else _MANUAL_EMAIL_DEDUP_WINDOW_S
     )
     dedup_period = str(timing_meta.get("period") or period or "unknown")
-    dedup_key = f"{schedule_label}::{dedup_period}::{'cron' if trigger_source.startswith('cron') else 'manual'}"
+    dedup_key = (
+        f"{schedule_label}::{dedup_period}::"
+        f"{'cron' if trigger_source.startswith('cron') else 'manual'}"
+    )
     now_ts = time.time()
+
     async with _EMAIL_DEDUP_LOCK:
         last_sent = await ctx.state.get("report_email_last_sent", dedup_key)
         if last_sent is not None:
@@ -104,8 +105,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         pdf_render_base_url=API_SERVER_URL,
     )
 
-    if result["status"] == "sent":
-        ctx.logger.info(f"[OK] Email sent to {result['to']} - {result['subject']}")
+    if result.get("status") == "sent":
+        ctx.logger.info(f"[OK] Email sent to {result.get('to')} - {result.get('subject')}")
     else:
         ctx.logger.error(f"[FAIL] Email failed: {result.get('error')}")
 
@@ -140,4 +141,5 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         "end_to_end_s": end_to_end_s,
     }
 
+    # Store result in state for observability
     await ctx.state.set("email_results", schedule_label, result)

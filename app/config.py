@@ -1,8 +1,10 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load variables from .env into environment
-load_dotenv()
+# Load variables from the repository root .env into environment.
+ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env")
 
 # =========================
 # CLICKUP CONFIG

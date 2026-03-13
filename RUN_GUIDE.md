@@ -14,6 +14,7 @@ This guide reflects the current working runtime (March 2026).
   - `OPENROUTER_API_KEY`
   - SMTP variables if email sending is required (`SMTP_EMAIL`, `SMTP_PASSWORD`, `SMTP_TO`)
 - `monitoring_config.json` and `project_map.json` present in project root
+- `report_spaces_config.json` present in project root (controls which spaces are included in scheduled/manual report runs)
 
 ## Start the stack
 ```bash
@@ -88,6 +89,17 @@ python trigger_reports.py --period this_week --label "Manual weekly check"
 Notes:
 - Default includes all monitored spaces (including AIX as monitored scope)
 - Use `--no-aix` to exclude AIX
+- Edit `report_spaces_config.json` to change which spaces the flow includes by default
+
+Query-tab tool-call examples (for report scope config):
+- Remove a space: `Call tool remove_report_space with {"space_name":"DevOps & Networking"}. Then call tool list_report_spaces and return JSON.`
+- Add a space (full): `Call tool add_report_space with {"space_name":"BlogManager","scope":"full"}. Then call tool list_report_spaces and return JSON.`
+- Add a monitored scope space: `Call tool add_report_space with {"space_name":"AIX","scope":"monitored","query_label":"Monitored AIX"}. Then call tool list_report_spaces and return JSON.`
+
+Query-tab tool-call examples (for monitored projects inside a space):
+- List monitored projects: `Call tool list_monitored_projects with {"space_name":"AIX"} and return JSON.`
+- Add monitored project: `Call tool add_monitored_project with {"project_name":"AI Headshots","space_name":"AIX"}. Then call tool list_monitored_projects with {"space_name":"AIX"} and return JSON.`
+- Remove monitored project: `Call tool remove_monitored_project with {"project_name_or_alias":"AI Headshots","space_name":"AIX"}. Then call tool list_monitored_projects with {"space_name":"AIX"} and return JSON.`
 
 ## Scheduled triggers (current)
 - `9AM` -> yesterday report

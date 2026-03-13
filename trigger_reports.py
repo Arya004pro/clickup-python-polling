@@ -16,8 +16,14 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+
+ROOT_DIR = Path(__file__).resolve().parent
+load_dotenv(ROOT_DIR / ".env")
 
 
 def _load_spaces(include_aix: bool) -> list[str]:
@@ -99,10 +105,12 @@ def main() -> int:
         or f"Manual {args.period} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
     payload = {"period": args.period, "schedule_label": label, "spaces": spaces}
-    
+
     if args.period == "custom":
         if not args.custom_start or not args.custom_end:
-            print("Error: --custom-start and --custom-end are required when --period is custom")
+            print(
+                "Error: --custom-start and --custom-end are required when --period is custom"
+            )
             return 1
         payload["custom_start"] = args.custom_start
         payload["custom_end"] = args.custom_end

@@ -1190,6 +1190,8 @@ async def query_ai(req: QueryRequest):
         client.conversation = []
 
     before_saved = client.stats.reports_saved
+    before_in = client.stats.total_input_tokens
+    before_out = client.stats.total_output_tokens
     async with query_lock:
         try:
             answer = await client.chat(req.question)
@@ -1198,14 +1200,18 @@ async def query_ai(req: QueryRequest):
             report_saved = after_saved > before_saved and latest is not None
             report_file = latest.name if latest else None
             report_url = f"/reports/{latest.name}" if latest else None
+            query_in = max(0, client.stats.total_input_tokens - before_in)
+            query_out = max(0, client.stats.total_output_tokens - before_out)
 
             return QueryResponse(
                 status="success",
                 question=req.question,
                 response=answer,
                 tokens_used={
-                    "input": client.stats.total_input_tokens,
-                    "output": client.stats.total_output_tokens,
+                    "input": query_in,
+                    "output": query_out,
+                    "session_input": client.stats.total_input_tokens,
+                    "session_output": client.stats.total_output_tokens,
                 },
                 report_saved=report_saved,
                 report_file=report_file,

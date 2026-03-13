@@ -1,4 +1,16 @@
 {
-    "python.defaultInterpreterPath": "myenv\\Scripts\\python.exe",
-    "python.terminal.activateEnvInCurrentTerminal": true
+  "python.defaultInterpreterPath": "${workspaceFolder}\\myenv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "terminal.integrated.profiles.windows": {
+    "PowerShell (myenv)": {
+      "source": "PowerShell",
+      "args": [
+        "-NoExit",
+        "-Command",
+        "& '${workspaceFolder}\\myenv\\Scripts\\Activate.ps1'"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "PowerShell (myenv)"
 }

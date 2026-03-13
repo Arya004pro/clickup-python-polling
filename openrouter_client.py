@@ -20,7 +20,8 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from openai import APIStatusError, AsyncOpenAI, RateLimitError
 
-load_dotenv()
+ROOT_DIR = Path(__file__).resolve().parent
+load_dotenv(ROOT_DIR / ".env")
 
 if sys.platform == "win32":
     os.system("color")
@@ -56,7 +57,6 @@ OPENROUTER_APP_TITLE = os.getenv("OPENROUTER_APP_TITLE", "ClickUp MCP").strip()
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8001/sse")
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", r"D:\reports"))
 
-ROOT_DIR = Path(__file__).parent
 OPENROUTER_PROMPT_FILE = ROOT_DIR / "openrouter_system_prompt.md"
 FALLBACK_PROMPT_FILE = ROOT_DIR / "lm_studio_system_prompt.md"
 
@@ -69,6 +69,12 @@ CORE_PM_TOOLS: set[str] = {
     "find_project_anywhere",
     "discover_hierarchy",
     "get_environment_context",
+    "list_report_spaces",
+    "add_report_space",
+    "remove_report_space",
+    "list_monitored_projects",
+    "add_monitored_project",
+    "remove_monitored_project",
     "get_space_task_report",
     "get_project_task_report",
     "get_member_task_report",
@@ -98,6 +104,17 @@ _WORKSPACE_WIDE_PATTERNS = (
 _MONITORED_SCOPE_PATTERNS = (
     r"\bmonitored\b",
     r"\bmonitored\s+aix\b",
+)
+
+_CONFIG_VERBS = (
+    r"\badd\b",
+    r"\bremove\b",
+    r"\bdelete\b",
+    r"\blist\b",
+    r"\bshow\b",
+    r"\binclude\b",
+    r"\bexclude\b",
+    r"\bmonitor(?:ed|ing)?\b",
 )
 
 
@@ -337,6 +354,23 @@ def _sanitize_scope_args_for_workspace_query(
     return sanitized
 
 
+def _is_scope_config_intent(text: str) -> bool:
+    """
+    Detect config-management requests where report tools must be blocked.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    mentions_scope = (
+        "report spaces" in lowered
+        or "monitored projects" in lowered
+        or "for monitoring" in lowered
+        or "monitoring scope" in lowered
+    )
+    has_config_verb = any(re.search(pat, lowered) for pat in _CONFIG_VERBS)
+    return mentions_scope and has_config_verb
+
+
 def _slugify(text: str, fallback: str = "na", max_len: int = 40) -> str:
     value = (text or "").strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
@@ -379,7 +413,7 @@ def _extract_report_name_parts(
     )
     if period_match:
         period = _slugify(period_match.group(1), fallback="period-na", max_len=36)
-        
+
     if schedule_label:
         label_slug = _slugify(schedule_label, fallback="", max_len=20)
         if label_slug:
@@ -388,13 +422,17 @@ def _extract_report_name_parts(
     return kind, entity, period
 
 
-def save_report(content: str, stats: SessionStats, query_text: str = "", schedule_label: str = "") -> str:
+def save_report(
+    content: str, stats: SessionStats, query_text: str = "", schedule_label: str = ""
+) -> str:
     REPORTS_DIR.mkdir(exist_ok=True)
     import datetime as _dt
 
     _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
     timestamp = _dt.datetime.now(_IST).strftime("%Y-%m-%d_%H-%M-%S")
-    kind, entity, period = _extract_report_name_parts(content, query_text=query_text, schedule_label=schedule_label)
+    kind, entity, period = _extract_report_name_parts(
+        content, query_text=query_text, schedule_label=schedule_label
+    )
     base_name = f"report_{kind}_{entity}_{period}_{timestamp}"
     report_file = REPORTS_DIR / f"{base_name}.md"
     suffix = 1
@@ -405,6 +443,7 @@ def save_report(content: str, stats: SessionStats, query_text: str = "", schedul
     stats.reports_saved += 1
     try:
         import reports_supabase
+
         reports_supabase.upsert_report(report_file.name, content)
     except Exception as e:
         print(f"[{col(YELLOW, 'WARNING')}] Database sync skipped: {e}")
@@ -562,12 +601,15 @@ class OpenRouterMCPClient:
             return json.dumps({"error": str(exc)})
 
     async def llm_call(self, messages):
+        return await self.llm_call_with_tools(messages, None)
+
+    async def llm_call_with_tools(self, messages, tools_override=None):
         while True:
             try:
                 resp = await self.llm.chat.completions.create(
                     model=self.active_model,
                     messages=messages,
-                    tools=self.openai_tools or None,
+                    tools=tools_override if tools_override is not None else (self.openai_tools or None),
                     tool_choice="auto",
                     temperature=0.1,
                     max_tokens=4096,
@@ -594,7 +636,40 @@ class OpenRouterMCPClient:
                     "OpenRouter quota/rate limit reached for all configured models."
                 ) from exc
 
-    async def smart_poll_job(self, job_id: str, messages: list, query_text: str = "", schedule_label: str = ""):
+    def _tools_for_user_message(self, user_message: str):
+        """
+        Restrict tool surface for config-management intents to prevent
+        accidental report generation calls.
+        """
+        if not _is_scope_config_intent(user_message):
+            return self.openai_tools or None
+
+        allowed = {
+            "list_report_spaces",
+            "add_report_space",
+            "remove_report_space",
+            "list_monitored_projects",
+            "add_monitored_project",
+            "remove_monitored_project",
+        }
+        narrowed = [
+            t for t in (self.openai_tools or []) if t["function"]["name"] in allowed
+        ]
+        if narrowed:
+            print(
+                f"  {col(YELLOW, '!!')} Scoped tool mode: "
+                f"{col(DIM, f'{len(narrowed)} config tools for this query')}"
+            )
+            return narrowed
+        return self.openai_tools or None
+
+    async def smart_poll_job(
+        self,
+        job_id: str,
+        messages: list,
+        query_text: str = "",
+        schedule_label: str = "",
+    ):
         short_id = job_id[:20] + "..."
         started_at = time.time()
 
@@ -643,7 +718,12 @@ class OpenRouterMCPClient:
                 if isinstance(parsed, dict):
                     fo = parsed.get("formatted_output")
                     if fo:
-                        path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
+                        path = save_report(
+                            fo,
+                            self.stats,
+                            query_text=query_text,
+                            schedule_label=schedule_label,
+                        )
                         total_wait = int(time.time() - started_at)
                         print(
                             f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -654,7 +734,12 @@ class OpenRouterMCPClient:
                     if isinstance(status_result, dict):
                         fo = status_result.get("formatted_output")
                         if fo:
-                            path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
+                            path = save_report(
+                                fo,
+                                self.stats,
+                                query_text=query_text,
+                                schedule_label=schedule_label,
+                            )
                             total_wait = int(time.time() - started_at)
                             print(
                                 f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -685,7 +770,9 @@ class OpenRouterMCPClient:
             parsed = json.loads(raw_result)
             fo = find_in_json(parsed, "formatted_output")
             if fo:
-                path = save_report(fo, self.stats, query_text=query_text, schedule_label=schedule_label)
+                path = save_report(
+                    fo, self.stats, query_text=query_text, schedule_label=schedule_label
+                )
                 total_wait = int(time.time() - started_at)
                 print(
                     f"  {col(GREEN, 'OK')} Report ready in {total_wait}s! "
@@ -694,7 +781,12 @@ class OpenRouterMCPClient:
                 return fo
         except json.JSONDecodeError:
             if len(raw_result) > 200:
-                path = save_report(raw_result, self.stats, query_text=query_text, schedule_label=schedule_label)
+                path = save_report(
+                    raw_result,
+                    self.stats,
+                    query_text=query_text,
+                    schedule_label=schedule_label,
+                )
                 print(
                     f"  {col(GREEN, 'OK')} Result received. "
                     f"{col(DIM, f'Saved -> reports/{Path(path).name}')}\n"
@@ -720,7 +812,7 @@ class OpenRouterMCPClient:
         query_text = f"Generate a space task report for {space_name} for {period_type}"
         if period_type == "custom" and custom_start and custom_end:
             query_text += f" ({custom_start} to {custom_end})"
-            
+
         args = {
             "space_name": space_name,
             "period_type": period_type,
@@ -739,13 +831,21 @@ class OpenRouterMCPClient:
         if isinstance(parsed, dict):
             formatted = find_in_json(parsed, "formatted_output")
             if formatted:
-                save_report(formatted, self.stats, query_text=query_text, schedule_label=schedule_label)
+                save_report(
+                    formatted,
+                    self.stats,
+                    query_text=query_text,
+                    schedule_label=schedule_label,
+                )
                 return formatted
 
             job_id = find_in_json(parsed, "job_id")
             if job_id:
                 return await self.smart_poll_job(
-                    str(job_id), messages=[], query_text=query_text, schedule_label=schedule_label
+                    str(job_id),
+                    messages=[],
+                    query_text=query_text,
+                    schedule_label=schedule_label,
                 )
 
             err = find_in_json(parsed, "error")
@@ -753,12 +853,15 @@ class OpenRouterMCPClient:
                 return f"Error: {err}"
 
         if raw and len(raw) > 200:
-            save_report(raw, self.stats, query_text=query_text, schedule_label=schedule_label)
+            save_report(
+                raw, self.stats, query_text=query_text, schedule_label=schedule_label
+            )
             return raw
         return None
 
     async def chat(self, user_message):
         self.conversation.append({"role": "user", "content": user_message})
+        tools_for_query = self._tools_for_user_message(user_message)
         messages = [
             {"role": "system", "content": self.system_prompt},
             *self.conversation,
@@ -766,7 +869,7 @@ class OpenRouterMCPClient:
         poll_count = 0
 
         while True:
-            response = await self.llm_call(messages)
+            response = await self.llm_call_with_tools(messages, tools_for_query)
             msg = response.choices[0].message
 
             if not msg.tool_calls:

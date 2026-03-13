@@ -29,6 +29,7 @@ from clickup_mcp.task_reports import register_task_report_tools
 
 MONITORING_CONFIG_PATH = Path("/app/monitoring_config.json")
 PROJECT_MAP_PATH = Path("/app/project_map.json")
+REPORT_SPACES_CONFIG_PATH = Path("/app/report_spaces_config.json")
 
 
 def _print_runtime_config_status() -> None:
@@ -37,9 +38,13 @@ def _print_runtime_config_status() -> None:
         missing.append(str(MONITORING_CONFIG_PATH))
     if not PROJECT_MAP_PATH.is_file():
         missing.append(str(PROJECT_MAP_PATH))
+    if not REPORT_SPACES_CONFIG_PATH.is_file():
+        missing.append(str(REPORT_SPACES_CONFIG_PATH))
 
     if not missing:
-        print("Runtime config OK: monitoring_config.json and project_map.json found.")
+        print(
+            "Runtime config OK: monitoring_config.json, project_map.json, and report_spaces_config.json found."
+        )
         return
 
     print("WARNING: Missing runtime config files:")

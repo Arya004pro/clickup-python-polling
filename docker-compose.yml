@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-mcp-server
     restart: unless-stopped
     ports:
@@ -27,6 +29,7 @@ services:
       - ./app:/app/app
       - ./monitoring_config.json:/app/monitoring_config.json
       - ./project_map.json:/app/project_map.json
+      - ./report_spaces_config.json:/app/report_spaces_config.json
       - reports:/app/reports
     networks:
       - clickup-net
@@ -64,6 +67,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-api-server
     restart: unless-stopped
     ports:
@@ -137,6 +142,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-ai-client
     restart: unless-stopped
     stdin_open: true
@@ -190,6 +197,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.motia
+    env_file:
+      - ./.env
     container_name: clickup-motia-reports
     restart: unless-stopped
     ports:
@@ -217,6 +226,7 @@ services:
     volumes:
       - ./clickup-motia-reports/steps:/app/steps
       - ./monitoring_config.json:/app/monitoring_config.json:ro
+      - ./report_spaces_config.json:/app/report_spaces_config.json:ro
       - motia-data:/app/data
     networks:
       - clickup-net
