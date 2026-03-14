@@ -1,21 +1,23 @@
 """Send Email Step - queue-triggered, formats and sends the report email.
 
-Receives markdown reports from the generate step and sends an HTML summary email via SMTP.
+Receives markdown reports from the generate step and sends an HTML summary email.
+Transport is selected via EMAIL_TRANSPORT env var (brevo_api | smtp | auto).
 """
 
 import asyncio
-import smtplib
+import os
 import time
 from datetime import datetime, timezone
-from email.message import EmailMessage
 from typing import Any
 
 from motia import FlowContext, queue
 
+from steps.email_sender import send_report_email
+
 
 config = {
     "name": "SendReportEmail",
-    "description": "Renders markdown reports as HTML and sends via SMTP",
+    "description": "Renders markdown reports as HTML and sends via Brevo API or SMTP",
     "flows": ["clickup-daily-reports"],
     "triggers": [
         queue("report::send-email"),
@@ -28,74 +30,9 @@ _CRON_EMAIL_DEDUP_WINDOW_S = 3600
 _MANUAL_EMAIL_DEDUP_WINDOW_S = 120
 
 
-def _build_email_html(reports_markdown, schedule_label):
-    html_sections = []
-
-    for r in reports_markdown:
-        name = r.get("space") or "Report"
-        markdown = r.get("markdown") or ""
-        error = r.get("error")
-
-        if error:
-            html_sections.append(f"<h3>{name}</h3><p><b>Error:</b> {error}</p>")
-        else:
-            html_sections.append(
-                f"<h3>{name}</h3><pre style='white-space:pre-wrap'>{markdown}</pre>"
-            )
-
-    return f"<h2>ClickUp Report - {schedule_label}</h2>{''.join(html_sections)}"
-
-
-def _send_email_smtp(subject, html_body, to_email, ctx):
-    from steps.config import EMAIL_FROM, SMTP_EMAIL, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT
-
-    missing = []
-    if not SMTP_HOST:
-        missing.append("SMTP_HOST")
-    if not SMTP_PORT:
-        missing.append("SMTP_PORT")
-    if not SMTP_EMAIL:
-        missing.append("SMTP_EMAIL")
-    if not SMTP_PASSWORD:
-        missing.append("SMTP_PASSWORD")
-    if not EMAIL_FROM:
-        missing.append("EMAIL_FROM")
-    if not to_email:
-        missing.append("SMTP_TO")
-
-    if missing:
-        return {
-            "status": "error",
-            "error": f"Missing SMTP config: {', '.join(missing)}",
-        }
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = to_email
-    msg.set_content("This report email requires an HTML-capable mail client.")
-    msg.add_alternative(html_body, subtype="html")
-
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.send_message(msg)
-    except Exception as exc:
-        return {"status": "error", "error": f"SMTP send failed: {exc}"}
-
-    return {
-        "status": "sent",
-        "to": to_email,
-        "subject": subject,
-    }
-
-
 async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     """Format and send the report email."""
-    from steps.config import SMTP_TO
+    from steps.config import SMTP_EMAIL, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_TO
 
     reports_markdown = input_data.get("reports_markdown", [])
     schedule_label = input_data.get("schedule_label", "Report")
@@ -122,7 +59,6 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     )
 
     dedup_period = str(timing_meta.get("period") or period or "unknown")
-
     dedup_key = (
         f"{schedule_label}::{dedup_period}::"
         f"{'cron' if trigger_source.startswith('cron') else 'manual'}"
@@ -135,7 +71,6 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
         if last_sent is not None:
             elapsed = now_ts - float(last_sent)
-
             if elapsed < dedup_window_s:
                 ctx.logger.warning(
                     f"[DEDUP] Skipping duplicate email for '{dedup_key}' "
@@ -145,15 +80,18 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
         await ctx.state.set("report_email_last_sent", dedup_key, now_ts)
 
-    html_body = _build_email_html(reports_markdown, schedule_label)
+    # PDF rendering via api-server (used by both transports)
+    api_server_url = os.getenv("API_SERVER_URL", "").rstrip("/")
 
-    subject = f"ClickUp Report - {schedule_label}"
-
-    result = _send_email_smtp(
-        subject=subject,
-        html_body=html_body,
-        to_email=SMTP_TO,
-        ctx=ctx,
+    result = send_report_email(
+        reports_markdown=reports_markdown,
+        schedule_label=schedule_label,
+        smtp_host=SMTP_HOST or "",
+        smtp_port=int(SMTP_PORT or 587),
+        smtp_email=SMTP_EMAIL or "",
+        smtp_password=SMTP_PASSWORD or "",
+        to_email=SMTP_TO or "",
+        pdf_render_base_url=api_server_url,
     )
 
     if result.get("status") == "sent":
@@ -162,13 +100,10 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         ctx.logger.error(f"[FAIL] Email failed: {result.get('error')}")
 
     email_finished_epoch_ms = int(time.time() * 1000)
-
     email_elapsed_s = round((email_finished_epoch_ms - email_started_epoch_ms) / 1000, 2)
 
     trigger_epoch_ms = timing_meta.get("triggered_at_epoch_ms")
-
     end_to_end_s = None
-
     if trigger_epoch_ms is not None:
         try:
             end_to_end_s = round((email_finished_epoch_ms - int(trigger_epoch_ms)) / 1000, 2)

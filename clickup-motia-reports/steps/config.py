@@ -16,23 +16,33 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
 CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN", "")
 CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID", "")
 
-# Email
-EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp")
-EMAIL_FROM = os.getenv("EMAIL_FROM", os.getenv("SMTP_TO", ""))
+# ---------------------------------------------------------------------------
+# Email transport
+# ---------------------------------------------------------------------------
+# EMAIL_TRANSPORT: "brevo_api" | "smtp" | "auto" (default)
+#   auto  → uses Brevo if BREVO_API_KEY is present, else falls back to SMTP
+EMAIL_TRANSPORT = os.getenv("EMAIL_TRANSPORT", "auto")
 
-# SMTP (SendGrid-compatible)
+# Brevo API (preferred on Railway — no SMTP ports needed)
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", os.getenv("SMTP_TO", ""))
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Arya")
+
+# SMTP (SendGrid-compatible fallback)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.sendgrid.net")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_TO = os.getenv("SMTP_TO", "aryapatel.eng@gmail.com")
+SMTP_TO = os.getenv("SMTP_TO", "")
 
-# Default fallback list. Preferred source is report_spaces_config.json.
+# ---------------------------------------------------------------------------
+# Default fallback space list. Preferred source is report_spaces_config.json
+# or REPORT_SPACES_JSON env var.
+# ---------------------------------------------------------------------------
 _DEFAULT_MONITORED_SPACES = [
     {
         "name": "AIX",
         "display": "Monitored AIX",
-        # Must stay "Monitored AIX" so monitored scope applies via monitoring_config.json.
         "query_label": "Monitored AIX",
         "scope": "monitored",
     },
@@ -54,7 +64,6 @@ def _report_spaces_candidates() -> list[Path]:
     if env_path:
         return [Path(env_path)]
 
-    # Docker path first, then local repo root fallback.
     steps_dir = Path(__file__).resolve().parent
     return [
         Path("/app/report_spaces_config.json"),

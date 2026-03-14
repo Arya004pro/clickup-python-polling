@@ -15,6 +15,7 @@ HTTP endpoints:
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import os
@@ -239,6 +240,71 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
         server.starttls()
         server.login(smtp_email, smtp_password)
         server.send_message(msg)
+
+def _send_report_via_brevo(report_path: Path, to_email: str, subject: str) -> None:
+    import base64 as _b64
+    import requests as _requests
+ 
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
+    email_from = os.getenv("EMAIL_FROM", "").strip()
+    from_name = os.getenv("EMAIL_FROM_NAME", "Arya").strip()
+ 
+    if not api_key or not email_from:
+        raise RuntimeError(
+            "BREVO_API_KEY and EMAIL_FROM must be set for brevo_api transport."
+        )
+ 
+    report_content = report_path.read_text(encoding="utf-8")
+    report_title = report_path.stem
+ 
+    html_body = (
+        f"<p>Hello,</p>"
+        f"<p>Please find the ClickUp report <b>{report_title}</b> attached.</p>"
+        f"<p>Generated: {datetime.now().isoformat(timespec='seconds')}</p>"
+        f"<p>Regards,<br>ClickUp MCP API</p>"
+    )
+ 
+    payload: dict = {
+        "sender": {"name": from_name, "email": email_from},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_body,
+    }
+ 
+    pdf_bytes = _markdown_to_pdf_bytes(report_content, report_title)
+    if pdf_bytes:
+        payload["attachment"] = [{
+            "name": f"{report_title}.pdf",
+            "content": _b64.b64encode(pdf_bytes).decode("utf-8"),
+        }]
+    else:
+        payload["attachment"] = [{
+            "name": f"{report_title}.md",
+            "content": _b64.b64encode(report_content.encode("utf-8")).decode("utf-8"),
+        }]
+ 
+    resp = _requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={"api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Brevo API error {resp.status_code}: {resp.text[:300]}"
+        )
+ 
+ 
+def _send_report_email(report_path: Path, to_email: str, subject: str) -> None:
+    transport = os.getenv("EMAIL_TRANSPORT", "auto").lower()
+    brevo_key = os.getenv("BREVO_API_KEY", "").strip()
+    use_brevo = transport == "brevo_api" or (transport == "auto" and bool(brevo_key))
+ 
+    print(f"[email] Transport selected: {'brevo_api' if use_brevo else 'smtp'}")
+    if use_brevo:
+        _send_report_via_brevo(report_path, to_email, subject)
+    else:
+        _send_report_via_smtp(report_path, to_email, subject)
 
 
 def _markdown_to_pdf_bytes(markdown_content: str, title: str) -> Optional[bytes]:
@@ -1398,7 +1464,7 @@ async def send_report_to_email(req: SendReportEmailRequest):
     default_title = Path(report_name).stem
     subject = (req.subject or f"ClickUp Report - {default_title}").strip()
     try:
-        await asyncio.to_thread(_send_report_via_smtp, report_path, to_email, subject)
+        await asyncio.to_thread(_send_report_email, report_path, to_email, subject)
         return SendReportEmailResponse(
             status="success",
             report_name=report_name,
