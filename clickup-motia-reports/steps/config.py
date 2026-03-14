@@ -21,7 +21,7 @@ EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp")
 
 # Resend API
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "aryapatel.eng@gmail.com")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
 
 # Email (Gmail SMTP)
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
