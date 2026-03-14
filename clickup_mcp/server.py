@@ -32,27 +32,38 @@ PROJECT_MAP_PATH = Path("/app/project_map.json")
 REPORT_SPACES_CONFIG_PATH = Path("/app/report_spaces_config.json")
 
 
-def _print_runtime_config_status() -> None:
-    missing = []
-    if not MONITORING_CONFIG_PATH.is_file():
-        missing.append(str(MONITORING_CONFIG_PATH))
-    if not PROJECT_MAP_PATH.is_file():
-        missing.append(str(PROJECT_MAP_PATH))
-    if not REPORT_SPACES_CONFIG_PATH.is_file():
-        missing.append(str(REPORT_SPACES_CONFIG_PATH))
+def _hydrate_runtime_configs() -> None:
+    """
+    On Railway (no volume mounts), write JSON config files from env vars.
+    On Docker, files are already mounted — env vars are ignored if files exist.
+    """
+    import json, os
 
-    if not missing:
-        print(
-            "Runtime config OK: monitoring_config.json, project_map.json, and report_spaces_config.json found."
-        )
-        return
+    _ENV_FILE_MAP = {
+        "MONITORING_CONFIG_JSON": MONITORING_CONFIG_PATH,
+        "PROJECT_MAP_JSON": PROJECT_MAP_PATH,
+        "REPORT_SPACES_JSON": REPORT_SPACES_CONFIG_PATH,
+    }
 
-    print("WARNING: Missing runtime config files:")
-    for path in missing:
-        print(f"  - {path}")
-    print(
-        "Monitored-scope reports may fall back to broad space data without these files."
-    )
+    for env_var, file_path in _ENV_FILE_MAP.items():
+        # If file already exists (Docker volume mount), skip
+        if file_path.is_file():
+            print(f"  Config OK (mounted): {file_path.name}")
+            continue
+
+        raw = os.getenv(env_var, "").strip()
+        if not raw:
+            print(f"  WARNING: {env_var} not set and {file_path.name} not found.")
+            continue
+
+        try:
+            parsed = json.loads(raw)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(parsed, f, indent=2)
+            print(f"  Config OK (from env): {file_path.name}")
+        except Exception as exc:
+            print(f"  ERROR writing {file_path.name} from {env_var}: {exc}")
 
 
 def create_mcp_app():
@@ -93,7 +104,7 @@ def main():
     """Start the MCP server."""
     print("Starting ClickUp MCP Server in 2s to allow initialization...")
     time.sleep(2)
-    _print_runtime_config_status()
+    _hydrate_runtime_configs()
 
     app = create_mcp_app()
     logging.getLogger("uvicorn.access").addFilter(_HealthcheckAccessLogFilter())
