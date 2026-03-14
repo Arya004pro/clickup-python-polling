@@ -7,3 +7,4 @@ __pycache__/
 project_map.json
 monitoring_config.json
 .jobs_cache.json
+report_spaces_config.json

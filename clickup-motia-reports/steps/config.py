@@ -16,15 +16,12 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
 CLICKUP_API_TOKEN = os.getenv("CLICKUP_API_TOKEN", "")
 CLICKUP_TEAM_ID = os.getenv("CLICKUP_TEAM_ID", "")
 
-# Email Provider
+# Email
 EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp")
+EMAIL_FROM = os.getenv("EMAIL_FROM", os.getenv("SMTP_TO", ""))
 
-# Resend API
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "onboarding@resend.dev")
-
-# Email (Gmail SMTP)
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+# SMTP (SendGrid-compatible)
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.sendgrid.net")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
@@ -66,6 +63,16 @@ def _report_spaces_candidates() -> list[Path]:
 
 
 def _load_report_spaces() -> list[dict]:
+    raw_json = os.getenv("REPORT_SPACES_JSON", "").strip()
+    if raw_json:
+        try:
+            data = json.loads(raw_json)
+            spaces = data.get("report_spaces", [])
+            if isinstance(spaces, list) and spaces:
+                return spaces
+        except Exception:
+            pass
+
     for candidate in _report_spaces_candidates():
         try:
             with open(candidate, "r", encoding="utf-8") as f:

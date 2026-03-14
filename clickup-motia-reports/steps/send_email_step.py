@@ -1,21 +1,21 @@
 """Send Email Step - queue-triggered, formats and sends the report email.
 
-Receives markdown reports from the generate step, builds
-an HTML email with attachment(s), and sends via Resend API.
+Receives markdown reports from the generate step and sends an HTML summary email via SMTP.
 """
 
 import asyncio
+import smtplib
 import time
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from typing import Any
 
-import requests
 from motia import FlowContext, queue
 
 
 config = {
     "name": "SendReportEmail",
-    "description": "Renders markdown reports as HTML email + attachments and sends via Resend API",
+    "description": "Renders markdown reports as HTML and sends via SMTP",
     "flows": ["clickup-daily-reports"],
     "triggers": [
         queue("report::send-email"),
@@ -43,41 +43,48 @@ def _build_email_html(reports_markdown, schedule_label):
                 f"<h3>{name}</h3><pre style='white-space:pre-wrap'>{markdown}</pre>"
             )
 
-    html_body = f"""
-    <h2>📊 ClickUp Report — {schedule_label}</h2>
-    {''.join(html_sections)}
-    """
-
-    return html_body
+    return f"<h2>ClickUp Report - {schedule_label}</h2>{''.join(html_sections)}"
 
 
-def _send_email_resend(subject, html_body, to_email, ctx):
-    from steps.config import RESEND_API_KEY, EMAIL_FROM
+def _send_email_smtp(subject, html_body, to_email, ctx):
+    from steps.config import EMAIL_FROM, SMTP_EMAIL, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT
 
-    if not RESEND_API_KEY:
-        ctx.logger.error("RESEND_API_KEY not configured.")
-        return {"status": "error", "error": "Missing RESEND_API_KEY"}
+    missing = []
+    if not SMTP_HOST:
+        missing.append("SMTP_HOST")
+    if not SMTP_PORT:
+        missing.append("SMTP_PORT")
+    if not SMTP_EMAIL:
+        missing.append("SMTP_EMAIL")
+    if not SMTP_PASSWORD:
+        missing.append("SMTP_PASSWORD")
+    if not EMAIL_FROM:
+        missing.append("EMAIL_FROM")
+    if not to_email:
+        missing.append("SMTP_TO")
 
-    response = requests.post(
-        "https://api.resend.com/emails",
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "from": EMAIL_FROM,
-            "to": [to_email],
-            "subject": subject,
-            "html": html_body,
-        },
-        timeout=30,
-    )
-
-    if response.status_code >= 300:
+    if missing:
         return {
             "status": "error",
-            "error": f"Resend API error: {response.text}",
+            "error": f"Missing SMTP config: {', '.join(missing)}",
         }
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = to_email
+    msg.set_content("This report email requires an HTML-capable mail client.")
+    msg.add_alternative(html_body, subtype="html")
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception as exc:
+        return {"status": "error", "error": f"SMTP send failed: {exc}"}
 
     return {
         "status": "sent",
@@ -140,9 +147,9 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
     html_body = _build_email_html(reports_markdown, schedule_label)
 
-    subject = f"📊 ClickUp Report — {schedule_label}"
+    subject = f"ClickUp Report - {schedule_label}"
 
-    result = _send_email_resend(
+    result = _send_email_smtp(
         subject=subject,
         html_body=html_body,
         to_email=SMTP_TO,
