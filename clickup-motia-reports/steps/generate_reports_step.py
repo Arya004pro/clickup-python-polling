@@ -47,7 +47,7 @@ def _call_api_server_sync(
     api_url: str,
     space_name: str,
     period: str,
-    timeout_s: int = 360,
+    timeout_s: int = 1200,
     use_direct_endpoint: bool = True,
 ) -> dict:
     """
