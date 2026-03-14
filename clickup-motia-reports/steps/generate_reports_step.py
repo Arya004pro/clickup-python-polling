@@ -87,9 +87,8 @@ def _call_api_server_sync(
     except Exception as exc:
         return {"status": "error", "error": str(exc)[:200]}
 
+
 _DEDUP_WINDOW_S = 300  # 5 minutes - suppress duplicate triggers within this window
-
-
 
 
 async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
@@ -101,7 +100,9 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
     period = input_data.get("period", "today")
     schedule_label = input_data.get("schedule_label", "Report")
-    trigger_epoch_ms = int(input_data.get("triggered_at_epoch_ms") or time.time() * 1000)
+    trigger_epoch_ms = int(
+        input_data.get("triggered_at_epoch_ms") or time.time() * 1000
+    )
     trigger_source = str(input_data.get("trigger_source") or "unknown")
     trigger_iso = str(
         input_data.get("triggered_at_iso")
@@ -190,7 +191,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 API_SERVER_URL,
                 query_label,
                 period,
-                360,
+                1800,
                 use_direct_endpoint,
             )
         elapsed_s = round(time.perf_counter() - started_at, 2)
