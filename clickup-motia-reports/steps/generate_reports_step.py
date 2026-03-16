@@ -71,20 +71,31 @@ def _build_query(
     period: str,
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
+    scope: str = "full",
     retry_after_lookup: bool = False,
 ) -> str:
     """Build the natural language query sent to the api-server."""
-    guidance = (
-        "Scheduled automation mode. First call find_project_anywhere for entity resolution. "
-        "Then continue in the same request and call get_space_task_report with the resolved space_name. "
-        "Do not stop after lookup. Return only formatted_output."
-    )
-    if retry_after_lookup:
+    scope_norm = (scope or "full").strip().lower()
+    if scope_norm == "monitored":
         guidance = (
-            "Scheduled automation retry. You may have stopped after find_project_anywhere previously. "
-            "Now continue and call get_space_task_report for this space immediately. "
+            "Scheduled automation mode for monitored scope. "
+            "This space uses monitoring_config filtered projects, not the full raw space. "
+            "Call get_space_task_report directly with space_name exactly as provided. "
+            "Do NOT convert it to plain AIX. Do NOT call find_project_anywhere. "
             "Return only formatted_output."
         )
+    else:
+        guidance = (
+            "Scheduled automation mode. First call find_project_anywhere for entity resolution. "
+            "Then continue in the same request and call get_space_task_report with the resolved space_name. "
+            "Do not stop after lookup. Return only formatted_output."
+        )
+        if retry_after_lookup:
+            guidance = (
+                "Scheduled automation retry. You may have stopped after find_project_anywhere previously. "
+                "Now continue and call get_space_task_report for this space immediately. "
+                "Return only formatted_output."
+            )
 
     if period == "custom" and custom_start and custom_end:
         period_phrase = f"{custom_start} to {custom_end}"
@@ -99,6 +110,7 @@ def _call_api_server_sync(
     period: str,
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
+    scope: str = "full",
     timeout_s: int = 1200,
     retry_after_lookup: bool = False,
 ) -> dict:
@@ -111,6 +123,7 @@ def _call_api_server_sync(
             period,
             custom_start,
             custom_end,
+            scope=scope,
             retry_after_lookup=retry_after_lookup,
         )
         resp = requests.post(
@@ -240,6 +253,12 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     report_concurrency = max(1, min(report_concurrency, 4))
     ctx.logger.info(f"Report concurrency: {report_concurrency}")
     ctx.logger.info("Report API mode: llm (/query) [direct disabled]")
+    try:
+        max_attempts = int(os.getenv("REPORT_LLM_MAX_ATTEMPTS", "3"))
+    except ValueError:
+        max_attempts = 3
+    max_attempts = max(1, min(max_attempts, 6))
+    ctx.logger.info(f"LLM max attempts per space: {max_attempts}")
 
     semaphore = asyncio.Semaphore(report_concurrency)
 
@@ -248,111 +267,81 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         # Use query_label when set (e.g. "Monitored AIX" for the AIX monitored scope)
         # so the AI model applies the correct Monitored Scope Exception from the system prompt.
         query_label = space_cfg.get("query_label") or space_name
+        scope = str(space_cfg.get("scope") or "full").strip().lower()
         started_at = time.perf_counter()
-        async with semaphore:
-            query = _build_query(query_label, period, custom_start, custom_end)
-            ctx.logger.info(f"  [{space_name}] Querying api-server: {query!r}")
-            result = await asyncio.to_thread(
-                _call_api_server_sync,
-                API_SERVER_URL,
-                query_label,
-                period,
-                custom_start,
-                custom_end,
-                1800,
-                False,
-            )
-        elapsed_s = round(time.perf_counter() - started_at, 2)
+        last_error = "Unknown error"
 
-        if result.get("status") == "error":
-            error_msg = result.get("error", "Unknown error")
-            ctx.logger.error(f"  [FAIL] {space_name}: {error_msg} ({elapsed_s}s)")
-            return {
-                "space": space_name,
-                "markdown": None,
-                "error": error_msg,
-                "elapsed_s": elapsed_s,
-            }
-
-        markdown = result.get("response") or ""
-        report_saved = bool(result.get("report_saved"))
-
-        if not report_saved:
-            hint = str(result.get("response") or result.get("error") or "").strip()
-            if hint:
-                hint = hint.replace("\n", " ")[:180]
-            ctx.logger.warning(
-                f"  [WARN] {space_name}: no report saved on first pass; retrying once with stricter instruction."
-            )
-            retry_result = await asyncio.to_thread(
-                _call_api_server_sync,
-                API_SERVER_URL,
-                query_label,
-                period,
-                custom_start,
-                custom_end,
-                1800,
-                True,
-            )
-            elapsed_s = round(time.perf_counter() - started_at, 2)
-            retry_saved = bool(retry_result.get("report_saved"))
-            retry_markdown = retry_result.get("response") or ""
-
-            if retry_saved and _looks_like_report_markdown(retry_markdown):
+        for attempt in range(1, max_attempts + 1):
+            async with semaphore:
+                query = _build_query(
+                    query_label,
+                    period,
+                    custom_start,
+                    custom_end,
+                    scope=scope,
+                    retry_after_lookup=(attempt > 1),
+                )
                 ctx.logger.info(
-                    f"  [OK] {space_name}: retry produced {len(retry_markdown):,} chars ({elapsed_s}s)"
+                    f"  [{space_name}] Attempt {attempt}/{max_attempts} via api-server: {query!r}"
+                )
+                result = await asyncio.to_thread(
+                    _call_api_server_sync,
+                    API_SERVER_URL,
+                    query_label,
+                    period,
+                    custom_start,
+                    custom_end,
+                    scope,
+                    1800,
+                    attempt > 1,
+                )
+
+            elapsed_s = round(time.perf_counter() - started_at, 2)
+
+            if result.get("status") == "error":
+                last_error = str(result.get("error") or "Unknown error").strip()
+                ctx.logger.warning(
+                    f"  [WARN] {space_name}: attempt {attempt} returned error ({last_error})"
+                )
+                continue
+
+            markdown = result.get("response") or ""
+            report_saved = bool(result.get("report_saved"))
+            if report_saved and _looks_like_report_markdown(markdown):
+                ctx.logger.info(
+                    f"  [OK] {space_name}: report generated on attempt {attempt} ({len(markdown):,} chars, {elapsed_s}s)"
                 )
                 return {
                     "space": space_name,
-                    "markdown": retry_markdown,
+                    "markdown": markdown,
                     "error": None,
                     "elapsed_s": elapsed_s,
                 }
 
-            retry_hint = str(
-                retry_result.get("response")
-                or retry_result.get("error")
-                or retry_result.get("download_error")
+            hint = str(
+                result.get("response")
+                or result.get("error")
+                or result.get("download_error")
                 or ""
             ).strip()
-            if retry_hint:
-                retry_hint = retry_hint.replace("\n", " ")[:180]
-            error_msg = "LLM query completed but no report file was saved after retry."
             if hint:
-                error_msg = f"{error_msg} First hint: {hint}."
-            if retry_hint:
-                error_msg = f"{error_msg} Retry hint: {retry_hint}."
-            ctx.logger.error(f"  [FAIL] {space_name}: {error_msg} ({elapsed_s}s)")
-            return {
-                "space": space_name,
-                "markdown": None,
-                "error": error_msg,
-                "elapsed_s": elapsed_s,
-            }
-
-        if _looks_like_report_markdown(markdown):
-            ctx.logger.info(
-                f"  [OK] {space_name}: received {len(markdown):,} chars of markdown ({elapsed_s}s)"
+                hint = hint.replace("\n", " ")[:180]
+            last_error = (
+                "LLM returned non-report output or did not save report file."
+                + (f" Hint: {hint}" if hint else "")
             )
-            return {
-                "space": space_name,
-                "markdown": markdown,
-                "error": None,
-                "elapsed_s": elapsed_s,
-            }
+            ctx.logger.warning(
+                f"  [WARN] {space_name}: attempt {attempt} did not produce saved report."
+            )
 
-        hint = str(result.get("download_error") or result.get("response") or "").strip()
-        if hint:
-            hint = hint.replace("\n", " ")[:180]
-
-        error_msg = "LLM returned non-report output from /query."
-        if hint:
-            error_msg = f"{error_msg} Hint: {hint}"
-        ctx.logger.error(f"  [FAIL] {space_name}: {error_msg} ({elapsed_s}s)")
+        elapsed_s = round(time.perf_counter() - started_at, 2)
+        ctx.logger.error(
+            f"  [FAIL] {space_name}: failed after {max_attempts} attempts ({last_error}) ({elapsed_s}s)"
+        )
         return {
             "space": space_name,
             "markdown": None,
-            "error": error_msg,
+            "error": f"Failed after {max_attempts} attempts. {last_error}",
             "elapsed_s": elapsed_s,
         }
 
@@ -365,8 +354,36 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     )
 
     ctx.logger.info(
-        f"All {len(reports_markdown)} space reports done in {generation_elapsed_s}s. Enqueuing email step..."
+        f"All {len(reports_markdown)} space report attempts finished in {generation_elapsed_s}s."
     )
+
+    failed_reports = [
+        r for r in reports_markdown if r.get("error") or not str(r.get("markdown") or "").strip()
+    ]
+    if failed_reports:
+        failed_spaces = [str(r.get("space") or "unknown") for r in failed_reports]
+        ctx.logger.error(
+            f"[BLOCKED] Not enqueuing email because {len(failed_spaces)} required spaces failed: {failed_spaces}"
+        )
+        await ctx.state.set(
+            "report_generation_last_failure",
+            schedule_label,
+            {
+                "failed_spaces": failed_spaces,
+                "reports_markdown": reports_markdown,
+                "timing_meta": {
+                    "trigger_source": trigger_source,
+                    "period": period,
+                    "schedule_label": schedule_label,
+                    "generation_finished_iso": datetime.now(timezone.utc).isoformat(),
+                    "generation_elapsed_s": generation_elapsed_s,
+                    "report_api_mode": "llm",
+                },
+            },
+        )
+        return
+
+    ctx.logger.info("All required space reports generated. Enqueuing email step...")
 
     await ctx.enqueue(
         {

@@ -1268,8 +1268,8 @@ async def query_ai(req: QueryRequest):
             after_saved = client.stats.reports_saved
             latest = _latest_report_path()
             report_saved = after_saved > before_saved and latest is not None
-            report_file = latest.name if latest else None
-            report_url = f"/reports/{latest.name}" if latest else None
+            report_file = latest.name if report_saved and latest else None
+            report_url = f"/reports/{latest.name}" if report_saved and latest else None
             query_in = max(0, client.stats.total_input_tokens - before_in)
             query_out = max(0, client.stats.total_output_tokens - before_out)
 
