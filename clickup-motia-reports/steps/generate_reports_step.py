@@ -71,21 +71,26 @@ def _build_query(
     period: str,
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
+    retry_after_lookup: bool = False,
 ) -> str:
     """Build the natural language query sent to the api-server."""
+    guidance = (
+        "Scheduled automation mode. First call find_project_anywhere for entity resolution. "
+        "Then continue in the same request and call get_space_task_report with the resolved space_name. "
+        "Do not stop after lookup. Return only formatted_output."
+    )
+    if retry_after_lookup:
+        guidance = (
+            "Scheduled automation retry. You may have stopped after find_project_anywhere previously. "
+            "Now continue and call get_space_task_report for this space immediately. "
+            "Return only formatted_output."
+        )
+
     if period == "custom" and custom_start and custom_end:
         period_phrase = f"{custom_start} to {custom_end}"
-        return (
-            f"Generate a space task report for {space_name} for {period_phrase}. "
-            "Scheduled automation mode: do not ask for confirmation, do not stop after lookup, "
-            "and in this same turn you must call get_space_task_report and then return formatted_output only."
-        )
+        return f"Generate a space task report for {space_name} for {period_phrase}. {guidance}"
     period_phrase = _PERIOD_PHRASES.get(period, period)
-    return (
-        f"Generate a space task report for {space_name} for {period_phrase}. "
-        "Scheduled automation mode: do not ask for confirmation, do not stop after lookup, "
-        "and in this same turn you must call get_space_task_report and then return formatted_output only."
-    )
+    return f"Generate a space task report for {space_name} for {period_phrase}. {guidance}"
 
 
 def _call_api_server_sync(
@@ -95,12 +100,19 @@ def _call_api_server_sync(
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
     timeout_s: int = 1200,
+    retry_after_lookup: bool = False,
 ) -> dict:
     """
     Synchronous POST to api-server /query endpoint for LLM report generation.
     """
     try:
-        query = _build_query(space_name, period, custom_start, custom_end)
+        query = _build_query(
+            space_name,
+            period,
+            custom_start,
+            custom_end,
+            retry_after_lookup=retry_after_lookup,
+        )
         resp = requests.post(
             f"{api_url}/query",
             json={"question": query, "reset_conversation": True},
@@ -111,13 +123,17 @@ def _call_api_server_sync(
         if data.get("status") == "error":
             return data
 
-        # If /query returns empty/non-report content but includes a saved report URL,
-        # hydrate response from the saved markdown file.
+        report_saved = bool(data.get("report_saved"))
         response_text = str(data.get("response") or "")
-        if _looks_like_report_markdown(response_text):
+
+        # If /query returns good markdown and it was saved, accept immediately.
+        # Requiring saved report guarantees visibility in dashboard list.
+        if report_saved and _looks_like_report_markdown(response_text):
             return data
 
-        download_url = str(data.get("report_download_url") or "").strip()
+        # If /query returns empty/non-report content but includes a saved report URL,
+        # hydrate response from the saved markdown file.
+        download_url = str(data.get("report_download_url") or "").strip() if report_saved else ""
         if download_url:
             full_url = f"{api_url}{download_url}" if download_url.startswith("/") else download_url
             try:
@@ -244,6 +260,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 custom_start,
                 custom_end,
                 1800,
+                False,
             )
         elapsed_s = round(time.perf_counter() - started_at, 2)
 
@@ -258,6 +275,61 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
             }
 
         markdown = result.get("response") or ""
+        report_saved = bool(result.get("report_saved"))
+
+        if not report_saved:
+            hint = str(result.get("response") or result.get("error") or "").strip()
+            if hint:
+                hint = hint.replace("\n", " ")[:180]
+            ctx.logger.warning(
+                f"  [WARN] {space_name}: no report saved on first pass; retrying once with stricter instruction."
+            )
+            retry_result = await asyncio.to_thread(
+                _call_api_server_sync,
+                API_SERVER_URL,
+                query_label,
+                period,
+                custom_start,
+                custom_end,
+                1800,
+                True,
+            )
+            elapsed_s = round(time.perf_counter() - started_at, 2)
+            retry_saved = bool(retry_result.get("report_saved"))
+            retry_markdown = retry_result.get("response") or ""
+
+            if retry_saved and _looks_like_report_markdown(retry_markdown):
+                ctx.logger.info(
+                    f"  [OK] {space_name}: retry produced {len(retry_markdown):,} chars ({elapsed_s}s)"
+                )
+                return {
+                    "space": space_name,
+                    "markdown": retry_markdown,
+                    "error": None,
+                    "elapsed_s": elapsed_s,
+                }
+
+            retry_hint = str(
+                retry_result.get("response")
+                or retry_result.get("error")
+                or retry_result.get("download_error")
+                or ""
+            ).strip()
+            if retry_hint:
+                retry_hint = retry_hint.replace("\n", " ")[:180]
+            error_msg = "LLM query completed but no report file was saved after retry."
+            if hint:
+                error_msg = f"{error_msg} First hint: {hint}."
+            if retry_hint:
+                error_msg = f"{error_msg} Retry hint: {retry_hint}."
+            ctx.logger.error(f"  [FAIL] {space_name}: {error_msg} ({elapsed_s}s)")
+            return {
+                "space": space_name,
+                "markdown": None,
+                "error": error_msg,
+                "elapsed_s": elapsed_s,
+            }
+
         if _looks_like_report_markdown(markdown):
             ctx.logger.info(
                 f"  [OK] {space_name}: received {len(markdown):,} chars of markdown ({elapsed_s}s)"
