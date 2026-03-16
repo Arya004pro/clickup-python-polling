@@ -83,6 +83,29 @@ def _space_dedup_key(space_cfg: dict) -> str:
     return f"{scope}::{target}"
 
 
+def _monitored_spaces_from_env() -> set[str]:
+    """
+    Infer monitored spaces generically from MONITORING_CONFIG_JSON env payload.
+    Expected shape includes monitored_projects[].space.
+    """
+    raw = os.getenv("MONITORING_CONFIG_JSON", "").strip()
+    if not raw:
+        return set()
+    try:
+        import json
+
+        payload = json.loads(raw)
+    except Exception:
+        return set()
+
+    spaces: set[str] = set()
+    for item in payload.get("monitored_projects", []) or []:
+        space_name = str(item.get("space") or "").strip()
+        if space_name:
+            spaces.add(space_name.lower())
+    return spaces
+
+
 def _build_query(
     space_name: str,
     period: str,
@@ -229,7 +252,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         started_at = float(existing_run.get("started_at_epoch_s") or 0)
         age = max(0.0, now_epoch_s - started_at)
         if age < _RUN_LOCK_STALE_S:
-            ctx.logger.warning(
+            ctx.logger.warn(
                 "[DEDUP] Skipping trigger because another report generation run is active "
                 f"(age={age:.0f}s, source={existing_run.get('trigger_source')}, "
                 f"label={existing_run.get('schedule_label')})"
@@ -248,7 +271,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     if last_run is not None:
         elapsed = now_ts - float(last_run)
         if elapsed < _DEDUP_WINDOW_S:
-            ctx.logger.warning(
+            ctx.logger.warn(
                 f"[DEDUP] Skipping duplicate trigger for '{dedup_key}' "
                 f"(last ran {elapsed:.0f}s ago, window={_DEDUP_WINDOW_S}s)"
             )
@@ -269,6 +292,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         key = str(s.get("name") or "").strip().lower()
         if key and key not in configured_by_name:
             configured_by_name[key] = s
+    monitored_spaces_lc = _monitored_spaces_from_env()
 
     if requested_spaces_lc:
         # Follow trigger payload order exactly. If a requested space is missing in config,
@@ -285,10 +309,10 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 "display": requested_name,
                 "scope": "full",
             }
-            if key == "aix":
-                synthesized["query_label"] = "Monitored AIX"
+            if key in monitored_spaces_lc:
+                synthesized["query_label"] = f"Monitored {requested_name}"
                 synthesized["scope"] = "monitored"
-            ctx.logger.warning(
+            ctx.logger.warn(
                 "[CONFIG] Requested space missing from MONITORED_SPACES/REPORT_SPACES_JSON; "
                 f"using synthesized config: {synthesized}"
             )
@@ -305,7 +329,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         if key.endswith("::"):
             continue
         if key in seen_space_targets:
-            ctx.logger.warning(
+            ctx.logger.warn(
                 "[DEDUP] Skipping duplicate configured space entry: "
                 f"{space_cfg.get('name')} (key={key})"
             )
@@ -390,7 +414,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
             if result.get("status") == "error":
                 last_error = str(result.get("error") or "Unknown error").strip()
-                ctx.logger.warning(
+                ctx.logger.warn(
                     f"  [WARN] {space_name}: attempt {attempt} returned error ({last_error})"
                 )
                 continue
@@ -404,7 +428,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                         "_Report file was saved, but inline markdown was empty in /query response._"
                     )
                 if not _looks_like_report_markdown(markdown):
-                    ctx.logger.warning(
+                    ctx.logger.warn(
                         f"  [WARN] {space_name}: saved report had non-standard markdown shape; accepting saved file."
                     )
                 ctx.logger.info(
@@ -429,7 +453,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 "LLM returned non-report output or did not save report file."
                 + (f" Hint: {hint}" if hint else "")
             )
-            ctx.logger.warning(
+            ctx.logger.warn(
                 f"  [WARN] {space_name}: attempt {attempt} did not produce saved report."
             )
 
