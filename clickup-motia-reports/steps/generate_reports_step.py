@@ -128,7 +128,6 @@ def _call_api_server_sync(
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
     scope: str = "full",
-    timeout_s: int = 1200,
     retry_after_lookup: bool = False,
 ) -> dict:
     """
@@ -146,7 +145,7 @@ def _call_api_server_sync(
         resp = requests.post(
             f"{api_url}/query",
             json={"question": query, "reset_conversation": True},
-            timeout=timeout_s,
+            timeout=None,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -166,7 +165,10 @@ def _call_api_server_sync(
         if download_url:
             full_url = f"{api_url}{download_url}" if download_url.startswith("/") else download_url
             try:
-                dl = requests.get(full_url, timeout=min(120, timeout_s))
+                dl = requests.get(
+                    full_url,
+                    timeout=None,
+                )
                 if dl.status_code == 200 and (dl.text or "").strip():
                     data["response"] = dl.text
                     # Accept saved-report payload even if markdown validator is strict;
@@ -182,7 +184,7 @@ def _call_api_server_sync(
             return data
         return data
     except requests.exceptions.Timeout:
-        return {"status": "error", "error": f"Request timed out after {timeout_s}s"}
+        return {"status": "error", "error": "Request timed out"}
     except requests.exceptions.ConnectionError as exc:
         return {
             "status": "error",
@@ -193,6 +195,8 @@ def _call_api_server_sync(
 
 
 _DEDUP_WINDOW_S = 300  # 5 minutes - suppress duplicate triggers within this window
+_RUN_LOCK = asyncio.Lock()  # Process-local guard: only one generate handler at a time
+_RUN_LOCK_STALE_S = 7200  # 2h stale safety for distributed state marker
 
 
 async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
@@ -216,6 +220,22 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     )
     generation_started_epoch_ms = int(time.time() * 1000)
     generation_started_iso = datetime.now(timezone.utc).isoformat()
+
+    # --- Single-run guard: prevent overlapping generation batches ---
+    run_marker_key = "global"
+    now_epoch_s = time.time()
+    existing_run = await ctx.state.get("report_generation_in_progress", run_marker_key)
+    if isinstance(existing_run, dict):
+        started_at = float(existing_run.get("started_at_epoch_s") or 0)
+        age = max(0.0, now_epoch_s - started_at)
+        if age < _RUN_LOCK_STALE_S:
+            ctx.logger.warning(
+                "[DEDUP] Skipping trigger because another report generation run is active "
+                f"(age={age:.0f}s, source={existing_run.get('trigger_source')}, "
+                f"label={existing_run.get('schedule_label')})"
+            )
+            return
+    # -------------------------------------------------------------------------
 
     # --- Idempotency guard: skip if the same schedule already fired recently ---
     # This prevents duplicate emails when both the iii CronModule and the motia
@@ -295,14 +315,9 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         )
     )
 
-    # Controlled parallelism can reduce end-to-end runtime significantly.
-    # Keep this bounded to avoid overloading api-server/OpenRouter.
-    try:
-        report_concurrency = int(os.getenv("REPORT_CONCURRENCY", "1"))
-    except ValueError:
-        report_concurrency = 1
-    report_concurrency = max(1, min(report_concurrency, 4))
-    ctx.logger.info(f"Report concurrency: {report_concurrency}")
+    # Strictly sequential mode by design: one space at a time.
+    report_concurrency = 1
+    ctx.logger.info("Report concurrency: 1 (strict sequential mode)")
     ctx.logger.info("Report API mode: llm (/query) [direct disabled]")
     try:
         max_attempts = int(os.getenv("REPORT_LLM_MAX_ATTEMPTS", "3"))
@@ -310,8 +325,6 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         max_attempts = 3
     max_attempts = max(1, min(max_attempts, 6))
     ctx.logger.info(f"LLM max attempts per space: {max_attempts}")
-
-    semaphore = asyncio.Semaphore(report_concurrency)
 
     async def _process_space(space_cfg: dict) -> dict:
         space_name = space_cfg["name"]
@@ -323,29 +336,27 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         last_error = "Unknown error"
 
         for attempt in range(1, max_attempts + 1):
-            async with semaphore:
-                query = _build_query(
-                    query_label,
-                    period,
-                    custom_start,
-                    custom_end,
-                    scope=scope,
-                    retry_after_lookup=(attempt > 1),
-                )
-                ctx.logger.info(
-                    f"  [{space_name}] Attempt {attempt}/{max_attempts} via api-server: {query!r}"
-                )
-                result = await asyncio.to_thread(
-                    _call_api_server_sync,
-                    API_SERVER_URL,
-                    query_label,
-                    period,
-                    custom_start,
-                    custom_end,
-                    scope,
-                    1800,
-                    attempt > 1,
-                )
+            query = _build_query(
+                query_label,
+                period,
+                custom_start,
+                custom_end,
+                scope=scope,
+                retry_after_lookup=(attempt > 1),
+            )
+            ctx.logger.info(
+                f"  [{space_name}] Attempt {attempt}/{max_attempts} via api-server: {query!r}"
+            )
+            result = await asyncio.to_thread(
+                _call_api_server_sync,
+                API_SERVER_URL,
+                query_label,
+                period,
+                custom_start,
+                custom_end,
+                scope,
+                attempt > 1,
+            )
 
             elapsed_s = round(time.perf_counter() - started_at, 2)
 
@@ -405,9 +416,29 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
             "elapsed_s": elapsed_s,
         }
 
-    reports_markdown = await asyncio.gather(
-        *[_process_space(s) for s in spaces_to_process]
-    )
+    reports_markdown: list[dict] = []
+    async with _RUN_LOCK:
+        await ctx.state.set(
+            "report_generation_in_progress",
+            run_marker_key,
+            {
+                "started_at_epoch_s": now_epoch_s,
+                "started_at_iso": generation_started_iso,
+                "trigger_source": trigger_source,
+                "schedule_label": schedule_label,
+                "period": period,
+            },
+        )
+        try:
+            for idx, space_cfg in enumerate(spaces_to_process, start=1):
+                ctx.logger.info(
+                    f"[SEQ] Processing space {idx}/{len(spaces_to_process)}: {space_cfg.get('name')}"
+                )
+                reports_markdown.append(await _process_space(space_cfg))
+        finally:
+            # Mark run complete even if exceptions happen.
+            await ctx.state.set("report_generation_in_progress", run_marker_key, None)
+
     generation_finished_epoch_ms = int(time.time() * 1000)
     generation_elapsed_s = round(
         (generation_finished_epoch_ms - generation_started_epoch_ms) / 1000, 2
