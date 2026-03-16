@@ -298,9 +298,11 @@ def _send_report_via_brevo(report_path: Path, to_email: str, subject: str) -> No
  
  
 def _send_report_email(report_path: Path, to_email: str, subject: str) -> None:
-    transport = os.getenv("EMAIL_TRANSPORT", "auto").lower()
+    transport = os.getenv("EMAIL_TRANSPORT", "auto").strip().lower()
     brevo_key = os.getenv("BREVO_API_KEY", "").strip()
-    use_brevo = transport == "brevo_api" or (transport == "auto" and bool(brevo_key))
+    use_brevo = transport in {"brevo", "brevo_api"} or (
+        transport == "auto" and bool(brevo_key)
+    )
  
     print(f"[email] Transport selected: {'brevo_api' if use_brevo else 'smtp'}")
     if use_brevo:
