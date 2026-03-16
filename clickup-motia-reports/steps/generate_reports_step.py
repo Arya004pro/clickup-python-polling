@@ -66,6 +66,23 @@ def _looks_like_report_markdown(text: str) -> bool:
     return True
 
 
+def _space_dedup_key(space_cfg: dict) -> str:
+    """
+    Build canonical dedup key for a report-space config row.
+    Handles aliases like "AIX" + query_label "Monitored AIX".
+    """
+    name = str(space_cfg.get("name") or "").strip()
+    query_label = str(space_cfg.get("query_label") or "").strip()
+    scope = str(space_cfg.get("scope") or "full").strip().lower()
+    target = (query_label or name).strip().lower()
+    if scope == "monitored":
+        if target.startswith("monitored:"):
+            target = target.split(":", 1)[1].strip()
+        elif target.startswith("monitored "):
+            target = target[len("monitored ") :].strip()
+    return f"{scope}::{target}"
+
+
 def _build_query(
     space_name: str,
     period: str,
@@ -140,7 +157,6 @@ def _call_api_server_sync(
         response_text = str(data.get("response") or "")
 
         # If /query returns good markdown and it was saved, accept immediately.
-        # Requiring saved report guarantees visibility in dashboard list.
         if report_saved and _looks_like_report_markdown(response_text):
             return data
 
@@ -151,14 +167,19 @@ def _call_api_server_sync(
             full_url = f"{api_url}{download_url}" if download_url.startswith("/") else download_url
             try:
                 dl = requests.get(full_url, timeout=min(120, timeout_s))
-                if dl.status_code == 200 and _looks_like_report_markdown(dl.text):
+                if dl.status_code == 200 and (dl.text or "").strip():
                     data["response"] = dl.text
+                    # Accept saved-report payload even if markdown validator is strict;
+                    # dashboard visibility is guaranteed by report_saved=true.
                     return data
                 data["download_error"] = (
                     f"Report download returned {dl.status_code}: {dl.text[:120]}"
                 )
             except Exception as exc:
                 data["download_error"] = str(exc)[:160]
+        if report_saved:
+            # Avoid regenerating the same space report when file was already saved.
+            return data
         return data
     except requests.exceptions.Timeout:
         return {"status": "error", "error": f"Request timed out after {timeout_s}s"}
@@ -227,6 +248,24 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         if not requested_spaces_lc or s["name"].lower() in requested_spaces_lc
     ]
 
+    # Defensive dedup: runtime REPORT_SPACES_JSON can accidentally contain duplicate
+    # entries (common in Railway env edits). Keep first occurrence by canonical target.
+    deduped_spaces: list[dict] = []
+    seen_space_targets: set[str] = set()
+    for space_cfg in spaces_to_process:
+        key = _space_dedup_key(space_cfg)
+        if key.endswith("::"):
+            continue
+        if key in seen_space_targets:
+            ctx.logger.warning(
+                "[DEDUP] Skipping duplicate configured space entry: "
+                f"{space_cfg.get('name')} (key={key})"
+            )
+            continue
+        seen_space_targets.add(key)
+        deduped_spaces.append(space_cfg)
+    spaces_to_process = deduped_spaces
+
     if requested_spaces_lc and not spaces_to_process:
         ctx.logger.error(
             f"No monitored spaces matched requested list: {sorted(requested_spaces_lc)}"
@@ -242,14 +281,26 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         f"Trigger meta - source={trigger_source}, triggered_at={trigger_iso}"
     )
     ctx.logger.info(f"API server URL: {API_SERVER_URL}")
-    ctx.logger.info(f"Spaces to process: {[s['name'] for s in spaces_to_process]}")
+    ctx.logger.info(
+        "Spaces to process: "
+        + str(
+            [
+                {
+                    "name": s.get("name"),
+                    "query_label": s.get("query_label"),
+                    "scope": s.get("scope", "full"),
+                }
+                for s in spaces_to_process
+            ]
+        )
+    )
 
     # Controlled parallelism can reduce end-to-end runtime significantly.
     # Keep this bounded to avoid overloading api-server/OpenRouter.
     try:
-        report_concurrency = int(os.getenv("REPORT_CONCURRENCY", "2"))
+        report_concurrency = int(os.getenv("REPORT_CONCURRENCY", "1"))
     except ValueError:
-        report_concurrency = 2
+        report_concurrency = 1
     report_concurrency = max(1, min(report_concurrency, 4))
     ctx.logger.info(f"Report concurrency: {report_concurrency}")
     ctx.logger.info("Report API mode: llm (/query) [direct disabled]")
@@ -307,7 +358,16 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
             markdown = result.get("response") or ""
             report_saved = bool(result.get("report_saved"))
-            if report_saved and _looks_like_report_markdown(markdown):
+            if report_saved:
+                if not str(markdown).strip():
+                    markdown = (
+                        f"## Space Report: {space_name}\n\n"
+                        "_Report file was saved, but inline markdown was empty in /query response._"
+                    )
+                if not _looks_like_report_markdown(markdown):
+                    ctx.logger.warning(
+                        f"  [WARN] {space_name}: saved report had non-standard markdown shape; accepting saved file."
+                    )
                 ctx.logger.info(
                     f"  [OK] {space_name}: report generated on attempt {attempt} ({len(markdown):,} chars, {elapsed_s}s)"
                 )
