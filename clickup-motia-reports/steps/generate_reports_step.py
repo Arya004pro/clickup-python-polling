@@ -48,7 +48,10 @@ def _looks_like_report_markdown(text: str) -> bool:
     lowered = stripped.lower()
     if lowered.startswith("error:"):
         return False
-    if lowered.startswith("report job ") and "did not complete within the timeout" in lowered:
+    if (
+        lowered.startswith("report job ")
+        and "did not complete within the timeout" in lowered
+    ):
         return False
 
     report_headers = (
@@ -155,7 +158,9 @@ def _build_query(
         period_phrase = f"{custom_start} to {custom_end}"
         return f"Generate a space task report for {space_name} for {period_phrase}. {guidance}"
     period_phrase = _PERIOD_PHRASES.get(period, period)
-    return f"Generate a space task report for {space_name} for {period_phrase}. {guidance}"
+    return (
+        f"Generate a space task report for {space_name} for {period_phrase}. {guidance}"
+    )
 
 
 def _call_api_server_sync(
@@ -200,9 +205,15 @@ def _call_api_server_sync(
 
         # If /query returns empty/non-report content but includes a saved report URL,
         # hydrate response from the saved markdown file.
-        download_url = str(data.get("report_download_url") or "").strip() if report_saved else ""
+        download_url = (
+            str(data.get("report_download_url") or "").strip() if report_saved else ""
+        )
         if download_url:
-            full_url = f"{api_url}{download_url}" if download_url.startswith("/") else download_url
+            full_url = (
+                f"{api_url}{download_url}"
+                if download_url.startswith("/")
+                else download_url
+            )
             try:
                 dl = requests.get(
                     full_url,
@@ -246,8 +257,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     from steps.config import API_SERVER_URL, MONITORED_SPACES
 
     period = input_data.get("period", "today")
-    custom_start = (str(input_data.get("custom_start") or "").strip() or None)
-    custom_end = (str(input_data.get("custom_end") or "").strip() or None)
+    custom_start = str(input_data.get("custom_start") or "").strip() or None
+    custom_end = str(input_data.get("custom_end") or "").strip() or None
     schedule_label = input_data.get("schedule_label", "Report")
     trigger_epoch_ms = int(
         input_data.get("triggered_at_epoch_ms") or time.time() * 1000
@@ -298,9 +309,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     requested_spaces_list = [
         str(name).strip() for name in (requested_spaces or []) if str(name).strip()
     ]
-    requested_spaces_lc = {
-        name.lower() for name in requested_spaces_list
-    }
+    requested_spaces_lc = {name.lower() for name in requested_spaces_list}
 
     # Build lookup from configured spaces.
     configured_by_name: dict[str, dict] = {}
@@ -454,15 +463,20 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
             markdown = result.get("response") or ""
             report_saved = bool(result.get("report_saved"))
-            if report_saved:
-                if not str(markdown).strip():
+            has_valid_markdown = _looks_like_report_markdown(str(markdown))
+            if report_saved or has_valid_markdown:
+                if not str(markdown).strip() and report_saved:
                     markdown = (
                         f"## Space Report: {space_name}\n\n"
                         "_Report file was saved, but inline markdown was empty in /query response._"
                     )
-                if not _looks_like_report_markdown(markdown):
+                if report_saved and not has_valid_markdown:
                     ctx.logger.warn(
                         f"  [WARN] {space_name}: saved report had non-standard markdown shape; accepting saved file."
+                    )
+                if has_valid_markdown and not report_saved:
+                    ctx.logger.warn(
+                        f"  [WARN] {space_name}: api-server returned valid markdown but report_saved=false; accepting markdown output."
                     )
                 ctx.logger.info(
                     f"  [OK] {space_name}: report generated on attempt {attempt} ({len(markdown):,} chars, {elapsed_s}s)"
@@ -482,12 +496,11 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
             ).strip()
             if hint:
                 hint = hint.replace("\n", " ")[:180]
-            last_error = (
-                "LLM returned non-report output or did not save report file."
-                + (f" Hint: {hint}" if hint else "")
+            last_error = "Report generation did not return usable markdown." + (
+                f" Hint: {hint}" if hint else ""
             )
             ctx.logger.warn(
-                f"  [WARN] {space_name}: attempt {attempt} did not produce saved report."
+                f"  [WARN] {space_name}: attempt {attempt} did not produce report markdown."
             )
 
         elapsed_s = round(time.perf_counter() - started_at, 2)
@@ -534,7 +547,9 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     )
 
     failed_reports = [
-        r for r in reports_markdown if r.get("error") or not str(r.get("markdown") or "").strip()
+        r
+        for r in reports_markdown
+        if r.get("error") or not str(r.get("markdown") or "").strip()
     ]
     if failed_reports:
         failed_spaces = [str(r.get("space") or "unknown") for r in failed_reports]
