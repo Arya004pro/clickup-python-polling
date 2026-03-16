@@ -113,8 +113,17 @@ def _build_query(
     custom_end: Optional[str] = None,
     scope: str = "full",
     retry_after_lookup: bool = False,
+    aliases: Optional[list[str]] = None,
 ) -> str:
     """Build the natural language query sent to the api-server."""
+    alias_list = [a.strip() for a in (aliases or []) if str(a).strip()]
+    alias_hint = ""
+    if alias_list:
+        alias_hint = (
+            " Valid configured names/aliases for this target are: "
+            + ", ".join(f"'{a}'" for a in alias_list)
+            + "."
+        )
     scope_norm = (scope or "full").strip().lower()
     if scope_norm == "monitored":
         guidance = (
@@ -123,18 +132,23 @@ def _build_query(
             "Call get_space_task_report directly with space_name exactly as provided. "
             "Do NOT convert it to plain AIX. Do NOT call find_project_anywhere. "
             "Return only formatted_output."
+            f"{alias_hint}"
         )
     else:
         guidance = (
-            "Scheduled automation mode. First call find_project_anywhere for entity resolution. "
-            "Then continue in the same request and call get_space_task_report with the resolved space_name. "
-            "Do not stop after lookup. Return only formatted_output."
+            "Scheduled automation mode for known configured space names. "
+            "Call get_space_task_report directly with space_name exactly as provided. "
+            "Do NOT call find_project_anywhere. "
+            "Return only formatted_output."
+            f"{alias_hint}"
         )
         if retry_after_lookup:
             guidance = (
-                "Scheduled automation retry. You may have stopped after find_project_anywhere previously. "
-                "Now continue and call get_space_task_report for this space immediately. "
+                "Scheduled automation retry. "
+                f"Use space_name exactly '{space_name}'. "
+                "Call get_space_task_report immediately. "
                 "Return only formatted_output."
+                f"{alias_hint}"
             )
 
     if period == "custom" and custom_start and custom_end:
@@ -152,6 +166,7 @@ def _call_api_server_sync(
     custom_end: Optional[str] = None,
     scope: str = "full",
     retry_after_lookup: bool = False,
+    aliases: Optional[list[str]] = None,
 ) -> dict:
     """
     Synchronous POST to api-server /query endpoint for LLM report generation.
@@ -164,6 +179,7 @@ def _call_api_server_sync(
             custom_end,
             scope=scope,
             retry_after_lookup=retry_after_lookup,
+            aliases=aliases,
         )
         resp = requests.post(
             f"{api_url}/query",
@@ -384,6 +400,21 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         # so the AI model applies the correct Monitored Scope Exception from the system prompt.
         query_label = space_cfg.get("query_label") or space_name
         scope = str(space_cfg.get("scope") or "full").strip().lower()
+        aliases: list[str] = []
+        for candidate in (
+            space_cfg.get("name"),
+            space_cfg.get("query_label"),
+            space_cfg.get("display"),
+        ):
+            value = str(candidate or "").strip()
+            if value and value not in aliases:
+                aliases.append(value)
+        raw_aliases = space_cfg.get("aliases")
+        if isinstance(raw_aliases, list):
+            for alias in raw_aliases:
+                value = str(alias or "").strip()
+                if value and value not in aliases:
+                    aliases.append(value)
         started_at = time.perf_counter()
         last_error = "Unknown error"
 
@@ -395,6 +426,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 custom_end,
                 scope=scope,
                 retry_after_lookup=(attempt > 1),
+                aliases=aliases,
             )
             ctx.logger.info(
                 f"  [{space_name}] Attempt {attempt}/{max_attempts} via api-server: {query!r}"
@@ -408,6 +440,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 custom_end,
                 scope,
                 attempt > 1,
+                aliases,
             )
 
             elapsed_s = round(time.perf_counter() - started_at, 2)
