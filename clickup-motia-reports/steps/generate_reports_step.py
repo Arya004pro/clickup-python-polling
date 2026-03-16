@@ -10,7 +10,7 @@ import asyncio
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import requests
 from motia import FlowContext, queue
@@ -37,8 +37,16 @@ _PERIOD_PHRASES = {
 }
 
 
-def _build_query(space_name: str, period: str) -> str:
+def _build_query(
+    space_name: str,
+    period: str,
+    custom_start: Optional[str] = None,
+    custom_end: Optional[str] = None,
+) -> str:
     """Build the natural language query sent to the api-server."""
+    if period == "custom" and custom_start and custom_end:
+        period_phrase = f"{custom_start} to {custom_end}"
+        return f"Generate a space task report for {space_name} for {period_phrase}"
     period_phrase = _PERIOD_PHRASES.get(period, period)
     return f"Generate a space task report for {space_name} for {period_phrase}"
 
@@ -47,6 +55,8 @@ def _call_api_server_sync(
     api_url: str,
     space_name: str,
     period: str,
+    custom_start: Optional[str] = None,
+    custom_end: Optional[str] = None,
     timeout_s: int = 1200,
     use_direct_endpoint: bool = True,
 ) -> dict:
@@ -63,13 +73,15 @@ def _call_api_server_sync(
                     "space_name": space_name,
                     "period_type": period,
                     "include_archived": True,
+                    "custom_start": custom_start,
+                    "custom_end": custom_end,
                 },
                 timeout=timeout_s,
             )
             resp.raise_for_status()
             return resp.json()
 
-        query = _build_query(space_name, period)
+        query = _build_query(space_name, period, custom_start, custom_end)
         resp = requests.post(
             f"{api_url}/query",
             json={"question": query, "reset_conversation": True},
@@ -99,6 +111,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     from steps.config import API_SERVER_URL, MONITORED_SPACES
 
     period = input_data.get("period", "today")
+    custom_start = (str(input_data.get("custom_start") or "").strip() or None)
+    custom_end = (str(input_data.get("custom_end") or "").strip() or None)
     schedule_label = input_data.get("schedule_label", "Report")
     trigger_epoch_ms = int(
         input_data.get("triggered_at_epoch_ms") or time.time() * 1000
@@ -115,6 +129,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     # This prevents duplicate emails when both the iii CronModule and the motia
     # Python worker fire the same cron step (two triggers → one email).
     dedup_key = f"{schedule_label}::{period}"
+    if period == "custom" and custom_start and custom_end:
+        dedup_key = f"{dedup_key}::{custom_start}::{custom_end}"
     last_run = await ctx.state.get("report_last_run", dedup_key)
     now_ts = time.time()
     if last_run is not None:
@@ -149,6 +165,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     ctx.logger.info(
         f"Generating reports via api-server - period={period}, label={schedule_label}"
     )
+    if period == "custom" and custom_start and custom_end:
+        ctx.logger.info(f"Custom period range: {custom_start} to {custom_end}")
     ctx.logger.info(
         f"Trigger meta - source={trigger_source}, triggered_at={trigger_iso}"
     )
@@ -184,13 +202,15 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                     f"  [{space_name}] Querying api-server direct endpoint (/report/space)"
                 )
             else:
-                query = _build_query(query_label, period)
+                query = _build_query(query_label, period, custom_start, custom_end)
                 ctx.logger.info(f"  [{space_name}] Querying api-server: {query!r}")
             result = await asyncio.to_thread(
                 _call_api_server_sync,
                 API_SERVER_URL,
                 query_label,
                 period,
+                custom_start,
+                custom_end,
                 1800,
                 use_direct_endpoint,
             )
@@ -238,6 +258,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 "timing_meta": {
                     "trigger_source": trigger_source,
                     "period": period,
+                    "custom_start": custom_start,
+                    "custom_end": custom_end,
                     "schedule_label": schedule_label,
                     "triggered_at_epoch_ms": trigger_epoch_ms,
                     "triggered_at_iso": trigger_iso,

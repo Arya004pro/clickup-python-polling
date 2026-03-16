@@ -29,6 +29,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -146,6 +147,7 @@ client_connect_lock = asyncio.Lock()
 # Serialise all /query requests behind this lock.
 query_lock = asyncio.Lock()
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", r"D:\reports"))
+IST_TZ = ZoneInfo("Asia/Kolkata")
 
 
 def _ensure_reports_dir() -> None:
@@ -167,8 +169,8 @@ def _list_reports(limit: int = 50) -> list[dict]:
         {
             "name": p.name,
             "size_bytes": st.st_size,
-            "modified": datetime.fromtimestamp(st.st_mtime).isoformat(
-                timespec="seconds"
+            "modified": datetime.fromtimestamp(st.st_mtime, tz=IST_TZ).strftime(
+                "%Y-%m-%d %H:%M:%S IST"
             ),
         }
         for p, st in report_entries[:limit]
@@ -1005,7 +1007,7 @@ async def dashboard():
       container.innerHTML = `
         <table class="reports-table">
           <thead>
-            <tr><th>Report</th><th>Modified</th><th>Size</th><th>Actions</th></tr>
+            <tr><th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
