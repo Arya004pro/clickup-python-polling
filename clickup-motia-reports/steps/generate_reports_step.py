@@ -37,6 +37,35 @@ _PERIOD_PHRASES = {
 }
 
 
+def _looks_like_report_markdown(text: str) -> bool:
+    """
+    Validate that content resembles task report formatted_output markdown.
+    This filters out lookup-only replies such as find_project_anywhere summaries.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    if lowered.startswith("error:"):
+        return False
+    if lowered.startswith("report job ") and "did not complete within the timeout" in lowered:
+        return False
+
+    report_headers = (
+        "## space report:",
+        "## project report:",
+        "## member report:",
+        "## low hours report",
+        "## missing estimation report",
+        "## overtime report",
+    )
+    if not any(h in lowered for h in report_headers):
+        return False
+    if "**period:**" not in lowered and "|  **period:**" not in lowered:
+        return False
+    return True
+
+
 def _build_query(
     space_name: str,
     period: str,
@@ -46,9 +75,17 @@ def _build_query(
     """Build the natural language query sent to the api-server."""
     if period == "custom" and custom_start and custom_end:
         period_phrase = f"{custom_start} to {custom_end}"
-        return f"Generate a space task report for {space_name} for {period_phrase}"
+        return (
+            f"Generate a space task report for {space_name} for {period_phrase}. "
+            "Scheduled automation mode: do not ask for confirmation, do not stop after lookup, "
+            "and in this same turn you must call get_space_task_report and then return formatted_output only."
+        )
     period_phrase = _PERIOD_PHRASES.get(period, period)
-    return f"Generate a space task report for {space_name} for {period_phrase}"
+    return (
+        f"Generate a space task report for {space_name} for {period_phrase}. "
+        "Scheduled automation mode: do not ask for confirmation, do not stop after lookup, "
+        "and in this same turn you must call get_space_task_report and then return formatted_output only."
+    )
 
 
 def _call_api_server_sync(
@@ -58,29 +95,11 @@ def _call_api_server_sync(
     custom_start: Optional[str] = None,
     custom_end: Optional[str] = None,
     timeout_s: int = 1200,
-    use_direct_endpoint: bool = True,
 ) -> dict:
     """
-    Synchronous POST to api-server endpoint for report generation.
-    Fast path uses /report/space (direct MCP tool call, no LLM round-trip).
-    Falls back to /query when needed.
+    Synchronous POST to api-server /query endpoint for LLM report generation.
     """
     try:
-        if use_direct_endpoint:
-            resp = requests.post(
-                f"{api_url}/report/space",
-                json={
-                    "space_name": space_name,
-                    "period_type": period,
-                    "include_archived": True,
-                    "custom_start": custom_start,
-                    "custom_end": custom_end,
-                },
-                timeout=timeout_s,
-            )
-            resp.raise_for_status()
-            return resp.json()
-
         query = _build_query(space_name, period, custom_start, custom_end)
         resp = requests.post(
             f"{api_url}/query",
@@ -88,7 +107,30 @@ def _call_api_server_sync(
             timeout=timeout_s,
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if data.get("status") == "error":
+            return data
+
+        # If /query returns empty/non-report content but includes a saved report URL,
+        # hydrate response from the saved markdown file.
+        response_text = str(data.get("response") or "")
+        if _looks_like_report_markdown(response_text):
+            return data
+
+        download_url = str(data.get("report_download_url") or "").strip()
+        if download_url:
+            full_url = f"{api_url}{download_url}" if download_url.startswith("/") else download_url
+            try:
+                dl = requests.get(full_url, timeout=min(120, timeout_s))
+                if dl.status_code == 200 and _looks_like_report_markdown(dl.text):
+                    data["response"] = dl.text
+                    return data
+                data["download_error"] = (
+                    f"Report download returned {dl.status_code}: {dl.text[:120]}"
+                )
+            except Exception as exc:
+                data["download_error"] = str(exc)[:160]
+        return data
     except requests.exceptions.Timeout:
         return {"status": "error", "error": f"Request timed out after {timeout_s}s"}
     except requests.exceptions.ConnectionError as exc:
@@ -181,12 +223,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         report_concurrency = 2
     report_concurrency = max(1, min(report_concurrency, 4))
     ctx.logger.info(f"Report concurrency: {report_concurrency}")
-    use_direct_endpoint = (
-        os.getenv("REPORT_API_MODE", "direct").strip().lower() != "llm"
-    )
-    ctx.logger.info(
-        f"Report API mode: {'direct (/report/space)' if use_direct_endpoint else 'llm (/query)'}"
-    )
+    ctx.logger.info("Report API mode: llm (/query) [direct disabled]")
 
     semaphore = asyncio.Semaphore(report_concurrency)
 
@@ -197,13 +234,8 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
         query_label = space_cfg.get("query_label") or space_name
         started_at = time.perf_counter()
         async with semaphore:
-            if use_direct_endpoint:
-                ctx.logger.info(
-                    f"  [{space_name}] Querying api-server direct endpoint (/report/space)"
-                )
-            else:
-                query = _build_query(query_label, period, custom_start, custom_end)
-                ctx.logger.info(f"  [{space_name}] Querying api-server: {query!r}")
+            query = _build_query(query_label, period, custom_start, custom_end)
+            ctx.logger.info(f"  [{space_name}] Querying api-server: {query!r}")
             result = await asyncio.to_thread(
                 _call_api_server_sync,
                 API_SERVER_URL,
@@ -212,7 +244,6 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                 custom_start,
                 custom_end,
                 1800,
-                use_direct_endpoint,
             )
         elapsed_s = round(time.perf_counter() - started_at, 2)
 
@@ -227,13 +258,29 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
             }
 
         markdown = result.get("response") or ""
-        ctx.logger.info(
-            f"  [OK] {space_name}: received {len(markdown):,} chars of markdown ({elapsed_s}s)"
-        )
+        if _looks_like_report_markdown(markdown):
+            ctx.logger.info(
+                f"  [OK] {space_name}: received {len(markdown):,} chars of markdown ({elapsed_s}s)"
+            )
+            return {
+                "space": space_name,
+                "markdown": markdown,
+                "error": None,
+                "elapsed_s": elapsed_s,
+            }
+
+        hint = str(result.get("download_error") or result.get("response") or "").strip()
+        if hint:
+            hint = hint.replace("\n", " ")[:180]
+
+        error_msg = "LLM returned non-report output from /query."
+        if hint:
+            error_msg = f"{error_msg} Hint: {hint}"
+        ctx.logger.error(f"  [FAIL] {space_name}: {error_msg} ({elapsed_s}s)")
         return {
             "space": space_name,
-            "markdown": markdown,
-            "error": None,
+            "markdown": None,
+            "error": error_msg,
             "elapsed_s": elapsed_s,
         }
 
@@ -269,7 +316,7 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
                     "generation_finished_iso": datetime.now(timezone.utc).isoformat(),
                     "generation_elapsed_s": generation_elapsed_s,
                     "report_concurrency": report_concurrency,
-                    "report_api_mode": "direct" if use_direct_endpoint else "llm",
+                    "report_api_mode": "llm",
                 },
             },
         }
