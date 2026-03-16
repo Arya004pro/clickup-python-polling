@@ -256,17 +256,45 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     await ctx.state.set("report_last_run", dedup_key, now_ts)
     # -------------------------------------------------------------------------
     requested_spaces = input_data.get("spaces")
+    requested_spaces_list = [
+        str(name).strip() for name in (requested_spaces or []) if str(name).strip()
+    ]
     requested_spaces_lc = {
-        str(name).strip().lower()
-        for name in (requested_spaces or [])
-        if str(name).strip()
+        name.lower() for name in requested_spaces_list
     }
 
-    spaces_to_process = [
-        s
-        for s in MONITORED_SPACES
-        if not requested_spaces_lc or s["name"].lower() in requested_spaces_lc
-    ]
+    # Build lookup from configured spaces.
+    configured_by_name: dict[str, dict] = {}
+    for s in MONITORED_SPACES:
+        key = str(s.get("name") or "").strip().lower()
+        if key and key not in configured_by_name:
+            configured_by_name[key] = s
+
+    if requested_spaces_lc:
+        # Follow trigger payload order exactly. If a requested space is missing in config,
+        # synthesize a safe default entry so one bad REPORT_SPACES_JSON cannot truncate runs.
+        spaces_to_process = []
+        for requested_name in requested_spaces_list:
+            key = requested_name.lower()
+            cfg = configured_by_name.get(key)
+            if cfg:
+                spaces_to_process.append(cfg)
+                continue
+            synthesized = {
+                "name": requested_name,
+                "display": requested_name,
+                "scope": "full",
+            }
+            if key == "aix":
+                synthesized["query_label"] = "Monitored AIX"
+                synthesized["scope"] = "monitored"
+            ctx.logger.warning(
+                "[CONFIG] Requested space missing from MONITORED_SPACES/REPORT_SPACES_JSON; "
+                f"using synthesized config: {synthesized}"
+            )
+            spaces_to_process.append(synthesized)
+    else:
+        spaces_to_process = list(MONITORED_SPACES)
 
     # Defensive dedup: runtime REPORT_SPACES_JSON can accidentally contain duplicate
     # entries (common in Railway env edits). Keep first occurrence by canonical target.
