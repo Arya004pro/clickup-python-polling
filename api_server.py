@@ -22,6 +22,7 @@ import os
 import re
 import smtplib
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from email import encoders
 from email.mime.base import MIMEBase
@@ -134,10 +135,20 @@ class RenderPdfRequest(BaseModel):
     filename: Optional[str] = None
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
 app = FastAPI(
     title="ClickUp MCP REST API",
     description="Query ClickUp via MCP + AI provider",
     version="1.1.0",
+    lifespan=lifespan,
 )
 
 client = None
@@ -197,9 +208,7 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
     smtp_password = os.getenv("SMTP_PASSWORD", "")
 
     if not smtp_email or not smtp_password:
-        raise RuntimeError(
-            "SMTP_EMAIL/SMTP_PASSWORD not configured in environment."
-        )
+        raise RuntimeError("SMTP_EMAIL/SMTP_PASSWORD not configured in environment.")
 
     report_content = report_path.read_text(encoding="utf-8")
     report_title = report_path.stem
@@ -235,7 +244,9 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
         attachment.set_payload(report_content.encode("utf-8"))
         encoders.encode_base64(attachment)
         fallback_name = f"{report_title}.md"
-        attachment.add_header("Content-Disposition", f'attachment; filename="{fallback_name}"')
+        attachment.add_header(
+            "Content-Disposition", f'attachment; filename="{fallback_name}"'
+        )
         msg.attach(attachment)
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -243,48 +254,55 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
         server.login(smtp_email, smtp_password)
         server.send_message(msg)
 
+
 def _send_report_via_brevo(report_path: Path, to_email: str, subject: str) -> None:
     import base64 as _b64
     import requests as _requests
- 
+
     api_key = os.getenv("BREVO_API_KEY", "").strip()
     email_from = os.getenv("EMAIL_FROM", "").strip()
     from_name = os.getenv("EMAIL_FROM_NAME", "Arya").strip()
- 
+
     if not api_key or not email_from:
         raise RuntimeError(
             "BREVO_API_KEY and EMAIL_FROM must be set for brevo_api transport."
         )
- 
+
     report_content = report_path.read_text(encoding="utf-8")
     report_title = report_path.stem
- 
+
     html_body = (
         f"<p>Hello,</p>"
         f"<p>Please find the ClickUp report <b>{report_title}</b> attached.</p>"
         f"<p>Generated: {datetime.now().isoformat(timespec='seconds')}</p>"
         f"<p>Regards,<br>ClickUp MCP API</p>"
     )
- 
+
     payload: dict = {
         "sender": {"name": from_name, "email": email_from},
         "to": [{"email": to_email}],
         "subject": subject,
         "htmlContent": html_body,
     }
- 
+
     pdf_bytes = _markdown_to_pdf_bytes(report_content, report_title)
     if pdf_bytes:
-        payload["attachment"] = [{
-            "name": f"{report_title}.pdf",
-            "content": _b64.b64encode(pdf_bytes).decode("utf-8"),
-        }]
+        payload["attachment"] = [
+            {
+                "name": f"{report_title}.pdf",
+                "content": _b64.b64encode(pdf_bytes).decode("utf-8"),
+            }
+        ]
     else:
-        payload["attachment"] = [{
-            "name": f"{report_title}.md",
-            "content": _b64.b64encode(report_content.encode("utf-8")).decode("utf-8"),
-        }]
- 
+        payload["attachment"] = [
+            {
+                "name": f"{report_title}.md",
+                "content": _b64.b64encode(report_content.encode("utf-8")).decode(
+                    "utf-8"
+                ),
+            }
+        ]
+
     resp = _requests.post(
         "https://api.brevo.com/v3/smtp/email",
         headers={"api-key": api_key, "Content-Type": "application/json"},
@@ -292,18 +310,16 @@ def _send_report_via_brevo(report_path: Path, to_email: str, subject: str) -> No
         timeout=45,
     )
     if resp.status_code not in (200, 201):
-        raise RuntimeError(
-            f"Brevo API error {resp.status_code}: {resp.text[:300]}"
-        )
- 
- 
+        raise RuntimeError(f"Brevo API error {resp.status_code}: {resp.text[:300]}")
+
+
 def _send_report_email(report_path: Path, to_email: str, subject: str) -> None:
     transport = os.getenv("EMAIL_TRANSPORT", "auto").strip().lower()
     brevo_key = os.getenv("BREVO_API_KEY", "").strip()
     use_brevo = transport in {"brevo", "brevo_api"} or (
         transport == "auto" and bool(brevo_key)
     )
- 
+
     print(f"[email] Transport selected: {'brevo_api' if use_brevo else 'smtp'}")
     if use_brevo:
         _send_report_via_brevo(report_path, to_email, subject)
@@ -515,14 +531,35 @@ def _markdown_to_pdf_bytes(markdown_content: str, title: str) -> Optional[bytes]
                     table.setStyle(
                         TableStyle(
                             [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf9")),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f2f57")),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8d6ea")),
+                                (
+                                    "BACKGROUND",
+                                    (0, 0),
+                                    (-1, 0),
+                                    colors.HexColor("#dfeaf9"),
+                                ),
+                                (
+                                    "TEXTCOLOR",
+                                    (0, 0),
+                                    (-1, 0),
+                                    colors.HexColor("#0f2f57"),
+                                ),
+                                (
+                                    "GRID",
+                                    (0, 0),
+                                    (-1, -1),
+                                    0.5,
+                                    colors.HexColor("#c8d6ea"),
+                                ),
                                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                                 ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
                                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7faff")]),
+                                (
+                                    "ROWBACKGROUNDS",
+                                    (0, 1),
+                                    (-1, -1),
+                                    [colors.white, colors.HexColor("#f7faff")],
+                                ),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                                 ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -567,7 +604,6 @@ async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
             return False, str(exc)[:160]
 
 
-@app.on_event("startup")
 async def startup_event():
     _ensure_reports_dir()
 
@@ -586,7 +622,6 @@ async def startup_event():
             print("Initial retries exhausted. Client will retry on first query.")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     global client, client_ready
     if client:
@@ -1219,6 +1254,7 @@ async def dashboard():
 </html>
     """
 
+
 @app.post("/query", response_model=QueryResponse)
 async def query_ai(req: QueryRequest):
     global client, client_ready
@@ -1328,10 +1364,9 @@ async def generate_space_report(req: SpaceReportRequest):
         )
 
     started = asyncio.get_running_loop().time()
-    use_isolated_client = (
-        os.getenv("REPORT_DIRECT_ISOLATED_CLIENT", "true").strip().lower()
-        not in {"0", "false", "no"}
-    )
+    use_isolated_client = os.getenv(
+        "REPORT_DIRECT_ISOLATED_CLIENT", "true"
+    ).strip().lower() not in {"0", "false", "no"}
 
     async def _run_with_client(active_client) -> Optional[str]:
         return await active_client.generate_space_report_direct(
@@ -1536,5 +1571,3 @@ if __name__ == "__main__":
     print("=" * 70)
 
     uvicorn.run(app, host="0.0.0.0", port=8003, log_level="info")
-
-
