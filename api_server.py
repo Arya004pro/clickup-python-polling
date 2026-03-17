@@ -7,6 +7,7 @@ HTTP endpoints:
   GET  /status
   GET  /stats
   GET  /reports
+  DELETE /reports/{report_name}
   GET  /reports/latest
   GET  /reports/{report_name}
   GET  /
@@ -931,6 +932,9 @@ async def dashboard():
           </div>
           <div class="button-row" style="margin-bottom:10px;">
             <button class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
+            <button class="btn-primary" id="bulkSendBtn" onclick="sendSelectedReports()" disabled>Send Selected (0)</button>
+            <button class="btn-secondary" id="bulkDeleteBtn" onclick="deleteSelectedReports()" disabled>Delete Selected (0)</button>
+            <button class="btn-secondary" id="clearSelectionBtn" onclick="clearReportSelection()" disabled>Clear Selection</button>
             <button class="btn-secondary" onclick="showTab('query')">Back to Query</button>
           </div>
           <div class="reports-wrap">
@@ -954,6 +958,7 @@ async def dashboard():
     let backendWasOffline = false;
     let heartbeatTimer = null;
     let reportsData = [];
+    let selectedReports = new Set();
     let reportsPage = 1;
     const REPORTS_PAGE_SIZE = 15;
     const HEARTBEAT_ONLINE_MS = 10000;
@@ -1011,6 +1016,9 @@ async def dashboard():
       const prevBtn = document.getElementById('prevPageBtn');
       const nextBtn = document.getElementById('nextPageBtn');
 
+      syncSelectionWithData();
+      updateSelectionUI();
+
       if (!reportsData.length) {
         container.innerHTML = '<div class="reports-empty">No reports found.</div>';
         pager.style.display = 'none';
@@ -1021,20 +1029,26 @@ async def dashboard():
       reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
       const start = (reportsPage - 1) * REPORTS_PAGE_SIZE;
       const pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
+      const allPageSelected = pageRows.length > 0 && pageRows.every((r) => selectedReports.has(r.name || ''));
 
       const rows = pageRows.map((r) => {
-        const name = escapeHtml(r.name || '');
+        const rawName = r.name || '';
+        const name = escapeHtml(rawName);
+        const encodedName = encodeURIComponent(rawName);
+        const isSelected = selectedReports.has(rawName);
         const modified = escapeHtml(r.modified || '');
         const size = formatBytes(r.size_bytes || 0);
         return `
           <tr>
-            <td><a href="/reports/${name}" target="_blank">${name}</a></td>
+            <td><input type="checkbox" class="report-select" data-report="${encodedName}" ${isSelected ? 'checked' : ''} /></td>
+            <td><a href="/reports/${encodedName}" target="_blank">${name}</a></td>
             <td>${modified}</td>
             <td>${size}</td>
             <td>
               <div class="actions">
-                <a class="btn-secondary btn-small" href="/reports/${name}" target="_blank">Open</a>
-                <button class="btn-primary btn-small send-btn" data-report="${name}">Send</button>
+                <a class="btn-secondary btn-small" href="/reports/${encodedName}" target="_blank">Open</a>
+                <button class="btn-primary btn-small send-btn" data-report="${encodedName}">Send</button>
+                <button class="btn-secondary btn-small delete-btn" data-report="${encodedName}">Delete</button>
               </div>
             </td>
           </tr>
@@ -1044,7 +1058,7 @@ async def dashboard():
       container.innerHTML = `
         <table class="reports-table">
           <thead>
-            <tr><th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th></tr>
+            <tr><th><input type="checkbox" id="selectAllOnPage" ${allPageSelected ? 'checked' : ''} /></th><th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
@@ -1055,9 +1069,69 @@ async def dashboard():
       prevBtn.disabled = reportsPage <= 1;
       nextBtn.disabled = reportsPage >= totalPages;
 
-      document.querySelectorAll('.send-btn').forEach((btn) => {
-        btn.addEventListener('click', () => sendReportByEmail(btn.dataset.report, btn));
+      const selectAll = document.getElementById('selectAllOnPage');
+      if (selectAll) {
+        selectAll.addEventListener('change', () => {
+          const checked = selectAll.checked;
+          pageRows.forEach((r) => {
+            const reportName = r.name || '';
+            if (!reportName) return;
+            if (checked) {
+              selectedReports.add(reportName);
+            } else {
+              selectedReports.delete(reportName);
+            }
+          });
+          renderReports();
+        });
+      }
+
+      document.querySelectorAll('.report-select').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const reportName = decodeURIComponent(cb.dataset.report || '');
+          if (!reportName) return;
+          if (cb.checked) {
+            selectedReports.add(reportName);
+          } else {
+            selectedReports.delete(reportName);
+          }
+          updateSelectionUI();
+          const allChecked = Array.from(document.querySelectorAll('.report-select')).every((item) => item.checked);
+          if (selectAll) {
+            selectAll.checked = allChecked;
+          }
+        });
       });
+
+      document.querySelectorAll('.send-btn').forEach((btn) => {
+        btn.addEventListener('click', () => sendReportByEmail(decodeURIComponent(btn.dataset.report || ''), btn));
+      });
+
+      document.querySelectorAll('.delete-btn').forEach((btn) => {
+        btn.addEventListener('click', () => deleteReport(decodeURIComponent(btn.dataset.report || ''), btn));
+      });
+    }
+
+    function syncSelectionWithData() {
+      const available = new Set(reportsData.map((r) => r.name || ''));
+      selectedReports = new Set(Array.from(selectedReports).filter((name) => available.has(name)));
+    }
+
+    function updateSelectionUI() {
+      const count = selectedReports.size;
+      const sendBtn = document.getElementById('bulkSendBtn');
+      const deleteBtn = document.getElementById('bulkDeleteBtn');
+      const clearBtn = document.getElementById('clearSelectionBtn');
+      sendBtn.textContent = `Send Selected (${count})`;
+      deleteBtn.textContent = `Delete Selected (${count})`;
+      sendBtn.disabled = count === 0;
+      deleteBtn.disabled = count === 0;
+      clearBtn.disabled = count === 0;
+    }
+
+    function clearReportSelection() {
+      selectedReports.clear();
+      renderReports();
     }
 
     async function refreshReports() {
@@ -1067,18 +1141,22 @@ async def dashboard():
         const response = await fetch('/reports?limit=500', { cache: 'no-store' });
         const data = await response.json();
         reportsData = Array.isArray(data.reports) ? data.reports : [];
+        syncSelectionWithData();
         renderReports();
       } catch (err) {
         container.innerHTML = '<div class="reports-empty">Unable to load reports list.</div>';
       }
     }
 
-    async function sendReportByEmail(reportName, btn) {
+    async function sendReportByEmail(reportName, btn, options = {}) {
+      const showPerReportToast = options.showPerReportToast !== false;
       if (!reportName) return;
       const toEmail = (document.getElementById('recipientEmail').value || '').trim();
       const subject = (document.getElementById('emailSubject').value || '').trim();
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+      }
       try {
         const response = await fetch('/reports/send', {
           method: 'POST',
@@ -1091,15 +1169,131 @@ async def dashboard():
         });
         const data = await response.json();
         if (data.status === 'success') {
-          showToast(`Sent ${reportName} to ${data.to_email}`, true);
+          if (showPerReportToast) {
+            showToast(`Sent ${reportName} to ${data.to_email}`, true);
+          }
+          return { ok: true, reportName };
         } else {
-          showToast(`Send failed: ${data.error || 'unknown error'}`, false);
+          if (showPerReportToast) {
+            showToast(`Send failed: ${data.error || 'unknown error'}`, false);
+          }
+          return { ok: false, reportName, error: data.error || 'unknown error' };
         }
       } catch (err) {
-        showToast(`Send failed: ${err.message}`, false);
+        if (showPerReportToast) {
+          showToast(`Send failed: ${err.message}`, false);
+        }
+        return { ok: false, reportName, error: err.message };
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Send';
+        }
+      }
+    }
+
+    async function sendSelectedReports() {
+      const selected = Array.from(selectedReports);
+      if (!selected.length) {
+        showToast('Select at least one report to send.', false);
+        return;
+      }
+
+      const bulkBtn = document.getElementById('bulkSendBtn');
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Sending...';
+
+      let successCount = 0;
+      const failures = [];
+      for (const reportName of selected) {
+        const result = await sendReportByEmail(reportName, null, { showPerReportToast: false });
+        if (result && result.ok) {
+          successCount += 1;
+        } else {
+          failures.push(reportName);
+        }
+      }
+
+      updateSelectionUI();
+      if (!failures.length) {
+        showToast(`Sent ${successCount} report(s).`, true);
+      } else {
+        showToast(`Sent ${successCount}, failed ${failures.length}.`, false);
+      }
+    }
+
+    async function deleteReport(reportName, btn, skipConfirm = false) {
+      if (!reportName) return { ok: false, error: 'Invalid report name' };
+      if (!skipConfirm) {
+        const approved = window.confirm(`Delete report \"${reportName}\"? This cannot be undone.`);
+        if (!approved) return { ok: false, cancelled: true };
+      }
+
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+      }
+
+      try {
+        const response = await fetch(`/reports/${encodeURIComponent(reportName)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        if (response.ok && data.status === 'success') {
+          selectedReports.delete(reportName);
+          if (!skipConfirm) {
+            showToast(`Deleted ${reportName}`, true);
+            await refreshReports();
+          }
+          return { ok: true };
+        }
+        if (!skipConfirm) {
+          showToast(`Delete failed: ${data.detail || data.error || 'unknown error'}`, false);
+        }
+        return { ok: false, error: data.detail || data.error || 'unknown error' };
+      } catch (err) {
+        if (!skipConfirm) {
+          showToast(`Delete failed: ${err.message}`, false);
+        }
+        return { ok: false, error: err.message };
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Delete';
+        }
+      }
+    }
+
+    async function deleteSelectedReports() {
+      const selected = Array.from(selectedReports);
+      if (!selected.length) {
+        showToast('Select at least one report to delete.', false);
+        return;
+      }
+
+      const approved = window.confirm(`Delete ${selected.length} selected report(s)? This cannot be undone.`);
+      if (!approved) return;
+
+      const bulkBtn = document.getElementById('bulkDeleteBtn');
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Deleting...';
+
+      let successCount = 0;
+      const failures = [];
+      for (const reportName of selected) {
+        const result = await deleteReport(reportName, null, true);
+        if (result && result.ok) {
+          successCount += 1;
+        } else if (!result || !result.cancelled) {
+          failures.push(reportName);
+        }
+      }
+
+      await refreshReports();
+      if (!failures.length) {
+        showToast(`Deleted ${successCount} report(s).`, true);
+      } else {
+        showToast(`Deleted ${successCount}, failed ${failures.length}.`, false);
       }
     }
 
@@ -1518,6 +1712,27 @@ async def send_report_to_email(req: SendReportEmailRequest):
             subject=subject,
             error=str(exc)[:220],
         )
+
+
+@app.delete("/reports/{report_name}")
+async def delete_report(report_name: str):
+    if "/" in report_name or "\\" in report_name or ".." in report_name:
+        raise HTTPException(status_code=400, detail="Invalid report name.")
+    if not report_name.endswith(".md"):
+        raise HTTPException(
+            status_code=400, detail="Only .md report files are supported."
+        )
+
+    report_path = REPORTS_DIR / report_name
+    if not report_path.exists() or not report_path.is_file():
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    try:
+        report_path.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete report: {exc}")
+
+    return {"status": "success", "report_name": report_name}
 
 
 @app.post("/render/pdf")
