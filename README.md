@@ -118,6 +118,24 @@ RUST_LOG=warn
 docker compose up --build -d
 ```
 
+Or use npm shortcuts (recommended):
+
+```bash
+npm run dev:detach
+```
+
+Useful npm commands:
+
+```bash
+npm run dev            # up --build (attached)
+npm run dev:detach     # up --build -d
+npm run dev:watch      # up --build --watch
+npm run dev:logs       # tail core service logs
+npm run dev:status     # docker compose ps
+npm run dev:down       # stop stack
+npm run dev:restart    # restart services
+```
+
 ### 3) Verify health
 
 ```bash
@@ -273,6 +291,13 @@ docker compose logs -f motia-reports
 
 ```bash
 python trigger_reports.py --period yesterday --label "Manual yesterday run"
+```
+
+or:
+
+```bash
+npm run dev:trigger:yesterday
+npm run dev:trigger:today
 ```
 
 ### Send saved report
