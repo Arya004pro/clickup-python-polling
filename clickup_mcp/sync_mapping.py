@@ -126,6 +126,16 @@ def _api_get(endpoint: str, params: dict = None) -> Optional[dict]:
     try:
         data, err = _client.get(endpoint, params=params)
         if err:
+            verbose = os.getenv("SYNC_MAPPING_VERBOSE", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if verbose:
+                print(
+                    f"[sync_mapping] API GET failed: endpoint={endpoint}, error={err}",
+                    flush=True,
+                )
             return None
         return data
     except Exception as e:
@@ -231,12 +241,35 @@ def _refresh_project_mapping(alias: str, project: dict) -> dict:
             "error": "Missing or invalid clickup_id/clickup_type",
         }
 
-    new_structure = _fetch_full_structure(cid, ctype)
+    attempts = 3 if ctype == "space" else 2
+    new_structure = {}
+    for attempt in range(1, attempts + 1):
+        new_structure = _fetch_full_structure(cid, ctype)
+        if "name" in new_structure:
+            break
+        if attempt < attempts:
+            time.sleep(0.6 * attempt)
+
     if "name" not in new_structure:
+        existing_structure = project.get("structure") or {}
+        if isinstance(existing_structure, dict) and existing_structure.get("name"):
+            return {
+                "alias": alias,
+                "success": True,
+                "stale": True,
+                "children": len(existing_structure.get("children", [])),
+                "warning": (
+                    f"Refresh failed after {attempts} attempts; kept previous structure "
+                    f"(id={cid}, type={ctype})."
+                ),
+            }
         return {
             "alias": alias,
             "success": False,
-            "error": "Failed to fetch structure from ClickUp API",
+            "error": (
+                f"Failed to fetch structure from ClickUp API after {attempts} attempts "
+                f"(id={cid}, type={ctype}). Check token/team access or whether this entity still exists."
+            ),
         }
 
     updated = dict(project)
@@ -307,6 +340,107 @@ def _sync_monitoring_config_list_ids() -> dict:
         }
 
     return {"updated_projects": changed, "status": "ok"}
+
+
+def _prune_monitoring_config_removed_spaces(active_space_names_lc: set[str]) -> dict:
+    """Remove monitored projects whose `space` is no longer present in live team spaces."""
+    if not os.path.exists(MONITORING_CONFIG_FILE):
+        return {"pruned_projects": 0, "status": "skipped", "reason": "config_not_found"}
+
+    try:
+        with open(MONITORING_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return {"pruned_projects": 0, "status": "error", "reason": f"read_failed: {e}"}
+
+    projects = cfg.get("monitored_projects", [])
+    if not isinstance(projects, list):
+        projects = []
+
+    keep = []
+    pruned_aliases: List[str] = []
+    for p in projects:
+        space_name = str(p.get("space", "")).strip()
+        if not space_name:
+            keep.append(p)
+            continue
+        if active_space_names_lc and space_name.lower() not in active_space_names_lc:
+            pruned_aliases.append(
+                str(p.get("alias", "")).strip() or str(p.get("clickup_id", ""))
+            )
+            continue
+        keep.append(p)
+
+    if len(keep) != len(projects):
+        now_ist = datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+        cfg["monitored_projects"] = keep
+        cfg["last_maintenance_run"] = now_ist
+        try:
+            with open(MONITORING_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            return {
+                "pruned_projects": 0,
+                "status": "error",
+                "reason": f"write_failed: {e}",
+            }
+
+    return {
+        "pruned_projects": len(pruned_aliases),
+        "pruned_aliases": pruned_aliases,
+        "status": "ok",
+    }
+
+
+def _prune_report_spaces_removed_spaces(active_space_names_lc: set[str]) -> dict:
+    """Remove report spaces whose `name` no longer exists in live team spaces."""
+    if not os.path.exists(REPORT_SPACES_CONFIG_FILE):
+        return {"pruned_spaces": 0, "status": "skipped", "reason": "config_not_found"}
+
+    try:
+        with open(REPORT_SPACES_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return {"pruned_spaces": 0, "status": "error", "reason": f"read_failed: {e}"}
+
+    report_spaces = cfg.get("report_spaces", [])
+    if not isinstance(report_spaces, list):
+        report_spaces = []
+
+    keep = []
+    pruned_names: List[str] = []
+    for item in report_spaces:
+        space_name = str(item.get("name", "")).strip()
+        if not space_name:
+            keep.append(item)
+            continue
+        if active_space_names_lc and space_name.lower() not in active_space_names_lc:
+            pruned_names.append(space_name)
+            continue
+        keep.append(item)
+
+    if len(keep) != len(report_spaces):
+        cfg["report_spaces"] = keep
+        cfg["last_updated"] = datetime.now(
+            tz=timezone(timedelta(hours=5, minutes=30))
+        ).strftime("%Y-%m-%d %H:%M:%S IST")
+        try:
+            with open(REPORT_SPACES_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            return {
+                "pruned_spaces": 0,
+                "status": "error",
+                "reason": f"write_failed: {e}",
+            }
+
+    return {
+        "pruned_spaces": len(pruned_names),
+        "pruned_names": pruned_names,
+        "status": "ok",
+    }
 
 
 def _load_monitoring_config() -> dict:
@@ -404,6 +538,26 @@ def run_mapping_maintenance_once() -> dict:
     try:
         refreshed = []
         failed = []
+        stale_spaces_pruned = []
+
+        teams_data = _api_get("/team")
+        active_space_ids: set[str] = set()
+        active_space_names_lc: set[str] = set()
+        spaces_data = None
+        if teams_data and teams_data.get("teams"):
+            team_id = teams_data["teams"][0]["id"]
+            spaces_data = _api_get(f"/team/{team_id}/space")
+            if spaces_data:
+                active_space_ids = {
+                    str(space.get("id"))
+                    for space in spaces_data.get("spaces", [])
+                    if space.get("id")
+                }
+                active_space_names_lc = {
+                    str(space.get("name", "")).strip().lower()
+                    for space in spaces_data.get("spaces", [])
+                    if str(space.get("name", "")).strip()
+                }
 
         # --- Prune any non-space entries (folders/lists don't belong at top level) ---
         pruned_non_spaces = []
@@ -418,9 +572,34 @@ def run_mapping_maintenance_once() -> dict:
                 )
 
         for alias, project in list(db.projects.items()):
+            project_id = str(project.get("clickup_id") or "").strip()
+            project_type = str(project.get("clickup_type") or "").strip()
+
+            # If we have a live spaces snapshot and this mapped space no longer exists,
+            # prune immediately before attempting refresh.
+            if (
+                project_type == "space"
+                and project_id
+                and active_space_ids
+                and project_id not in active_space_ids
+            ):
+                db.remove_project(alias)
+                stale_spaces_pruned.append(alias)
+                print(
+                    f"[sync_mapping]   ⚠ Removed stale space mapping '{alias}' "
+                    f"(id={project_id}) — not returned by current team spaces.",
+                    flush=True,
+                )
+                continue
+
             result = _refresh_project_mapping(alias, project)
             if result.get("success"):
                 refreshed.append(result["alias"])
+                if result.get("stale") and _verbose:
+                    print(
+                        f"[sync_mapping]   ⚠ {alias}: {result.get('warning')}",
+                        flush=True,
+                    )
                 if _verbose:
                     print(
                         f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)",
@@ -434,55 +613,60 @@ def run_mapping_maintenance_once() -> dict:
 
         # --- Auto-discover new spaces ---
         auto_mapped = []
-        teams_data = _api_get("/team")
-        if teams_data and teams_data.get("teams"):
-            team_id = teams_data["teams"][0]["id"]
-            spaces_data = _api_get(f"/team/{team_id}/space")
-            if spaces_data:
-                existing_ids = {p["clickup_id"] for p in db.projects.values()}
-                for space in spaces_data.get("spaces", []):
-                    if space["id"] in existing_ids:
-                        continue
-                    # New space found — auto-map it
-                    new_alias = _slugify(space["name"])
-                    if new_alias in db.projects:
-                        new_alias = f"{new_alias}-{space['id'][-4:]}"
-                    structure = _fetch_full_structure(space["id"], "space")
-                    if "name" not in structure:
-                        print(
-                            f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.",
-                            flush=True,
-                        )
-                        continue
-                    db.add_project(
-                        new_alias,
-                        {
-                            "alias": new_alias,
-                            "clickup_id": space["id"],
-                            "clickup_type": "space",
-                            "last_sync": (
-                                datetime.now(
-                                    tz=timezone(timedelta(hours=5, minutes=30))
-                                ).strftime("%Y-%m-%d %H:%M:%S IST")
-                            ),
-                            "structure": structure,
-                        },
-                    )
-                    auto_mapped.append(new_alias)
+        if spaces_data:
+            existing_ids = {p["clickup_id"] for p in db.projects.values()}
+            for space in spaces_data.get("spaces", []):
+                if space["id"] in existing_ids:
+                    continue
+                # New space found — auto-map it
+                new_alias = _slugify(space["name"])
+                if new_alias in db.projects:
+                    new_alias = f"{new_alias}-{space['id'][-4:]}"
+                structure = _fetch_full_structure(space["id"], "space")
+                if "name" not in structure:
                     print(
-                        f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'",
+                        f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.",
                         flush=True,
                     )
+                    continue
+                db.add_project(
+                    new_alias,
+                    {
+                        "alias": new_alias,
+                        "clickup_id": space["id"],
+                        "clickup_type": "space",
+                        "last_sync": (
+                            datetime.now(
+                                tz=timezone(timedelta(hours=5, minutes=30))
+                            ).strftime("%Y-%m-%d %H:%M:%S IST")
+                        ),
+                        "structure": structure,
+                    },
+                )
+                auto_mapped.append(new_alias)
+                print(
+                    f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'",
+                    flush=True,
+                )
 
         monitor_res = _sync_monitoring_config_list_ids()
+        monitor_prune_res = _prune_monitoring_config_removed_spaces(
+            active_space_names_lc
+        )
+        report_spaces_prune_res = _prune_report_spaces_removed_spaces(
+            active_space_names_lc
+        )
         pruned = db.prune_expired_cache()
 
         if _verbose or failed or auto_mapped or pruned_non_spaces:
             print(
                 f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
                 f"{len(auto_mapped)} new space(s) auto-mapped, "
+                f"{len(stale_spaces_pruned)} stale space(s) pruned, "
                 f"{len(pruned_non_spaces)} non-space entries pruned, "
                 f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
+                f"{monitor_prune_res.get('pruned_projects', 0)} monitoring entries pruned, "
+                f"{report_spaces_prune_res.get('pruned_spaces', 0)} report spaces pruned, "
                 f"{pruned} cache entries pruned.",
                 flush=True,
             )
@@ -492,8 +676,11 @@ def run_mapping_maintenance_once() -> dict:
             "mapped_projects_refreshed": len(refreshed),
             "mapped_projects_failed": failed,
             "auto_mapped_spaces": auto_mapped,
+            "stale_space_mappings_pruned": stale_spaces_pruned,
             "non_space_entries_pruned": pruned_non_spaces,
             "monitoring_config": monitor_res,
+            "monitoring_config_pruned": monitor_prune_res,
+            "report_spaces_config_pruned": report_spaces_prune_res,
             "cache_entries_pruned": pruned,
             "ran_at": time.time(),
         }
@@ -1341,7 +1528,11 @@ def register_sync_mapping_tools(mcp: FastMCP):
         list_ids: List[str] = []
         if entity_type == "folder":
             resp = _api_get(f"/folder/{entity_id}/list")
-            list_ids = [str(lst.get("id")) for lst in (resp or {}).get("lists", []) if lst.get("id")]
+            list_ids = [
+                str(lst.get("id"))
+                for lst in (resp or {}).get("lists", [])
+                if lst.get("id")
+            ]
             list_ids = list(dict.fromkeys(list_ids))
             if not list_ids:
                 return {
@@ -1443,7 +1634,9 @@ def register_sync_mapping_tools(mcp: FastMCP):
             keep.append(p)
 
         if removed is None:
-            aliases = [str(p.get("alias", "")).strip() for p in projects if p.get("alias")]
+            aliases = [
+                str(p.get("alias", "")).strip() for p in projects if p.get("alias")
+            ]
             return {
                 "error": f"Monitored project '{project_name_or_alias}' not found.",
                 "space_filter": space_name or None,
