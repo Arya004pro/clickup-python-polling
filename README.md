@@ -169,7 +169,7 @@ Required for current email flow (Brevo transport):
 EMAIL_TRANSPORT=brevo_api
 BREVO_API_KEY=
 EMAIL_FROM=
-EMAIL_FROM_NAME=Arya
+EMAIL_FROM_NAME=
 SMTP_TO=
 ```
 
@@ -177,7 +177,60 @@ Notes:
 - `SMTP_TO` is currently used as recipient target variable in the report email pipeline.
 - SMTP fallback variables are optional if you intentionally run Brevo-only mode.
 
-## 7. Local Setup and Run
+## 7. Railway 24/7 Deployment
+
+Yes, this branch includes Railway implementation details and supports 24/7 automated reporting when deployed correctly.
+
+Deploy three services from the same repo:
+- `mcp-server`
+- `api-server`
+- `motia-reports`
+
+Use Dockerfiles/start commands:
+- `mcp-server`: `Dockerfile`, start `python -m clickup_mcp.server`
+- `api-server`: `Dockerfile`, start `python api_server.py`
+- `motia-reports`: `Dockerfile.motia`, keep default start from image
+
+Railway networking:
+- set `MCP_SERVER_URL=http://<mcp-private-domain>/sse` in `api-server`
+- set `API_SERVER_URL=http://<api-private-domain>` in `motia-reports`
+
+24/7 behavior:
+- keep all 3 services deployed continuously
+- enable always-on/restart policy in Railway settings
+- use persistent volumes for:
+   - `api-server` -> `/app/reports`
+   - `motia-reports` -> `/app/data`
+
+Automatic report schedule (Motia cron steps):
+- `9:00 AM IST` -> yesterday report
+- `2:00 PM IST` -> today midday report
+- `6:00 PM IST` -> today EOD report
+
+Required Railway variables (minimum practical set):
+
+```env
+CLICKUP_API_TOKEN=
+CLICKUP_TEAM_ID=
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
+
+EMAIL_TRANSPORT=brevo_api
+BREVO_API_KEY=
+EMAIL_FROM=
+EMAIL_FROM_NAME=Arya
+SMTP_TO=
+
+REPORT_API_MODE=direct
+REPORT_CONCURRENCY=2
+SUPPORT_CRONS_ENABLED=false
+RUST_LOG=warn
+```
+
+For full redeploy checklist, see `RAILWAY_REDEPLOY_GUIDE.md`.
+
+## 8. Local Setup and Run
 
 ### Prerequisites
 - Docker Desktop running
@@ -201,7 +254,7 @@ docker compose logs -f mcp-server api-server motia-reports
 Open:
 - `http://localhost:8003`
 
-## 8. Typical Operations
+## 9. Typical Operations
 
 ### Trigger full report pipeline manually
 
@@ -223,7 +276,7 @@ curl -X POST http://localhost:8003/reports/send \
 docker compose exec api-server ls -lah /app/reports
 ```
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Report generated but email not received
 1. verify trigger completed in logs:
@@ -243,7 +296,7 @@ docker compose exec api-server ls -lah /app/reports
 - run mapping maintenance
 - inspect `project_map.json` and `monitoring_config.json`
 
-## 10. Security Notes
+## 11. Security Notes
 
 - Keep `.env` out of git (already ignored).
 - Rotate keys immediately if they are ever printed in logs/terminal output.
