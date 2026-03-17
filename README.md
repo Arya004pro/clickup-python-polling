@@ -1,651 +1,434 @@
-# ClickUp MCP Server with OpenRouter AI Client
-
-> **Transform ClickUp project management with natural language AI** - A production-ready Model Context Protocol (MCP) server with **81 specialized tools**, connected to OpenRouter-hosted LLMs via API.
+﻿# ClickUp MCP Reporting Platform
 
 <div align="center">
 
-![Python Version](https://img.shields.io/badge/python-3.11.9+-blue.svg)
-![MCP Protocol](https://img.shields.io/badge/MCP-FastMCP%203.0-green.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Tools](https://img.shields.io/badge/tools-81-orange.svg)
+![Python](https://img.shields.io/badge/Python-3.11-blue)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![FastMCP](https://img.shields.io/badge/MCP-FastMCP-green)
+![Automation](https://img.shields.io/badge/Reports-Automated-orange)
+![Branch](https://img.shields.io/badge/branch-brevo--railway--setup-purple)
 
 </div>
 
----
+Production-oriented ClickUp reporting platform with:
+
+- MCP tool server for ClickUp operations and analytics
+- API server for dashboard, query, and report endpoints
+- Motia runtime for scheduled/manual report automation and email delivery
+- Brevo-powered email transport for deployment-friendly delivery
+
+This README documents the current branch behavior and runtime workflow.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Model Configuration](#model-configuration)
-- [Features](#features)
-- [Quick Start Guide](#quick-start-guide)
-- [Detailed Setup Instructions](#detailed-setup-instructions)
-- [AI Client Usage](#ai-client-usage)
-- [Configuration Reference](#configuration-reference)
-- [Troubleshooting](#troubleshooting)
-
----
-
-## Overview
-
-This project provides a comprehensive **Model Context Protocol (MCP) Server** that bridges your ClickUp workspace with AI language models. The MCP server runs as a persistent HTTP service and exposes **81 ClickUp tools** via SSE transport. The OpenRouter AI client connects to the server, discovers available tools, and calls them on demand using natural language.
-
-### Current Runtime (March 2026)
-
-- Docker-first stack with three active services:
-  - `mcp-server` (`:8001`)
-  - `api-server` (`:8003`)
-  - `motia-reports` (`:3111`)
-- Automated report generation uses **direct API mode** via `POST /report/space` (no chat round-trip required for scheduled reports).
-- Report email flow is:
-  - `report::generate` -> `report::send-email`
-- Supported dashboard/API endpoints currently include:
-  - `POST /query`
-  - `POST /report/space`
-  - `GET /status`, `GET /stats`, `GET /reports`, `GET /reports/latest`, `GET /reports/{name}`
-  - `POST /reports/send` (send a saved report email with PDF attachment)
-- Dashboard now includes:
-  - Query view for interactive prompts
-  - Reports view with pagination for large report history
-  - Per-report email action with optional recipient override (falls back to `SMTP_TO`)
-
-See `RUN_GUIDE.md` for exact run/trigger commands and troubleshooting aligned with the current setup.
-
-### What is MCP?
-
-The Model Context Protocol (MCP) is an open standard that enables AI models to interact with external tools and data sources in a structured, secure way. This server exposes ClickUp-related tools; the AI client connects to the backend over HTTP/SSE, discovers all 81 available tools, and calls them automatically based on the user's query.
-
----
+- Architecture
+- End-to-End Workflows
+- Local Setup (Exact)
+- Railway 24/7 Setup (Exact)
+- Mapping Files Guide
+- API Endpoints
+- Operations Playbook
+- Complete MCP Tool Inventory
+- Troubleshooting
+- Security
 
 ## Architecture
 
-```
-+------------------------------------------------------------------+
-|                      USER (Natural Language Query)               |
-|           "Show weekly time report for Development team"         |
-+-----------------------------------+------------------------------+
-                                    |
-                                    v
-+------------------------------------------------------------------+
-|                AI CLIENT (openrouter_client.py)                  |
-|                                                                  |
-|  +------------------------------------------------------------+  |
-|  |             OpenRouter API (OpenAI-compatible)            |  |
-|  |                                                            |  |
-|  |  Model chain from env: OPENROUTER_MODEL(_CHAIN)           |  |
-|  |  Example: qwen/qwen-2.5-7b-instruct -> backup model        |  |
-|  +------------------------------------------------------------+  |
-|                                                                  |
-|  +----------------------+   +--------------------------------+  |
-|  |     MCP Session      |   |     Smart Polling Engine       |  |
-|  |    (SSE Transport)   |   |   (3s status check interval)   |  |
-|  +----------------------+   +--------------------------------+  |
-+-----------------------------------+------------------------------+
-                                    |
-                           SSE Transport (HTTP)
-                     http://127.0.0.1:8001/sse
-                                    |
-                                    v
-+------------------------------------------------------------------+
-|              MCP SERVER (clickup_mcp/mcp_server.py)              |
-|              Uvicorn + FastMCP 3.0 + Port 8001                   |
-|                                                                  |
-|  +--------------+ +-----------+ +-------------+ +-----------+   |
-|  |  Workspace   | |   Task    | | PM Analytics| |  Project  |   |
-|  |  Structure   | | Management| | (23 tools)  | |  Config   |   |
-|  |  (11 tools)  | | (9 tools) | |             | | (7 tools) |   |
-|  +--------------+ +-----------+ +-------------+ +-----------+   |
-|                                                                  |
-|  +--------------+ +------------+ +----------------------+       |
-|  |   Project    | |  Sync &    | |    Task Reports      |       |
-|  | Intelligence | |  Mapping   | |    (8 tools)         |       |
-|  |  (10 tools)  | | (13 tools) | |                      |       |
-|  +--------------+ +------------+ +----------------------+       |
-+--------------------+---------------------------------------------+
-                     |
-         +-----------+-----------+
-         v           v           v
-   +---------+  +---------+  +---------+
-   | ClickUp |  | Supabase|  |  Local  |
-   |   API   |  |Postgres |  |  Cache  |
-   +---------+  +---------+  +---------+
-```
+Services in `docker-compose.yml`:
 
-### How the MCP-to-LLM Connection Works
+- `mcp-server` on `:8001` (FastMCP tools)
+- `api-server` on `:8003` (dashboard + REST)
+- `motia-reports` on `:3111` (automation + cron/manual trigger)
+- `ai-client` optional profile (`--profile interactive`)
 
-1. **MCP Server starts** as a persistent HTTP service on port `8001`, exposing 81 tools via SSE.
-2. **AI Client connects** to `http://127.0.0.1:8001/sse` using the MCP client session.
-3. **Tools are discovered** - the client loads all 81 tool schemas from the server.
-4. **User sends a query** - the client forwards it to OpenRouter via OpenAI-compatible API, attaching all tool schemas.
-5. **LLM selects tools** - it returns a structured tool-call request with the right arguments.
-6. **Client executes the tool** - the MCP session calls the tool on the backend server, which queries the ClickUp API or Supabase.
-7. **Result returned to LLM** - the LLM produces the final natural-language response for the user.
+Core mounted/config files:
 
----
+- `project_map.json`
+- `monitoring_config.json`
+- `report_spaces_config.json`
+- reports volume: `reports`
 
-## Model Configuration
+Runtime intent:
 
-OpenRouter is the only runtime provider in this repository.
+- interactive query path -> `/query`
+- deterministic automation path -> `/report/space`
+- email dispatch path -> Motia `SendReportEmail` step
 
-| Variable                 | Purpose                                                      |
-| ------------------------ | ------------------------------------------------------------ |
-| `OPENROUTER_MODEL`       | Primary model when `OPENROUTER_MODEL_CHAIN` is not set       |
-| `OPENROUTER_MODEL_CHAIN` | Comma-separated model fallback chain                         |
-| `OPENROUTER_API_KEY`     | OpenRouter API key                                           |
-| `OPENROUTER_BASE_URL`    | OpenRouter base URL (default `https://openrouter.ai/api/v1`) |
+## End-to-End Workflows
 
-Example fallback chain:
+### 1) Interactive Query Workflow
 
-```
-OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
-```
+1. User asks question in dashboard or `POST /query`
+2. API server calls OpenRouter model(s)
+3. MCP tools are selected/invoked
+4. response is returned and optionally saved as report markdown
 
----
+### 2) Automated Report Workflow
 
-## Features
+1. Trigger source (cron/manual) sends event to Motia flow
+2. `GenerateReports` loops configured spaces and calls API server
+3. API server generates per-space markdown report
+4. `SendReportEmail` builds summary + attachment (PDF preferred)
+5. Email is sent via configured transport (`EMAIL_TRANSPORT`)
 
-### 81 MCP Tools in 7 Categories
+### 3) Manual Trigger Workflow
 
-<details>
-<summary><b>Workspace Structure (11 tools)</b></summary>
-
-| Tool                   | Description                              |
-| ---------------------- | ---------------------------------------- |
-| `get_workspaces`       | List all accessible workspaces (teams)   |
-| `get_spaces`           | List spaces in a workspace               |
-| `get_space`            | Get detailed space information           |
-| `get_folders`          | List folders in a space                  |
-| `get_folder`           | Get folder details with lists            |
-| `get_lists`            | List all lists in a folder               |
-| `get_folderless_lists` | List direct space lists (no folder)      |
-| `get_list`             | Get detailed list information            |
-| `invalidate_cache`     | Clear cached workspace data              |
-| `get_team_members`     | Fetch all team members in a workspace    |
-| `resolve_assignees`    | Resolve names/emails to ClickUp user IDs |
-
-</details>
-
-<details>
-<summary><b>Task Management (9 tools)</b></summary>
-
-| Tool                | Description                                      |
-| ------------------- | ------------------------------------------------ |
-| `get_tasks`         | List tasks with filters (status, assignee, date) |
-| `get_task`          | Get detailed task info including subtasks        |
-| `create_task`       | Create a new task in a list                      |
-| `update_task`       | Update task properties (status, assignee, dates) |
-| `search_tasks`      | Full-text search across projects                 |
-| `get_project_tasks` | Get all tasks in a project with subtask tree     |
-| `get_list_progress` | Sprint/list progress summary                     |
-| `get_workload`      | Team workload distribution across assignees      |
-| `get_overdue_tasks` | Find all overdue tasks in a list                 |
-
-</details>
-
-<details>
-<summary><b>PM Analytics (23 tools)</b></summary>
-
-| Tool                                   | Description                                        |
-| -------------------------------------- | -------------------------------------------------- |
-| `get_progress_since`                   | Progress made since a specified date               |
-| `get_time_tracking_report`             | Time tracking summary by list/project              |
-| `get_task_time_breakdown`              | Detailed time breakdown for a single task          |
-| `get_project_report_universal`         | Universal project report with configurable filters |
-| `get_estimation_accuracy`              | Estimate vs actual time analysis (bottom-up)       |
-| `get_at_risk_tasks`                    | Find tasks at risk of missing deadline             |
-| `get_stale_tasks`                      | Find stagnant tasks with no recent activity        |
-| `get_untracked_tasks`                  | Tasks with zero time logged                        |
-| `get_inactive_assignees`               | Assignees with no recent activity                  |
-| `get_status_summary`                   | Status distribution across a project               |
-| `get_space_time_report`                | Time report aggregated at space level              |
-| `get_space_folder_team_report`         | Space-folder-team combined time breakdown          |
-| `get_time_report_by_period`            | Time report filtered by period (week/month/custom) |
-| `get_async_report_status`              | Check status of a background report job            |
-| `get_async_report_result`              | Fetch result of a completed background report job  |
-| `get_space_time_report_by_period`      | Space-level time report for a specific period      |
-| `get_space_project_time_report`        | Time report by space -> project -> member          |
-| `get_time_report_detailed`             | Granular time report with full task details        |
-| `get_person_tasks_with_time`           | All tasks + time tracked for a specific person     |
-| `get_task_status_distribution`         | Status distribution with percentage breakdown      |
-| `get_space_time_report_comprehensive`  | Full space-level comprehensive time report         |
-| `get_folder_time_report_comprehensive` | Full folder-level comprehensive time report        |
-| `get_employee_daily_time_report`       | Employee time report grouped by day                |
-
-</details>
-
-<details>
-<summary><b>Project Configuration (7 tools)</b></summary>
-
-| Tool                      | Description                                 |
-| ------------------------- | ------------------------------------------- |
-| `discover_projects`       | Scan workspace and auto-discover projects   |
-| `add_project`             | Add a project to the tracked list           |
-| `list_projects`           | List all currently tracked projects         |
-| `remove_project`          | Remove a project from tracking              |
-| `refresh_projects`        | Re-verify all tracked projects are valid    |
-| `get_project_status`      | Project status metrics and health           |
-| `get_all_projects_status` | Overview of health for all tracked projects |
-
-</details>
-
-<details>
-<summary><b>Project Intelligence (10 tools)</b></summary>
-
-| Tool                             | Description                                |
-| -------------------------------- | ------------------------------------------ |
-| `get_workspace_folderless_lists` | Find lists not inside any folder           |
-| `get_list_defined_statuses`      | Get all status definitions for a list      |
-| `get_project_statuses`           | Get project-level status workflow          |
-| `get_project_health_score`       | Health score graded A-F with breakdown     |
-| `get_project_daily_standup`      | Auto-generated daily standup report        |
-| `get_project_time_tracking`      | Project-level time tracking summary        |
-| `get_project_blockers`           | Identify blocked or stale tasks            |
-| `get_project_at_risk`            | Risk assessment for tasks nearing deadline |
-| `get_project_weekly_digest`      | Auto-generated weekly project summary      |
-| `get_project_team_workload`      | Per-member workload analysis               |
-
-</details>
-
-<details>
-<summary><b>Sync and Mapping (13 tools)</b></summary>
-
-| Tool                          | Description                                          |
-| ----------------------------- | ---------------------------------------------------- |
-| `discover_hierarchy`          | Traverse full workspace tree (spaces/folders/lists)  |
-| `map_project`                 | Map a ClickUp entity (space/folder/list) by alias    |
-| `list_mapped_projects`        | Show all current project mappings                    |
-| `get_mapped_project`          | Get details of a specific mapped project             |
-| `refresh_project`             | Refresh a mapping with latest ClickUp data           |
-| `unmap_project`               | Remove a project mapping by alias                    |
-| `get_sync_status`             | Check overall sync health and cache state            |
-| `list_spaces`                 | List all spaces with mapping metadata                |
-| `clear_sync`                  | Reset all mappings and cache (confirm required)      |
-| `prune_cache`                 | Clean expired cache entries                          |
-| `find_project_anywhere`       | Universal entity search by name across workspace     |
-| `get_environment_context`     | Bootstrap - returns server state, mappings, guidance |
-| `trigger_mapping_maintenance` | Manually run the mapping maintenance routine         |
-
-</details>
-
-<details>
-<summary><b>Task Reports (8 tools)</b></summary>
-
-| Tool                            | Description                                         |
-| ------------------------------- | --------------------------------------------------- |
-| `get_space_task_report`         | Space-wide task report with per-project breakdown   |
-| `get_project_task_report`       | Project report with per-team-member breakdown       |
-| `get_member_task_report`        | Individual team member task and time report         |
-| `get_low_hours_report`          | Members who tracked less than 8h on any working day |
-| `get_missing_estimation_report` | Tasks without time estimates, grouped by assignee   |
-| `get_overtracked_report`        | Members where tracked time exceeds estimate         |
-| `get_task_report_job_status`    | Poll status of an async report job                  |
-| `get_task_report_job_result`    | Retrieve result of a completed async report job     |
-
-**Async Report Pattern**: Large reports run as background jobs. Use `get_task_report_job_status`
-to poll (smart 3s interval in `openrouter_client.py`) and `get_task_report_job_result` once done.
-
-</details>
-
-### Other Key Features
-
-- **Smart Async Polling** - Background report jobs polled every 3s; results appear within 3s of completion.
-- **Zero Data Truncation** - All API responses delivered in full, no content trimming.
-- **Connection Pooling** - Shared `api_client.py` with persistent HTTP session for efficient ClickUp API calls.
-- **Bottom-Up Time Rollup** - Accurate time calculation from subtasks to parent tasks across all reports.
-- **Auto-Watchdog** - `npm start` launches `watch-restart.py`, auto-restarting the MCP server on code changes.
-- **Mapping Maintenance Scheduler** - APScheduler background job periodically syncs project mappings with ClickUp.
-- **IST Timezone Support** - All date calculations default to Asia/Kolkata (+05:30).
-- **Report Saving** - Reports saved as Markdown files to a configurable `REPORTS_DIR`.
-
----
-
-## Quick Start Guide
-
-### Setup in 5 Minutes
+Run:
 
 ```bash
-# 1. Clone repository
-git clone https://github.com/Arya004pro/clickup-python-polling.git
-cd clickup-python-polling
-
-# 2. Create virtual environment
-python -m venv myenv
-myenv\Scripts\activate        # Windows
-# source myenv/bin/activate   # Linux/Mac
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Create .env (see Configuration Reference)
-
-# 5. Start MCP server + watchdog
-npm start
+python trigger_reports.py --period yesterday --label "Manual run"
 ```
 
-### Minimum `.env`
+This calls Motia endpoint `/trigger-report`, executes generate + email steps, and logs timing details.
 
-```bash
-CLICKUP_API_TOKEN=pk_YOUR_TOKEN_HERE
-DATABASE_URL=postgresql://user:pass@host:6543/postgres
-MCP_SERVER_URL=http://127.0.0.1:8001/sse
+## Local Setup (Exact)
 
-# OpenRouter
-OPENROUTER_API_KEY=sk-or-v1_your_key_here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
-# OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
-```
+### Prerequisites
 
----
+- Docker Desktop
+- Python 3.11+
+- `.env` file present
 
-## Detailed Setup Instructions
+### 1) Create `.env`
 
-### Step 1: Install Python 3.11.9
-
-<details>
-<summary><b>Windows</b></summary>
-
-1. Download Python 3.11.9 from [python.org](https://www.python.org/downloads/release/python-3119/)
-2. Run installer: check **Add Python to PATH**, **Install pip**, **Install for all users**
-3. Verify: `python --version` (should show Python 3.11.9)
-
-</details>
-
-<details>
-<summary><b>Linux/Mac</b></summary>
-
-```bash
-curl https://pyenv.run | bash
-export PATH="$HOME/.pyenv/bin:$PATH"
-eval "$(pyenv init -)"
-pyenv install 3.11.9 && pyenv global 3.11.9
-```
-
-</details>
-
-### Step 2: Create and Activate Virtual Environment
-
-```bash
-cd clickup-python-polling
-python -m venv myenv
-
-# Windows PowerShell
-myenv\Scripts\Activate.ps1
-
-# Windows CMD
-myenv\Scripts\activate.bat
-
-# Linux/Mac
-source myenv/bin/activate
-```
-
-### Step 3: Install Dependencies
-
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-
-# Verify
-python -c "import fastmcp; print('FastMCP:', fastmcp.__version__)"
-python -c "from mcp import ClientSession; print('MCP client: OK')"
-```
-
-### Step 4: Get API Keys
-
-#### ClickUp API Token
-
-1. Go to [ClickUp Settings -> Apps](https://app.clickup.com/settings/apps)
-2. Generate or copy your token (`pk_123456_XXXX...`)
-
-#### ClickUp Team ID
-
-Copy from your ClickUp URL: `https://app.clickup.com/{TEAM_ID}/v/...`
-
-#### OpenRouter API Key
-
-1. Sign up at [OpenRouter](https://openrouter.ai/)
-2. Generate an API key from the keys page
-3. Set `OPENROUTER_API_KEY` in `.env`
-4. Set `OPENROUTER_MODEL` or `OPENROUTER_MODEL_CHAIN` in `.env`
-
-#### Supabase / PostgreSQL
-
-1. Create a project at [Supabase](https://supabase.com)
-2. Copy the Transaction Pooler connection string from Settings -> Database
-
-### Step 5: Configure Environment File
-
-Create `.env` in the project root:
+Minimum baseline:
 
 ```env
-# Required
-CLICKUP_API_TOKEN=pk_123456_XXXXXXXXXXXXXXXXXXXXXXXXXXXX
-DATABASE_URL=postgresql://postgres.xxxxx:password@aws-0-region.pooler.supabase.com:6543/postgres
-MCP_SERVER_URL=http://127.0.0.1:8001/sse
-
-# OpenRouter - LLM Provider
-OPENROUTER_API_KEY=sk-or-v1_your_openrouter_key_here
+CLICKUP_API_TOKEN=
+CLICKUP_TEAM_ID=
+OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
-# Optional: comma-separated fallback chain
-# OPENROUTER_MODEL_CHAIN=qwen/qwen-2.5-7b-instruct,meta-llama/llama-3.1-8b-instruct
-# Optional headers
-# OPENROUTER_HTTP_REFERER=https://your-app-url.example
-# OPENROUTER_APP_TITLE=ClickUp MCP
 
-# Optional
-CLICKUP_TEAM_ID=12345678
-CLICKUP_SPACE_ID=
-REPORTS_DIR=D:\reports
+EMAIL_TRANSPORT=brevo_api
+BREVO_API_KEY=
+EMAIL_FROM=
+EMAIL_FROM_NAME=Arya
+SMTP_TO=
+
+REPORT_API_MODE=direct
+REPORT_CONCURRENCY=2
+SUPPORT_CRONS_ENABLED=false
+RUST_LOG=warn
 ```
 
-### Step 6: Start the MCP Server
-
-**Recommended (with file-watcher/watchdog):**
+### 2) Start stack
 
 ```bash
-npm start
+docker compose up --build -d
 ```
 
-**Manual start:**
+Or use npm shortcuts (recommended):
 
 ```bash
-python clickup_mcp/mcp_server.py
+npm run dev:detach
 ```
 
-Expected output:
-
-```
-Starting ClickUp MCP Server in 2s to allow initialization...
-INFO:     Uvicorn running on http://0.0.0.0:8001
-INFO:     Application startup complete.
-```
-
-Keep this terminal open -- the server must stay running for the AI client to function.
-
-### Step 7: Start the AI Client
+Useful npm commands:
 
 ```bash
-# Terminal 2
-python openrouter_client.py
+npm run dev            # up --build (attached)
+npm run dev:detach     # up --build -d
+npm run dev:watch      # up --build --watch
+npm run dev:logs       # tail core service logs
+npm run dev:status     # docker compose ps
+npm run dev:down       # stop stack
+npm run dev:restart    # restart services
 ```
 
-Expected output:
+### 3) Verify health
 
-```
-========================================================================
-  ClickUp MCP Server  --  OpenRouter Client
-========================================================================
-  OK System prompt     : openrouter_system_prompt.md  (X chars)
-  OK MCP endpoint      : http://127.0.0.1:8001/sse
-  OK OpenRouter URL    : https://openrouter.ai/api/v1
-  OK Active model      : qwen/qwen-2.5-7b-instruct
-
-========================================================================
-  You:
+```bash
+docker compose ps
+docker compose logs -f mcp-server api-server motia-reports
 ```
 
----
+### 4) Open dashboard
 
-## AI Client Usage
+- `http://localhost:8003`
 
-### Commands
+## Railway 24/7 Setup (Exact)
 
-| Command | Description               |
-| ------- | ------------------------- |
-| `help`  | Show available commands   |
-| `tools` | List all 81 MCP tools     |
-| `quit`  | Exit with session summary |
+Deploy 3 services from the same repo:
 
-### Example Queries
+- `mcp-server`
+- `api-server`
+- `motia-reports`
 
+Service runtime:
+
+- `mcp-server`: Dockerfile `Dockerfile`, start `python -m clickup_mcp.server`
+- `api-server`: Dockerfile `Dockerfile`, start `python api_server.py`
+- `motia-reports`: Dockerfile `Dockerfile.motia`, default image command
+
+Service networking variables:
+
+- in `api-server`: `MCP_SERVER_URL=http://<mcp-private-domain>/sse`
+- in `motia-reports`: `API_SERVER_URL=http://<api-private-domain>`
+
+For true 24/7 behavior:
+
+- keep all 3 services always deployed
+- enable always-on restart behavior in Railway
+- add persistent volumes:
+  - `api-server` -> `/app/reports`
+  - `motia-reports` -> `/app/data`
+
+Current automatic schedule (IST):
+
+- 9:00 AM -> yesterday report
+- 2:00 PM -> today midday report
+- 6:00 PM -> today EOD report
+
+For full Railway redeploy checklist, see `RAILWAY_REDEPLOY_GUIDE.md`.
+
+## Mapping Files Guide
+
+The system depends on three JSON files in project root.
+
+### 1) `project_map.json`
+
+Purpose:
+
+- alias-to-ClickUp mapping and discovered hierarchy cache
+
+How to initialize:
+
+- if missing, create from `project_map.example.json`
+- system can auto-populate via mapping discovery/maintenance tools
+
+### 2) `monitoring_config.json`
+
+Purpose:
+
+- monitored projects/lists used by monitored-scope reports
+
+How to initialize:
+
+- copy from `monitoring_config.example.json`
+- add monitored projects using MCP sync tools
+
+### 3) `report_spaces_config.json`
+
+Purpose:
+
+- controls which spaces are included in scheduled/manual report runs
+
+How to initialize:
+
+- copy from `report_spaces_config.example.json`
+- manage entries using MCP sync tools
+
+### Recommended generation/bootstrap flow
+
+1. Start stack
+2. Discover workspace hierarchy
+3. Map top-level spaces
+4. Configure report spaces
+5. Configure monitored projects
+6. Trigger maintenance refresh
+
+Practical commands:
+
+```bash
+# Windows PowerShell bootstrap from examples
+Copy-Item project_map.example.json project_map.json -Force
+Copy-Item monitoring_config.example.json monitoring_config.json -Force
+Copy-Item report_spaces_config.example.json report_spaces_config.json -Force
 ```
-You: Show me all workspaces
+
+After bootstrap, use tools from dashboard query tab (tool-call style prompts) to keep files in sync:
+
+- `discover_hierarchy`
+- `map_project`
+- `list_report_spaces` / `add_report_space` / `remove_report_space`
+- `list_monitored_projects` / `add_monitored_project` / `remove_monitored_project`
+- `trigger_mapping_maintenance`
+
+### Mapping hygiene rules
+
+- keep only valid ClickUp spaces/projects currently accessible by token
+- rerun maintenance after workspace structure changes
+- avoid manual edits while automation is running
+- commit config JSON updates together with workflow/code changes
+
+## API Endpoints
+
+Base URL: `http://localhost:8003`
+
+- `GET /` dashboard
+- `GET /status`
+- `GET /stats`
+- `POST /query`
+- `POST /report/space`
+- `GET /reports`
+- `GET /reports/latest`
+- `GET /reports/{name}`
+- `POST /reports/send`
+- `POST /render/pdf`
+
+Motia trigger endpoint:
+
+- `POST http://localhost:3111/trigger-report`
+
+## Operations Playbook
+
+### Start
+
+```bash
+docker compose up --build -d
 ```
 
-Response: 1 workspace found with members, plan, and ID details.
+### Tail logs
 
-```
-You: What's the project health for Marketing?
-```
-
-Response: Health Score 78/100 (Grade B) with breakdown by overdue tasks, freshness, progress, assignment coverage, and time estimates + recommendations.
-
-```
-You: Generate daily standup for Development
+```bash
+docker compose logs -f api-server
+docker compose logs -f mcp-server
+docker compose logs -f motia-reports
 ```
 
-Response: Auto-generated standup with completed tasks (yesterday), in-progress items, blockers, and tasks due today.
+### Trigger report run
 
-```
-You: Show time tracking report for last week grouped by assignee
-```
-
-```
-You: Find all tasks that are overdue or due within 3 days and assign risk levels
+```bash
+python trigger_reports.py --period yesterday --label "Manual yesterday run"
 ```
 
-```
-You: Show me the employee daily time report for this month
-```
+or:
 
-```
-You: Which team members tracked less than 8 hours on any day this week?
-```
-
-### Session Summary
-
-When you type `quit`, the client prints a full session summary:
-
-```
-====================================================================
-  Session Summary
---------------------------------------------------------------------
-  API calls        : 12
-  MCP tool calls   : 18
-  Input tokens     : 24,500
-  Output tokens    : 8,200
-  Total tokens     : 32,700
-  Reports saved    : 2
-  Duration         : 4m 32s
-  Models used      :  qwen/qwen-2.5-7b-instruct x12
-====================================================================
+```bash
+npm run dev:trigger:yesterday
+npm run dev:trigger:today
 ```
 
----
+### Send saved report
 
-## Configuration Reference
+```bash
+curl -X POST http://localhost:8003/reports/send \
+  -H "Content-Type: application/json" \
+  -d '{"report_name":"report_space_blogmanager_YYYY-MM-DD.md"}'
+```
 
-### Environment Variables
+## Complete MCP Tool Inventory
 
-| Variable                  | Required | Default                        | Description                            |
-| ------------------------- | -------- | ------------------------------ | -------------------------------------- |
-| `CLICKUP_API_TOKEN`       | Yes      | -                              | ClickUp personal API token             |
-| `DATABASE_URL`            | Yes      | -                              | PostgreSQL/Supabase connection string  |
-| `MCP_SERVER_URL`          | Yes      | `http://127.0.0.1:8001/sse`    | MCP server SSE endpoint                |
-| `OPENROUTER_API_KEY`      | Yes      | -                              | OpenRouter API key                     |
-| `OPENROUTER_BASE_URL`     | No       | `https://openrouter.ai/api/v1` | OpenRouter base URL                    |
-| `OPENROUTER_MODEL`        | No       | `qwen/qwen-2.5-7b-instruct`    | Primary model                          |
-| `OPENROUTER_MODEL_CHAIN`  | No       | -                              | Comma-separated model fallback chain   |
-| `OPENROUTER_HTTP_REFERER` | No       | -                              | Optional OpenRouter attribution header |
-| `OPENROUTER_APP_TITLE`    | No       | `ClickUp MCP`                  | Optional OpenRouter app title header   |
-| `CLICKUP_TEAM_ID`         | No       | Auto-detected                  | Default workspace/team ID              |
-| `CLICKUP_SPACE_ID`        | No       | -                              | Default space ID for filtering         |
-| `REPORTS_DIR`             | No       | `D:\reports`                   | Directory for saved Markdown reports   |
+This table is generated from current code decorators in `clickup_mcp/*.py`.
 
-### Supported Period Types (for report tools)
-
-| Period Type    | Description                                                      |
-| -------------- | ---------------------------------------------------------------- |
-| `today`        | Current calendar day                                             |
-| `yesterday`    | Previous calendar day                                            |
-| `this_week`    | Monday to today (current week)                                   |
-| `last_week`    | Full previous Monday-Sunday week                                 |
-| `this_month`   | First of month to today                                          |
-| `last_month`   | Full previous month                                              |
-| `this_year`    | Jan 1 to today                                                   |
-| `last_30_days` | Rolling 30-day window                                            |
-| `rolling`      | Custom rolling window (use with `rolling_days`)                  |
-| `custom`       | Specific date range (use `custom_start`/`custom_end` YYYY-MM-DD) |
-
----
+| Module                | Tool                                   | Description                                                                                          |
+| --------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| PM Analytics          | `get_async_report_result`              | Return result for finished async report job. Safe to call anytime.                                   |
+| PM Analytics          | `get_async_report_status`              | Check status for an async report job. HARD LIMIT: 5 polls per job.                                   |
+| PM Analytics          | `get_at_risk_tasks`                    | Find tasks overdue or due soon.                                                                      |
+| PM Analytics          | `get_employee_daily_time_report`       | Employee daily time report - replicates ClickUp's Timesheet and Time Reporting.                      |
+| PM Analytics          | `get_estimation_accuracy`              | Analyze estimation vs actuals using robust metrics.                                                  |
+| PM Analytics          | `get_folder_time_report_comprehensive` | Time tracking report for a FOLDER with period filters.                                               |
+| PM Analytics          | `get_inactive_assignees`               | Identify inactive team members.                                                                      |
+| PM Analytics          | `get_person_tasks_with_time`           | Get tasks a person worked on with timestamps (wrapper for detailed report).                          |
+| PM Analytics          | `get_progress_since`                   | Get tasks completed or changed since date.                                                           |
+| PM Analytics          | `get_project_report_universal`         | Universal project report generator. Works with ANY project (space, folder, or list).                 |
+| PM Analytics          | `get_space_folder_team_report`         | Hierarchical time report: Space > Folder > Team Member.                                              |
+| PM Analytics          | `get_space_project_time_report`        | Generate a time report for a SPACE grouped by PROJECT (folder/list).                                 |
+| PM Analytics          | `get_space_time_report`                | Time tracking report for entire SPACE (all folders and lists).                                       |
+| PM Analytics          | `get_space_time_report_by_period`      | Space time report with async support. Works for any period (day, week, month, etc).                  |
+| PM Analytics          | `get_space_time_report_comprehensive`  | Time tracking report for a SPACE with period filters.                                                |
+| PM Analytics          | `get_stale_tasks`                      | Find tasks with no updates.                                                                          |
+| PM Analytics          | `get_status_summary`                   | Summary of task statuses.                                                                            |
+| PM Analytics          | `get_task_status_distribution`         | Get actual task status distribution.                                                                 |
+| PM Analytics          | `get_task_time_breakdown`              | Detailed breakdown of a task tree.                                                                   |
+| PM Analytics          | `get_time_report_by_period`            | Time report based on time entry intervals. Supports any date range (day, week, month, year, custom). |
+| PM Analytics          | `get_time_report_detailed`             | No short docstring in code.                                                                          |
+| PM Analytics          | `get_time_tracking_report`             | CRITICAL: This report includes ALL tasks from ALL statuses by default.                               |
+| PM Analytics          | `get_untracked_tasks`                  | Find tasks with zero logged time.                                                                    |
+| Project Configuration | `add_project`                          | Add unique project.                                                                                  |
+| Project Configuration | `discover_projects`                    | Scan workspace to find potential projects.                                                           |
+| Project Configuration | `get_all_projects_status`              | Get summary status for all tracked projects.                                                         |
+| Project Configuration | `get_project_status`                   | Get high-level status metrics for a project.                                                         |
+| Project Configuration | `list_projects`                        | No short docstring in code.                                                                          |
+| Project Configuration | `refresh_projects`                     | Verifies all tracked projects still exist in ClickUp.                                                |
+| Project Configuration | `remove_project`                       | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_list_defined_statuses`            | Fetches the Effective Statuses for a list.                                                           |
+| Project Intelligence  | `get_project_at_risk`                  | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_blockers`                 | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_daily_standup`            | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_health_score`             | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_statuses`                 | Gets defined statuses for a project (List, Folder, or Space).                                        |
+| Project Intelligence  | `get_project_team_workload`            | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_time_tracking`            | No short docstring in code.                                                                          |
+| Project Intelligence  | `get_project_weekly_digest`            | Weekly summary for stakeholders.                                                                     |
+| Project Intelligence  | `get_workspace_folderless_lists`       | Scans the workspace to find all 'Folderless Lists'.                                                  |
+| Sync & Mapping        | `add_monitored_project`                | Add/update one monitored project (folder/list) in monitoring_config.json.                            |
+| Sync & Mapping        | `add_report_space`                     | Add/update one space in report_spaces_config.json.                                                   |
+| Sync & Mapping        | `clear_sync`                           | Clear all project mappings and discovery cache. Destructive.                                         |
+| Sync & Mapping        | `discover_hierarchy`                   | List all spaces, folders, and lists in a workspace for project mapping.                              |
+| Sync & Mapping        | `find_project_anywhere`                | Universal project/entity finder. Search for any space, folder, or list by name.                      |
+| Sync & Mapping        | `get_environment_context`              | Bootstrap tool: returns MCP environment state including                                              |
+| Sync & Mapping        | `get_mapped_project`                   | Get detailed info about a specifically mapped project.                                               |
+| Sync & Mapping        | `get_sync_status`                      | Get the overall health of the sync and cache.                                                        |
+| Sync & Mapping        | `list_mapped_projects`                 | Show all currently mapped projects.                                                                  |
+| Sync & Mapping        | `list_monitored_projects`              | List monitored projects configured in monitoring_config.json.                                        |
+| Sync & Mapping        | `list_report_spaces`                   | List spaces selected for automated report generation.                                                |
+| Sync & Mapping        | `list_spaces`                          | List all spaces and indicate which ones are already mapped.                                          |
+| Sync & Mapping        | `map_project`                          | Map a ClickUp Space as a top-level 'Project'.                                                        |
+| Sync & Mapping        | `prune_cache`                          | Remove expired cache entries.                                                                        |
+| Sync & Mapping        | `refresh_project`                      | Force a refresh of a project's structure from ClickUp.                                               |
+| Sync & Mapping        | `remove_monitored_project`             | Remove one monitored project from monitoring_config.json by alias or clickup_id.                     |
+| Sync & Mapping        | `remove_report_space`                  | Remove one space from report_spaces_config.json by name.                                             |
+| Sync & Mapping        | `trigger_mapping_maintenance`          | Manually trigger the mapping maintenance routine to update all mapped                                |
+| Sync & Mapping        | `unmap_project`                        | Remove a project mapping.                                                                            |
+| Task Management       | `create_task`                          | Create a new task.                                                                                   |
+| Task Management       | `get_list_progress`                    | Get progress summary for a list (useful for sprints).                                                |
+| Task Management       | `get_overdue_tasks`                    | Get all overdue tasks in a list.                                                                     |
+| Task Management       | `get_project_tasks`                    | Get all tasks in a project (folder/space) with optional filters.                                     |
+| Task Management       | `get_task`                             | Get detailed task information.                                                                       |
+| Task Management       | `get_tasks`                            | List tasks in a list with optional filters.                                                          |
+| Task Management       | `get_workload`                         | Get workload distribution per team member.                                                           |
+| Task Management       | `search_tasks`                         | Search tasks within a folder or space.                                                               |
+| Task Management       | `update_task`                          | Update an existing task.                                                                             |
+| Task Reports          | `get_low_hours_report`                 | Low Hours Report - employees who tracked fewer than N hours on any working day.                      |
+| Task Reports          | `get_member_task_report`               | Team Member-Wise Task Report.                                                                        |
+| Task Reports          | `get_missing_estimation_report`        | Missing Time Estimation Report.                                                                      |
+| Task Reports          | `get_overtracked_report`               | Overtracked Report                                                                                   |
+| Task Reports          | `get_project_task_report`              | Project-Wise Task Report.                                                                            |
+| Task Reports          | `get_space_task_report`                | Space-Wise Task Report.                                                                              |
+| Task Reports          | `get_task_report_job_result`           | Retrieve result of a finished background task-report job.                                            |
+| Task Reports          | `get_task_report_job_status`           | Check status of a background task-report job (max 5 polls).                                          |
+| Workspace Structure   | `get_folder`                           | Get details of a specific ClickUp folder, including all lists inside it.                             |
+| Workspace Structure   | `get_folderless_lists`                 | List all lists that are directly in the space (not inside any folder).                               |
+| Workspace Structure   | `get_folders`                          | List all folders inside a specific ClickUp space.                                                    |
+| Workspace Structure   | `get_list`                             | Get detailed information about a specific ClickUp list.                                              |
+| Workspace Structure   | `get_lists`                            | List all lists inside a specific ClickUp folder.                                                     |
+| Workspace Structure   | `get_space`                            | Get detailed information about a specific ClickUp space.                                             |
+| Workspace Structure   | `get_spaces`                           | List all spaces inside a specific workspace (team).                                                  |
+| Workspace Structure   | `get_team_members`                     | Get all members/assignees from a workspace.                                                          |
+| Workspace Structure   | `get_workspaces`                       | List all accessible workspaces (teams) in ClickUp.                                                   |
+| Workspace Structure   | `invalidate_cache`                     | Clear cached ClickUp data for fresh results.                                                         |
+| Workspace Structure   | `resolve_assignees`                    | Resolve assignee names/usernames to their user IDs.                                                  |
 
 ## Troubleshooting
 
-<details>
-<summary><b>MCP Server won't start - Address already in use</b></summary>
+### Email says sent but not in inbox
 
-```bash
-# Find and kill process on port 8001
-netstat -ano | findstr :8001
-taskkill /PID <PID> /F
-```
+1. check Motia send-step logs
+2. check Brevo transactional events (delivered/deferred/bounced/suppressed)
+3. verify sender identity and recipient status in Brevo
+4. check spam/promotions tabs
 
-</details>
+### Mapping shows stale/removed spaces
 
-<details>
-<summary><b>MCP Server won't start - ModuleNotFoundError</b></summary>
+1. run `trigger_mapping_maintenance`
+2. verify token/team access for missing entities
+3. re-check `monitoring_config.json` and `report_spaces_config.json`
 
-```bash
-# Ensure virtual environment is activated
-myenv\Scripts\activate
-pip install -r requirements.txt
-```
+### API works but automation fails
 
-</details>
+- verify `API_SERVER_URL` in motia service
+- verify `MCP_SERVER_URL` in api service
+- verify required env vars are set in runtime (not just local shell)
 
-<details>
-<summary><b>AI Client can't connect to MCP server</b></summary>
+## Security
 
-1. Ensure MCP server is running in another terminal (`npm start` or `python clickup_mcp/mcp_server.py`)
-2. Verify `MCP_SERVER_URL=http://127.0.0.1:8001/sse` in `.env`
-3. Try `http://localhost:8001/sse` as an alternative
+- never commit `.env`
+- rotate keys if they appear in logs/history
+- use diagnostics that print only `SET/EMPTY` for secret checks
 
-</details>
+---
 
-<details>
-<summary><b>OpenRouter API errors - Rate limit / quota</b></summary>
-
-1. Check `OPENROUTER_API_KEY` is valid and has available credits/quota.
-2. If using `OPENROUTER_MODEL_CHAIN`, ensure each model slug is valid.
-3. If the primary model is rate-limited, the client rotates to the next model in chain.
-4. If all configured models fail, wait briefly or add an additional fallback model.
-
-</details>
-
-<details>
-<summary><b>Reports are not being saved</b></summary>
-
-1. Check `REPORTS_DIR` in `.env` points to a writable directory
-2. Create the directory manually if it does not exist: `mkdir D:\reports`
-3. The client saves reports when it detects a `formatted_output` key in the tool response
-
-</details>
-
-<details>
-<summary><b>Async reports time out or never complete</b></summary>
-
-Large space/folder reports run as async background jobs on the MCP server. The client polls every 3s for up to 5 minutes (`STATUS_CHECK_TIMEOUT_S = 300`). If a job is stuck, use `get_environment_context` to check server state or restart the server with `npm start`.
-
-</details>
+If you add or rename tools/endpoints, regenerate this README tool table so docs stay accurate.

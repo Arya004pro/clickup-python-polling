@@ -27,6 +27,9 @@ HEADERS = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json
 MONITORING_CONFIG_FILE = os.path.join(
     os.path.dirname(__file__), "..", "monitoring_config.json"
 )
+REPORT_SPACES_CONFIG_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "report_spaces_config.json"
+)
 DEFAULT_MAINTENANCE_TIMEZONE = "Asia/Kolkata"
 DEFAULT_MAINTENANCE_RUN_TIMES = [(h, 0) for h in range(9, 22, 2)]  # 09:00..21:00
 
@@ -123,6 +126,16 @@ def _api_get(endpoint: str, params: dict = None) -> Optional[dict]:
     try:
         data, err = _client.get(endpoint, params=params)
         if err:
+            verbose = os.getenv("SYNC_MAPPING_VERBOSE", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if verbose:
+                print(
+                    f"[sync_mapping] API GET failed: endpoint={endpoint}, error={err}",
+                    flush=True,
+                )
             return None
         return data
     except Exception as e:
@@ -228,12 +241,35 @@ def _refresh_project_mapping(alias: str, project: dict) -> dict:
             "error": "Missing or invalid clickup_id/clickup_type",
         }
 
-    new_structure = _fetch_full_structure(cid, ctype)
+    attempts = 3 if ctype == "space" else 2
+    new_structure = {}
+    for attempt in range(1, attempts + 1):
+        new_structure = _fetch_full_structure(cid, ctype)
+        if "name" in new_structure:
+            break
+        if attempt < attempts:
+            time.sleep(0.6 * attempt)
+
     if "name" not in new_structure:
+        existing_structure = project.get("structure") or {}
+        if isinstance(existing_structure, dict) and existing_structure.get("name"):
+            return {
+                "alias": alias,
+                "success": True,
+                "stale": True,
+                "children": len(existing_structure.get("children", [])),
+                "warning": (
+                    f"Refresh failed after {attempts} attempts; kept previous structure "
+                    f"(id={cid}, type={ctype})."
+                ),
+            }
         return {
             "alias": alias,
             "success": False,
-            "error": "Failed to fetch structure from ClickUp API",
+            "error": (
+                f"Failed to fetch structure from ClickUp API after {attempts} attempts "
+                f"(id={cid}, type={ctype}). Check token/team access or whether this entity still exists."
+            ),
         }
 
     updated = dict(project)
@@ -306,6 +342,183 @@ def _sync_monitoring_config_list_ids() -> dict:
     return {"updated_projects": changed, "status": "ok"}
 
 
+def _prune_monitoring_config_removed_spaces(active_space_names_lc: set[str]) -> dict:
+    """Remove monitored projects whose `space` is no longer present in live team spaces."""
+    if not os.path.exists(MONITORING_CONFIG_FILE):
+        return {"pruned_projects": 0, "status": "skipped", "reason": "config_not_found"}
+
+    try:
+        with open(MONITORING_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return {"pruned_projects": 0, "status": "error", "reason": f"read_failed: {e}"}
+
+    projects = cfg.get("monitored_projects", [])
+    if not isinstance(projects, list):
+        projects = []
+
+    keep = []
+    pruned_aliases: List[str] = []
+    for p in projects:
+        space_name = str(p.get("space", "")).strip()
+        if not space_name:
+            keep.append(p)
+            continue
+        if active_space_names_lc and space_name.lower() not in active_space_names_lc:
+            pruned_aliases.append(
+                str(p.get("alias", "")).strip() or str(p.get("clickup_id", ""))
+            )
+            continue
+        keep.append(p)
+
+    if len(keep) != len(projects):
+        now_ist = datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+        cfg["monitored_projects"] = keep
+        cfg["last_maintenance_run"] = now_ist
+        try:
+            with open(MONITORING_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            return {
+                "pruned_projects": 0,
+                "status": "error",
+                "reason": f"write_failed: {e}",
+            }
+
+    return {
+        "pruned_projects": len(pruned_aliases),
+        "pruned_aliases": pruned_aliases,
+        "status": "ok",
+    }
+
+
+def _prune_report_spaces_removed_spaces(active_space_names_lc: set[str]) -> dict:
+    """Remove report spaces whose `name` no longer exists in live team spaces."""
+    if not os.path.exists(REPORT_SPACES_CONFIG_FILE):
+        return {"pruned_spaces": 0, "status": "skipped", "reason": "config_not_found"}
+
+    try:
+        with open(REPORT_SPACES_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return {"pruned_spaces": 0, "status": "error", "reason": f"read_failed: {e}"}
+
+    report_spaces = cfg.get("report_spaces", [])
+    if not isinstance(report_spaces, list):
+        report_spaces = []
+
+    keep = []
+    pruned_names: List[str] = []
+    for item in report_spaces:
+        space_name = str(item.get("name", "")).strip()
+        if not space_name:
+            keep.append(item)
+            continue
+        if active_space_names_lc and space_name.lower() not in active_space_names_lc:
+            pruned_names.append(space_name)
+            continue
+        keep.append(item)
+
+    if len(keep) != len(report_spaces):
+        cfg["report_spaces"] = keep
+        cfg["last_updated"] = datetime.now(
+            tz=timezone(timedelta(hours=5, minutes=30))
+        ).strftime("%Y-%m-%d %H:%M:%S IST")
+        try:
+            with open(REPORT_SPACES_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            return {
+                "pruned_spaces": 0,
+                "status": "error",
+                "reason": f"write_failed: {e}",
+            }
+
+    return {
+        "pruned_spaces": len(pruned_names),
+        "pruned_names": pruned_names,
+        "status": "ok",
+    }
+
+
+def _load_monitoring_config() -> dict:
+    """Load monitoring scope config from disk."""
+    if not os.path.exists(MONITORING_CONFIG_FILE):
+        return {"monitored_projects": []}
+    try:
+        with open(MONITORING_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (PermissionError, OSError, json.JSONDecodeError):
+        return {"monitored_projects": []}
+    if not isinstance(cfg, dict):
+        return {"monitored_projects": []}
+    projects = cfg.get("monitored_projects")
+    if not isinstance(projects, list):
+        cfg["monitored_projects"] = []
+    return cfg
+
+
+def _save_monitoring_config(cfg: dict) -> bool:
+    """Persist monitoring scope config to disk."""
+    try:
+        with open(MONITORING_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        return True
+    except (PermissionError, OSError):
+        return False
+
+
+def _infer_space_name_from_entity(entity: dict, explicit_space_name: str = "") -> str:
+    """
+    Infer containing space name for a resolved folder/list entity.
+    """
+    if explicit_space_name and explicit_space_name.strip():
+        return explicit_space_name.strip()
+
+    if entity.get("type") == "space":
+        return str(entity.get("name") or "").strip()
+
+    if entity.get("parent_type") == "space":
+        return str(entity.get("parent_name") or "").strip()
+
+    if entity.get("grandparent_type") == "space":
+        return str(entity.get("grandparent_name") or "").strip()
+
+    root_alias = entity.get("root_alias")
+    if root_alias and root_alias in db.projects:
+        root = db.projects.get(root_alias, {})
+        if root.get("clickup_type") == "space":
+            return str(root.get("structure", {}).get("name") or "").strip()
+
+    return ""
+
+
+def _monitored_projects_view(cfg: dict, space_filter: str = "") -> List[Dict[str, Any]]:
+    """Return normalized monitored project rows, optionally filtered by space."""
+    rows: List[Dict[str, Any]] = []
+    items = cfg.get("monitored_projects", [])
+    target_space = (space_filter or "").strip().lower()
+    for p in items if isinstance(items, list) else []:
+        space = str(p.get("space", "")).strip()
+        if target_space and space.lower() != target_space:
+            continue
+        list_ids = [str(x) for x in (p.get("list_ids") or []) if str(x).strip()]
+        rows.append(
+            {
+                "alias": p.get("alias"),
+                "clickup_id": p.get("clickup_id"),
+                "type": p.get("type"),
+                "space": space,
+                "list_ids_count": len(list_ids),
+                "list_ids": list_ids,
+                "last_synced": p.get("last_synced"),
+            }
+        )
+    return rows
+
+
 def run_mapping_maintenance_once() -> dict:
     """
     Internal maintenance:
@@ -325,6 +538,26 @@ def run_mapping_maintenance_once() -> dict:
     try:
         refreshed = []
         failed = []
+        stale_spaces_pruned = []
+
+        teams_data = _api_get("/team")
+        active_space_ids: set[str] = set()
+        active_space_names_lc: set[str] = set()
+        spaces_data = None
+        if teams_data and teams_data.get("teams"):
+            team_id = teams_data["teams"][0]["id"]
+            spaces_data = _api_get(f"/team/{team_id}/space")
+            if spaces_data:
+                active_space_ids = {
+                    str(space.get("id"))
+                    for space in spaces_data.get("spaces", [])
+                    if space.get("id")
+                }
+                active_space_names_lc = {
+                    str(space.get("name", "")).strip().lower()
+                    for space in spaces_data.get("spaces", [])
+                    if str(space.get("name", "")).strip()
+                }
 
         # --- Prune any non-space entries (folders/lists don't belong at top level) ---
         pruned_non_spaces = []
@@ -339,9 +572,34 @@ def run_mapping_maintenance_once() -> dict:
                 )
 
         for alias, project in list(db.projects.items()):
+            project_id = str(project.get("clickup_id") or "").strip()
+            project_type = str(project.get("clickup_type") or "").strip()
+
+            # If we have a live spaces snapshot and this mapped space no longer exists,
+            # prune immediately before attempting refresh.
+            if (
+                project_type == "space"
+                and project_id
+                and active_space_ids
+                and project_id not in active_space_ids
+            ):
+                db.remove_project(alias)
+                stale_spaces_pruned.append(alias)
+                print(
+                    f"[sync_mapping]   ⚠ Removed stale space mapping '{alias}' "
+                    f"(id={project_id}) — not returned by current team spaces.",
+                    flush=True,
+                )
+                continue
+
             result = _refresh_project_mapping(alias, project)
             if result.get("success"):
                 refreshed.append(result["alias"])
+                if result.get("stale") and _verbose:
+                    print(
+                        f"[sync_mapping]   ⚠ {alias}: {result.get('warning')}",
+                        flush=True,
+                    )
                 if _verbose:
                     print(
                         f"[sync_mapping]   ✓ {alias} ({result.get('children', 0)} children)",
@@ -355,55 +613,60 @@ def run_mapping_maintenance_once() -> dict:
 
         # --- Auto-discover new spaces ---
         auto_mapped = []
-        teams_data = _api_get("/team")
-        if teams_data and teams_data.get("teams"):
-            team_id = teams_data["teams"][0]["id"]
-            spaces_data = _api_get(f"/team/{team_id}/space")
-            if spaces_data:
-                existing_ids = {p["clickup_id"] for p in db.projects.values()}
-                for space in spaces_data.get("spaces", []):
-                    if space["id"] in existing_ids:
-                        continue
-                    # New space found — auto-map it
-                    new_alias = _slugify(space["name"])
-                    if new_alias in db.projects:
-                        new_alias = f"{new_alias}-{space['id'][-4:]}"
-                    structure = _fetch_full_structure(space["id"], "space")
-                    if "name" not in structure:
-                        print(
-                            f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.",
-                            flush=True,
-                        )
-                        continue
-                    db.add_project(
-                        new_alias,
-                        {
-                            "alias": new_alias,
-                            "clickup_id": space["id"],
-                            "clickup_type": "space",
-                            "last_sync": (
-                                datetime.now(
-                                    tz=timezone(timedelta(hours=5, minutes=30))
-                                ).strftime("%Y-%m-%d %H:%M:%S IST")
-                            ),
-                            "structure": structure,
-                        },
-                    )
-                    auto_mapped.append(new_alias)
+        if spaces_data:
+            existing_ids = {p["clickup_id"] for p in db.projects.values()}
+            for space in spaces_data.get("spaces", []):
+                if space["id"] in existing_ids:
+                    continue
+                # New space found — auto-map it
+                new_alias = _slugify(space["name"])
+                if new_alias in db.projects:
+                    new_alias = f"{new_alias}-{space['id'][-4:]}"
+                structure = _fetch_full_structure(space["id"], "space")
+                if "name" not in structure:
                     print(
-                        f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'",
+                        f"[sync_mapping]   ⚠ Skipping new space '{space['name']}' — could not fetch structure.",
                         flush=True,
                     )
+                    continue
+                db.add_project(
+                    new_alias,
+                    {
+                        "alias": new_alias,
+                        "clickup_id": space["id"],
+                        "clickup_type": "space",
+                        "last_sync": (
+                            datetime.now(
+                                tz=timezone(timedelta(hours=5, minutes=30))
+                            ).strftime("%Y-%m-%d %H:%M:%S IST")
+                        ),
+                        "structure": structure,
+                    },
+                )
+                auto_mapped.append(new_alias)
+                print(
+                    f"[sync_mapping]   + Auto-mapped new space '{space['name']}' as '{new_alias}'",
+                    flush=True,
+                )
 
         monitor_res = _sync_monitoring_config_list_ids()
+        monitor_prune_res = _prune_monitoring_config_removed_spaces(
+            active_space_names_lc
+        )
+        report_spaces_prune_res = _prune_report_spaces_removed_spaces(
+            active_space_names_lc
+        )
         pruned = db.prune_expired_cache()
 
         if _verbose or failed or auto_mapped or pruned_non_spaces:
             print(
                 f"[sync_mapping] Done — {len(refreshed)} refreshed, {len(failed)} failed, "
                 f"{len(auto_mapped)} new space(s) auto-mapped, "
+                f"{len(stale_spaces_pruned)} stale space(s) pruned, "
                 f"{len(pruned_non_spaces)} non-space entries pruned, "
                 f"{monitor_res.get('updated_projects', 0)} monitoring list_ids updated, "
+                f"{monitor_prune_res.get('pruned_projects', 0)} monitoring entries pruned, "
+                f"{report_spaces_prune_res.get('pruned_spaces', 0)} report spaces pruned, "
                 f"{pruned} cache entries pruned.",
                 flush=True,
             )
@@ -413,8 +676,11 @@ def run_mapping_maintenance_once() -> dict:
             "mapped_projects_refreshed": len(refreshed),
             "mapped_projects_failed": failed,
             "auto_mapped_spaces": auto_mapped,
+            "stale_space_mappings_pruned": stale_spaces_pruned,
             "non_space_entries_pruned": pruned_non_spaces,
             "monitoring_config": monitor_res,
+            "monitoring_config_pruned": monitor_prune_res,
+            "report_spaces_config_pruned": report_spaces_prune_res,
             "cache_entries_pruned": pruned,
             "ran_at": time.time(),
         }
@@ -642,6 +908,35 @@ def _resolve_monitored_scope_entity(entity_name: str) -> Optional[dict]:
         "found_at": "monitoring_scope",
         "monitoring_scope": True,
     }
+
+
+def _load_report_spaces_config() -> dict:
+    """Load report-space selection config from disk."""
+    if not os.path.exists(REPORT_SPACES_CONFIG_FILE):
+        return {"report_spaces": []}
+    try:
+        with open(REPORT_SPACES_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (PermissionError, OSError, json.JSONDecodeError):
+        return {"report_spaces": []}
+    if not isinstance(cfg, dict):
+        return {"report_spaces": []}
+    report_spaces = cfg.get("report_spaces")
+    if not isinstance(report_spaces, list):
+        cfg["report_spaces"] = []
+    return cfg
+
+
+def _save_report_spaces_config(cfg: dict) -> bool:
+    try:
+        cfg["last_updated"] = datetime.now(
+            tz=timezone(timedelta(hours=5, minutes=30))
+        ).strftime("%Y-%m-%d %H:%M:%S IST")
+        with open(REPORT_SPACES_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        return True
+    except (PermissionError, OSError):
+        return False
 
 
 # --- Tools Definition ---
@@ -1026,3 +1321,345 @@ def register_sync_mapping_tools(mcp: FastMCP):
 
         result: Dict[str, Any] = run_mapping_maintenance_once()
         return result
+
+    @mcp.tool()
+    def list_report_spaces() -> dict:
+        """
+        List spaces selected for automated report generation.
+
+        This is separate from project_map.json:
+        - project_map.json: all mapped spaces for discovery/resolution
+        - report_spaces_config.json: subset of spaces to generate reports for
+        """
+        cfg = _load_report_spaces_config()
+        items = cfg.get("report_spaces", [])
+        mapped_space_names = {
+            (p.get("structure", {}).get("name") or "").strip().lower()
+            for p in db.projects.values()
+            if p.get("clickup_type") == "space"
+        }
+
+        normalized = []
+        for s in items:
+            name = str(s.get("name", "")).strip()
+            if not name:
+                continue
+            normalized.append(
+                {
+                    "name": name,
+                    "display": s.get("display") or name,
+                    "query_label": s.get("query_label") or name,
+                    "scope": s.get("scope") or "full",
+                    "is_mapped": name.lower() in mapped_space_names,
+                }
+            )
+
+        return {
+            "config_file": REPORT_SPACES_CONFIG_FILE,
+            "count": len(normalized),
+            "spaces": normalized,
+            "last_updated": cfg.get("last_updated"),
+        }
+
+    @mcp.tool()
+    def add_report_space(
+        space_name: str,
+        scope: str = "full",
+        display: str = "",
+        query_label: str = "",
+    ) -> dict:
+        """
+        Add/update one space in report_spaces_config.json.
+
+        Args:
+            space_name: ClickUp space name (resolved/validated against live API/project_map).
+            scope: "full" or "monitored"
+            display: Optional label used in UI/email
+            query_label: Optional label sent to report prompt/tool call
+        """
+        desired_scope = (scope or "full").strip().lower()
+        if desired_scope not in {"full", "monitored"}:
+            return {"error": "Invalid scope. Use 'full' or 'monitored'."}
+
+        found = find_entity_anywhere(space_name)
+        if not found:
+            return {"error": f"Space '{space_name}' not found."}
+        if found.get("type") != "space":
+            return {
+                "error": f"'{space_name}' resolved to {found.get('type')}, not a space.",
+                "hint": "Provide a valid space name.",
+            }
+
+        canonical_name = str(found.get("name") or space_name).strip()
+        if not canonical_name:
+            return {"error": "Resolved space name is empty."}
+
+        cfg = _load_report_spaces_config()
+        report_spaces = cfg.get("report_spaces", [])
+        if not isinstance(report_spaces, list):
+            report_spaces = []
+
+        entry = {
+            "name": canonical_name,
+            "display": (display or canonical_name).strip(),
+            "query_label": (
+                (query_label or f"Monitored {canonical_name}").strip()
+                if desired_scope == "monitored"
+                else (query_label or canonical_name).strip()
+            ),
+            "scope": desired_scope,
+        }
+
+        replaced = False
+        for i, existing in enumerate(report_spaces):
+            if str(existing.get("name", "")).strip().lower() == canonical_name.lower():
+                report_spaces[i] = entry
+                replaced = True
+                break
+        if not replaced:
+            report_spaces.append(entry)
+
+        cfg["report_spaces"] = report_spaces
+        if not _save_report_spaces_config(cfg):
+            return {
+                "error": f"Failed to write report spaces config at {REPORT_SPACES_CONFIG_FILE}"
+            }
+
+        return {
+            "success": True,
+            "message": (
+                f"Updated report space '{canonical_name}'"
+                if replaced
+                else f"Added report space '{canonical_name}'"
+            ),
+            "entry": entry,
+            "total_spaces": len(report_spaces),
+        }
+
+    @mcp.tool()
+    def remove_report_space(space_name: str) -> dict:
+        """
+        Remove one space from report_spaces_config.json by name.
+        """
+        cfg = _load_report_spaces_config()
+        report_spaces = cfg.get("report_spaces", [])
+        if not isinstance(report_spaces, list):
+            report_spaces = []
+
+        keep = []
+        removed = None
+        target = (space_name or "").strip().lower()
+        for item in report_spaces:
+            name = str(item.get("name", "")).strip()
+            if name.lower() == target and removed is None:
+                removed = item
+                continue
+            keep.append(item)
+
+        if removed is None:
+            return {"error": f"Report space '{space_name}' not found."}
+
+        cfg["report_spaces"] = keep
+        if not _save_report_spaces_config(cfg):
+            return {
+                "error": f"Failed to write report spaces config at {REPORT_SPACES_CONFIG_FILE}"
+            }
+
+        return {
+            "success": True,
+            "message": f"Removed report space '{removed.get('name', space_name)}'",
+            "total_spaces": len(keep),
+        }
+
+    @mcp.tool()
+    def list_monitored_projects(space_name: str = "") -> dict:
+        """
+        List monitored projects configured in monitoring_config.json.
+        Optional filter: only show monitored projects in one space.
+        """
+        cfg = _load_monitoring_config()
+        filtered = _monitored_projects_view(cfg, space_name)
+
+        return {
+            "config_file": MONITORING_CONFIG_FILE,
+            "count": len(filtered),
+            "projects": filtered,
+            "last_maintenance_run": cfg.get("last_maintenance_run"),
+        }
+
+    @mcp.tool()
+    def add_monitored_project(
+        project_name: str = "",
+        alias: str = "",
+        space_name: str = "",
+        project_name_or_alias: str = "",
+    ) -> dict:
+        """
+        Add/update one monitored project (folder/list) in monitoring_config.json.
+
+        Intended use:
+        - Keep only selected projects from a space in monitored scope
+        - Example: add 6 chosen folders from AIX
+        """
+        effective_project_name = (project_name or project_name_or_alias).strip()
+        if not effective_project_name:
+            return {
+                "error": "Provide project_name (or project_name_or_alias) to add a monitored project."
+            }
+
+        resolved = find_entity_anywhere(effective_project_name)
+        if not resolved:
+            return {"error": f"Project '{effective_project_name}' not found."}
+
+        entity_type = str(resolved.get("type") or "").strip().lower()
+        entity_id = str(resolved.get("id") or "").strip()
+        entity_name = str(resolved.get("name") or effective_project_name).strip()
+        if entity_type not in {"folder", "list"}:
+            return {
+                "error": (
+                    f"'{effective_project_name}' resolved to type '{entity_type}'. "
+                    "Only folder or list can be added as monitored project."
+                ),
+                "hint": "Use a folder/list name. For full-space selection use add_report_space().",
+            }
+        if not entity_id:
+            return {"error": "Resolved project has no ID."}
+
+        list_ids: List[str] = []
+        if entity_type == "folder":
+            resp = _api_get(f"/folder/{entity_id}/list")
+            list_ids = [
+                str(lst.get("id"))
+                for lst in (resp or {}).get("lists", [])
+                if lst.get("id")
+            ]
+            list_ids = list(dict.fromkeys(list_ids))
+            if not list_ids:
+                return {
+                    "error": f"Folder '{entity_name}' has no lists to monitor.",
+                    "hint": "Only folders with lists can be monitored.",
+                }
+        else:  # list
+            list_ids = [entity_id]
+
+        resolved_space_name = _infer_space_name_from_entity(resolved, space_name)
+        if not resolved_space_name:
+            return {
+                "error": f"Could not infer space for '{entity_name}'.",
+                "hint": "Pass space_name explicitly (e.g., space_name='AIX').",
+            }
+
+        final_alias = (alias or entity_name).strip()
+        now_ist = datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+        entry = {
+            "alias": final_alias,
+            "clickup_id": entity_id,
+            "type": entity_type,
+            "space": resolved_space_name,
+            "list_ids": list_ids,
+            "last_synced": now_ist,
+        }
+
+        cfg = _load_monitoring_config()
+        projects = cfg.get("monitored_projects", [])
+        if not isinstance(projects, list):
+            projects = []
+
+        replaced = False
+        for i, p in enumerate(projects):
+            same_alias = str(p.get("alias", "")).strip().lower() == final_alias.lower()
+            same_id = str(p.get("clickup_id", "")).strip() == entity_id
+            if same_alias or same_id:
+                projects[i] = entry
+                replaced = True
+                break
+        if not replaced:
+            projects.append(entry)
+
+        cfg["monitored_projects"] = projects
+        cfg["last_maintenance_run"] = now_ist
+        if not _save_monitoring_config(cfg):
+            return {
+                "error": f"Failed to write monitoring config at {MONITORING_CONFIG_FILE}"
+            }
+
+        updated_for_space = _monitored_projects_view(cfg, resolved_space_name)
+
+        return {
+            "success": True,
+            "message": (
+                f"Updated monitored project '{final_alias}'"
+                if replaced
+                else f"Added monitored project '{final_alias}'"
+            ),
+            "project": entry,
+            "total_monitored_projects": len(projects),
+            "updated_projects_for_space": updated_for_space,
+        }
+
+    @mcp.tool()
+    def remove_monitored_project(
+        project_name_or_alias: str, space_name: str = ""
+    ) -> dict:
+        """
+        Remove one monitored project from monitoring_config.json by alias or clickup_id.
+
+        Args:
+            project_name_or_alias: Alias or clickup_id of monitored project.
+            space_name: Optional space filter to disambiguate same alias across spaces.
+        """
+        target = (project_name_or_alias or "").strip().lower()
+        if not target:
+            return {"error": "project_name_or_alias is required."}
+        target_space = (space_name or "").strip().lower()
+
+        cfg = _load_monitoring_config()
+        projects = cfg.get("monitored_projects", [])
+        if not isinstance(projects, list):
+            projects = []
+
+        keep = []
+        removed = None
+        for p in projects:
+            alias = str(p.get("alias", "")).strip().lower()
+            clickup_id = str(p.get("clickup_id", "")).strip().lower()
+            project_space = str(p.get("space", "")).strip().lower()
+            matches_target = alias == target or clickup_id == target
+            matches_space = not target_space or project_space == target_space
+            if removed is None and matches_target and matches_space:
+                removed = p
+                continue
+            keep.append(p)
+
+        if removed is None:
+            aliases = [
+                str(p.get("alias", "")).strip() for p in projects if p.get("alias")
+            ]
+            return {
+                "error": f"Monitored project '{project_name_or_alias}' not found.",
+                "space_filter": space_name or None,
+                "available_aliases": aliases[:25],
+            }
+
+        now_ist = datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+        cfg["monitored_projects"] = keep
+        cfg["last_maintenance_run"] = now_ist
+        if not _save_monitoring_config(cfg):
+            return {
+                "error": f"Failed to write monitoring config at {MONITORING_CONFIG_FILE}"
+            }
+
+        result_space = (space_name or str(removed.get("space") or "")).strip()
+        updated_for_space = _monitored_projects_view(cfg, result_space)
+
+        return {
+            "success": True,
+            "message": f"Removed monitored project '{removed.get('alias', project_name_or_alias)}'",
+            "space": removed.get("space"),
+            "total_monitored_projects": len(keep),
+            "updated_projects_for_space": updated_for_space,
+        }

@@ -1,0 +1,10 @@
+{
+  "report_spaces": [
+    {
+      "name": "Example Space",
+      "display": "Example Space",
+      "query_label": "Example Space",
+      "scope": "full"
+    }
+  ]
+}

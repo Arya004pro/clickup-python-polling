@@ -7,6 +7,7 @@ HTTP endpoints:
   GET  /status
   GET  /stats
   GET  /reports
+  DELETE /reports/{report_name}
   GET  /reports/latest
   GET  /reports/{report_name}
   GET  /
@@ -15,12 +16,14 @@ HTTP endpoints:
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import os
 import re
 import smtplib
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from email import encoders
 from email.mime.base import MIMEBase
@@ -28,6 +31,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -98,6 +102,9 @@ class SpaceReportRequest(BaseModel):
     space_name: str
     period_type: str = "today"
     include_archived: bool = True
+    schedule_label: Optional[str] = None
+    custom_start: Optional[str] = None
+    custom_end: Optional[str] = None
 
 
 class SpaceReportResponse(BaseModel):
@@ -129,10 +136,20 @@ class RenderPdfRequest(BaseModel):
     filename: Optional[str] = None
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
 app = FastAPI(
     title="ClickUp MCP REST API",
     description="Query ClickUp via MCP + AI provider",
     version="1.1.0",
+    lifespan=lifespan,
 )
 
 client = None
@@ -142,6 +159,7 @@ client_connect_lock = asyncio.Lock()
 # Serialise all /query requests behind this lock.
 query_lock = asyncio.Lock()
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", r"D:\reports"))
+IST_TZ = ZoneInfo("Asia/Kolkata")
 
 
 def _ensure_reports_dir() -> None:
@@ -163,8 +181,8 @@ def _list_reports(limit: int = 50) -> list[dict]:
         {
             "name": p.name,
             "size_bytes": st.st_size,
-            "modified": datetime.fromtimestamp(st.st_mtime).isoformat(
-                timespec="seconds"
+            "modified": datetime.fromtimestamp(st.st_mtime, tz=IST_TZ).strftime(
+                "%Y-%m-%d %H:%M:%S IST"
             ),
         }
         for p, st in report_entries[:limit]
@@ -191,9 +209,7 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
     smtp_password = os.getenv("SMTP_PASSWORD", "")
 
     if not smtp_email or not smtp_password:
-        raise RuntimeError(
-            "SMTP_EMAIL/SMTP_PASSWORD not configured in environment."
-        )
+        raise RuntimeError("SMTP_EMAIL/SMTP_PASSWORD not configured in environment.")
 
     report_content = report_path.read_text(encoding="utf-8")
     report_title = report_path.stem
@@ -229,13 +245,87 @@ def _send_report_via_smtp(report_path: Path, to_email: str, subject: str) -> Non
         attachment.set_payload(report_content.encode("utf-8"))
         encoders.encode_base64(attachment)
         fallback_name = f"{report_title}.md"
-        attachment.add_header("Content-Disposition", f'attachment; filename="{fallback_name}"')
+        attachment.add_header(
+            "Content-Disposition", f'attachment; filename="{fallback_name}"'
+        )
         msg.attach(attachment)
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.starttls()
         server.login(smtp_email, smtp_password)
         server.send_message(msg)
+
+
+def _send_report_via_brevo(report_path: Path, to_email: str, subject: str) -> None:
+    import base64 as _b64
+    import requests as _requests
+
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
+    email_from = os.getenv("EMAIL_FROM", "").strip()
+    from_name = os.getenv("EMAIL_FROM_NAME", "Arya").strip()
+
+    if not api_key or not email_from:
+        raise RuntimeError(
+            "BREVO_API_KEY and EMAIL_FROM must be set for brevo_api transport."
+        )
+
+    report_content = report_path.read_text(encoding="utf-8")
+    report_title = report_path.stem
+
+    html_body = (
+        f"<p>Hello,</p>"
+        f"<p>Please find the ClickUp report <b>{report_title}</b> attached.</p>"
+        f"<p>Generated: {datetime.now().isoformat(timespec='seconds')}</p>"
+        f"<p>Regards,<br>ClickUp MCP API</p>"
+    )
+
+    payload: dict = {
+        "sender": {"name": from_name, "email": email_from},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_body,
+    }
+
+    pdf_bytes = _markdown_to_pdf_bytes(report_content, report_title)
+    if pdf_bytes:
+        payload["attachment"] = [
+            {
+                "name": f"{report_title}.pdf",
+                "content": _b64.b64encode(pdf_bytes).decode("utf-8"),
+            }
+        ]
+    else:
+        payload["attachment"] = [
+            {
+                "name": f"{report_title}.md",
+                "content": _b64.b64encode(report_content.encode("utf-8")).decode(
+                    "utf-8"
+                ),
+            }
+        ]
+
+    resp = _requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={"api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=45,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Brevo API error {resp.status_code}: {resp.text[:300]}")
+
+
+def _send_report_email(report_path: Path, to_email: str, subject: str) -> None:
+    transport = os.getenv("EMAIL_TRANSPORT", "auto").strip().lower()
+    brevo_key = os.getenv("BREVO_API_KEY", "").strip()
+    use_brevo = transport in {"brevo", "brevo_api"} or (
+        transport == "auto" and bool(brevo_key)
+    )
+
+    print(f"[email] Transport selected: {'brevo_api' if use_brevo else 'smtp'}")
+    if use_brevo:
+        _send_report_via_brevo(report_path, to_email, subject)
+    else:
+        _send_report_via_smtp(report_path, to_email, subject)
 
 
 def _markdown_to_pdf_bytes(markdown_content: str, title: str) -> Optional[bytes]:
@@ -442,14 +532,35 @@ def _markdown_to_pdf_bytes(markdown_content: str, title: str) -> Optional[bytes]
                     table.setStyle(
                         TableStyle(
                             [
-                                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf9")),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f2f57")),
-                                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c8d6ea")),
+                                (
+                                    "BACKGROUND",
+                                    (0, 0),
+                                    (-1, 0),
+                                    colors.HexColor("#dfeaf9"),
+                                ),
+                                (
+                                    "TEXTCOLOR",
+                                    (0, 0),
+                                    (-1, 0),
+                                    colors.HexColor("#0f2f57"),
+                                ),
+                                (
+                                    "GRID",
+                                    (0, 0),
+                                    (-1, -1),
+                                    0.5,
+                                    colors.HexColor("#c8d6ea"),
+                                ),
                                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                                 ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
                                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7faff")]),
+                                (
+                                    "ROWBACKGROUNDS",
+                                    (0, 1),
+                                    (-1, -1),
+                                    [colors.white, colors.HexColor("#f7faff")],
+                                ),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                                 ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -494,7 +605,6 @@ async def _connect_client(reuse_existing: bool = True) -> tuple[bool, str]:
             return False, str(exc)[:160]
 
 
-@app.on_event("startup")
 async def startup_event():
     _ensure_reports_dir()
 
@@ -513,7 +623,6 @@ async def startup_event():
             print("Initial retries exhausted. Client will retry on first query.")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     global client, client_ready
     if client:
@@ -823,6 +932,9 @@ async def dashboard():
           </div>
           <div class="button-row" style="margin-bottom:10px;">
             <button class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
+            <button class="btn-primary" id="bulkSendBtn" onclick="sendSelectedReports()" disabled>Send Selected (0)</button>
+            <button class="btn-secondary" id="bulkDeleteBtn" onclick="deleteSelectedReports()" disabled>Delete Selected (0)</button>
+            <button class="btn-secondary" id="clearSelectionBtn" onclick="clearReportSelection()" disabled>Clear Selection</button>
             <button class="btn-secondary" onclick="showTab('query')">Back to Query</button>
           </div>
           <div class="reports-wrap">
@@ -846,6 +958,7 @@ async def dashboard():
     let backendWasOffline = false;
     let heartbeatTimer = null;
     let reportsData = [];
+    let selectedReports = new Set();
     let reportsPage = 1;
     const REPORTS_PAGE_SIZE = 15;
     const HEARTBEAT_ONLINE_MS = 10000;
@@ -903,6 +1016,9 @@ async def dashboard():
       const prevBtn = document.getElementById('prevPageBtn');
       const nextBtn = document.getElementById('nextPageBtn');
 
+      syncSelectionWithData();
+      updateSelectionUI();
+
       if (!reportsData.length) {
         container.innerHTML = '<div class="reports-empty">No reports found.</div>';
         pager.style.display = 'none';
@@ -913,20 +1029,26 @@ async def dashboard():
       reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
       const start = (reportsPage - 1) * REPORTS_PAGE_SIZE;
       const pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
+      const allPageSelected = pageRows.length > 0 && pageRows.every((r) => selectedReports.has(r.name || ''));
 
       const rows = pageRows.map((r) => {
-        const name = escapeHtml(r.name || '');
+        const rawName = r.name || '';
+        const name = escapeHtml(rawName);
+        const encodedName = encodeURIComponent(rawName);
+        const isSelected = selectedReports.has(rawName);
         const modified = escapeHtml(r.modified || '');
         const size = formatBytes(r.size_bytes || 0);
         return `
           <tr>
-            <td><a href="/reports/${name}" target="_blank">${name}</a></td>
+            <td><input type="checkbox" class="report-select" data-report="${encodedName}" ${isSelected ? 'checked' : ''} /></td>
+            <td><a href="/reports/${encodedName}" target="_blank">${name}</a></td>
             <td>${modified}</td>
             <td>${size}</td>
             <td>
               <div class="actions">
-                <a class="btn-secondary btn-small" href="/reports/${name}" target="_blank">Open</a>
-                <button class="btn-primary btn-small send-btn" data-report="${name}">Send</button>
+                <a class="btn-secondary btn-small" href="/reports/${encodedName}" target="_blank">Open</a>
+                <button class="btn-primary btn-small send-btn" data-report="${encodedName}">Send</button>
+                <button class="btn-secondary btn-small delete-btn" data-report="${encodedName}">Delete</button>
               </div>
             </td>
           </tr>
@@ -936,7 +1058,7 @@ async def dashboard():
       container.innerHTML = `
         <table class="reports-table">
           <thead>
-            <tr><th>Report</th><th>Modified</th><th>Size</th><th>Actions</th></tr>
+            <tr><th><input type="checkbox" id="selectAllOnPage" ${allPageSelected ? 'checked' : ''} /></th><th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
@@ -947,9 +1069,69 @@ async def dashboard():
       prevBtn.disabled = reportsPage <= 1;
       nextBtn.disabled = reportsPage >= totalPages;
 
-      document.querySelectorAll('.send-btn').forEach((btn) => {
-        btn.addEventListener('click', () => sendReportByEmail(btn.dataset.report, btn));
+      const selectAll = document.getElementById('selectAllOnPage');
+      if (selectAll) {
+        selectAll.addEventListener('change', () => {
+          const checked = selectAll.checked;
+          pageRows.forEach((r) => {
+            const reportName = r.name || '';
+            if (!reportName) return;
+            if (checked) {
+              selectedReports.add(reportName);
+            } else {
+              selectedReports.delete(reportName);
+            }
+          });
+          renderReports();
+        });
+      }
+
+      document.querySelectorAll('.report-select').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const reportName = decodeURIComponent(cb.dataset.report || '');
+          if (!reportName) return;
+          if (cb.checked) {
+            selectedReports.add(reportName);
+          } else {
+            selectedReports.delete(reportName);
+          }
+          updateSelectionUI();
+          const allChecked = Array.from(document.querySelectorAll('.report-select')).every((item) => item.checked);
+          if (selectAll) {
+            selectAll.checked = allChecked;
+          }
+        });
       });
+
+      document.querySelectorAll('.send-btn').forEach((btn) => {
+        btn.addEventListener('click', () => sendReportByEmail(decodeURIComponent(btn.dataset.report || ''), btn));
+      });
+
+      document.querySelectorAll('.delete-btn').forEach((btn) => {
+        btn.addEventListener('click', () => deleteReport(decodeURIComponent(btn.dataset.report || ''), btn));
+      });
+    }
+
+    function syncSelectionWithData() {
+      const available = new Set(reportsData.map((r) => r.name || ''));
+      selectedReports = new Set(Array.from(selectedReports).filter((name) => available.has(name)));
+    }
+
+    function updateSelectionUI() {
+      const count = selectedReports.size;
+      const sendBtn = document.getElementById('bulkSendBtn');
+      const deleteBtn = document.getElementById('bulkDeleteBtn');
+      const clearBtn = document.getElementById('clearSelectionBtn');
+      sendBtn.textContent = `Send Selected (${count})`;
+      deleteBtn.textContent = `Delete Selected (${count})`;
+      sendBtn.disabled = count === 0;
+      deleteBtn.disabled = count === 0;
+      clearBtn.disabled = count === 0;
+    }
+
+    function clearReportSelection() {
+      selectedReports.clear();
+      renderReports();
     }
 
     async function refreshReports() {
@@ -959,18 +1141,22 @@ async def dashboard():
         const response = await fetch('/reports?limit=500', { cache: 'no-store' });
         const data = await response.json();
         reportsData = Array.isArray(data.reports) ? data.reports : [];
+        syncSelectionWithData();
         renderReports();
       } catch (err) {
         container.innerHTML = '<div class="reports-empty">Unable to load reports list.</div>';
       }
     }
 
-    async function sendReportByEmail(reportName, btn) {
+    async function sendReportByEmail(reportName, btn, options = {}) {
+      const showPerReportToast = options.showPerReportToast !== false;
       if (!reportName) return;
       const toEmail = (document.getElementById('recipientEmail').value || '').trim();
       const subject = (document.getElementById('emailSubject').value || '').trim();
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+      }
       try {
         const response = await fetch('/reports/send', {
           method: 'POST',
@@ -983,15 +1169,131 @@ async def dashboard():
         });
         const data = await response.json();
         if (data.status === 'success') {
-          showToast(`Sent ${reportName} to ${data.to_email}`, true);
+          if (showPerReportToast) {
+            showToast(`Sent ${reportName} to ${data.to_email}`, true);
+          }
+          return { ok: true, reportName };
         } else {
-          showToast(`Send failed: ${data.error || 'unknown error'}`, false);
+          if (showPerReportToast) {
+            showToast(`Send failed: ${data.error || 'unknown error'}`, false);
+          }
+          return { ok: false, reportName, error: data.error || 'unknown error' };
         }
       } catch (err) {
-        showToast(`Send failed: ${err.message}`, false);
+        if (showPerReportToast) {
+          showToast(`Send failed: ${err.message}`, false);
+        }
+        return { ok: false, reportName, error: err.message };
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send';
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Send';
+        }
+      }
+    }
+
+    async function sendSelectedReports() {
+      const selected = Array.from(selectedReports);
+      if (!selected.length) {
+        showToast('Select at least one report to send.', false);
+        return;
+      }
+
+      const bulkBtn = document.getElementById('bulkSendBtn');
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Sending...';
+
+      let successCount = 0;
+      const failures = [];
+      for (const reportName of selected) {
+        const result = await sendReportByEmail(reportName, null, { showPerReportToast: false });
+        if (result && result.ok) {
+          successCount += 1;
+        } else {
+          failures.push(reportName);
+        }
+      }
+
+      updateSelectionUI();
+      if (!failures.length) {
+        showToast(`Sent ${successCount} report(s).`, true);
+      } else {
+        showToast(`Sent ${successCount}, failed ${failures.length}.`, false);
+      }
+    }
+
+    async function deleteReport(reportName, btn, skipConfirm = false) {
+      if (!reportName) return { ok: false, error: 'Invalid report name' };
+      if (!skipConfirm) {
+        const approved = window.confirm(`Delete report \"${reportName}\"? This cannot be undone.`);
+        if (!approved) return { ok: false, cancelled: true };
+      }
+
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+      }
+
+      try {
+        const response = await fetch(`/reports/${encodeURIComponent(reportName)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        if (response.ok && data.status === 'success') {
+          selectedReports.delete(reportName);
+          if (!skipConfirm) {
+            showToast(`Deleted ${reportName}`, true);
+            await refreshReports();
+          }
+          return { ok: true };
+        }
+        if (!skipConfirm) {
+          showToast(`Delete failed: ${data.detail || data.error || 'unknown error'}`, false);
+        }
+        return { ok: false, error: data.detail || data.error || 'unknown error' };
+      } catch (err) {
+        if (!skipConfirm) {
+          showToast(`Delete failed: ${err.message}`, false);
+        }
+        return { ok: false, error: err.message };
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Delete';
+        }
+      }
+    }
+
+    async function deleteSelectedReports() {
+      const selected = Array.from(selectedReports);
+      if (!selected.length) {
+        showToast('Select at least one report to delete.', false);
+        return;
+      }
+
+      const approved = window.confirm(`Delete ${selected.length} selected report(s)? This cannot be undone.`);
+      if (!approved) return;
+
+      const bulkBtn = document.getElementById('bulkDeleteBtn');
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Deleting...';
+
+      let successCount = 0;
+      const failures = [];
+      for (const reportName of selected) {
+        const result = await deleteReport(reportName, null, true);
+        if (result && result.ok) {
+          successCount += 1;
+        } else if (!result || !result.cancelled) {
+          failures.push(reportName);
+        }
+      }
+
+      await refreshReports();
+      if (!failures.length) {
+        showToast(`Deleted ${successCount} report(s).`, true);
+      } else {
+        showToast(`Deleted ${successCount}, failed ${failures.length}.`, false);
       }
     }
 
@@ -1146,6 +1448,7 @@ async def dashboard():
 </html>
     """
 
+
 @app.post("/query", response_model=QueryResponse)
 async def query_ai(req: QueryRequest):
     global client, client_ready
@@ -1187,22 +1490,28 @@ async def query_ai(req: QueryRequest):
         client.conversation = []
 
     before_saved = client.stats.reports_saved
+    before_in = client.stats.total_input_tokens
+    before_out = client.stats.total_output_tokens
     async with query_lock:
         try:
             answer = await client.chat(req.question)
             after_saved = client.stats.reports_saved
             latest = _latest_report_path()
             report_saved = after_saved > before_saved and latest is not None
-            report_file = latest.name if latest else None
-            report_url = f"/reports/{latest.name}" if latest else None
+            report_file = latest.name if report_saved and latest else None
+            report_url = f"/reports/{latest.name}" if report_saved and latest else None
+            query_in = max(0, client.stats.total_input_tokens - before_in)
+            query_out = max(0, client.stats.total_output_tokens - before_out)
 
             return QueryResponse(
                 status="success",
                 question=req.question,
                 response=answer,
                 tokens_used={
-                    "input": client.stats.total_input_tokens,
-                    "output": client.stats.total_output_tokens,
+                    "input": query_in,
+                    "output": query_out,
+                    "session_input": client.stats.total_input_tokens,
+                    "session_output": client.stats.total_output_tokens,
                 },
                 report_saved=report_saved,
                 report_file=report_file,
@@ -1249,16 +1558,18 @@ async def generate_space_report(req: SpaceReportRequest):
         )
 
     started = asyncio.get_running_loop().time()
-    use_isolated_client = (
-        os.getenv("REPORT_DIRECT_ISOLATED_CLIENT", "true").strip().lower()
-        not in {"0", "false", "no"}
-    )
+    use_isolated_client = os.getenv(
+        "REPORT_DIRECT_ISOLATED_CLIENT", "true"
+    ).strip().lower() not in {"0", "false", "no"}
 
     async def _run_with_client(active_client) -> Optional[str]:
         return await active_client.generate_space_report_direct(
             space_name=req.space_name,
             period_type=req.period_type,
             include_archived=req.include_archived,
+            schedule_label=req.schedule_label,
+            custom_start=req.custom_start,
+            custom_end=req.custom_end,
         )
 
     try:
@@ -1386,7 +1697,7 @@ async def send_report_to_email(req: SendReportEmailRequest):
     default_title = Path(report_name).stem
     subject = (req.subject or f"ClickUp Report - {default_title}").strip()
     try:
-        await asyncio.to_thread(_send_report_via_smtp, report_path, to_email, subject)
+        await asyncio.to_thread(_send_report_email, report_path, to_email, subject)
         return SendReportEmailResponse(
             status="success",
             report_name=report_name,
@@ -1401,6 +1712,27 @@ async def send_report_to_email(req: SendReportEmailRequest):
             subject=subject,
             error=str(exc)[:220],
         )
+
+
+@app.delete("/reports/{report_name}")
+async def delete_report(report_name: str):
+    if "/" in report_name or "\\" in report_name or ".." in report_name:
+        raise HTTPException(status_code=400, detail="Invalid report name.")
+    if not report_name.endswith(".md"):
+        raise HTTPException(
+            status_code=400, detail="Only .md report files are supported."
+        )
+
+    report_path = REPORTS_DIR / report_name
+    if not report_path.exists() or not report_path.is_file():
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    try:
+        report_path.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete report: {exc}")
+
+    return {"status": "success", "report_name": report_name}
 
 
 @app.post("/render/pdf")
@@ -1454,5 +1786,3 @@ if __name__ == "__main__":
     print("=" * 70)
 
     uvicorn.run(app, host="0.0.0.0", port=8003, log_level="info")
-
-

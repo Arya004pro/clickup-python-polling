@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-mcp-server
     restart: unless-stopped
     ports:
@@ -27,6 +29,7 @@ services:
       - ./app:/app/app
       - ./monitoring_config.json:/app/monitoring_config.json
       - ./project_map.json:/app/project_map.json
+      - ./report_spaces_config.json:/app/report_spaces_config.json
       - reports:/app/reports
     networks:
       - clickup-net
@@ -64,6 +67,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-api-server
     restart: unless-stopped
     ports:
@@ -84,9 +89,10 @@ services:
       # For /report/space direct mode, use isolated clients to allow safe parallel jobs.
       - REPORT_DIRECT_ISOLATED_CLIENT=${REPORT_DIRECT_ISOLATED_CLIENT:-true}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
+      - DATABASE_URL=${DATABASE_URL:-}
       # SMTP for dashboard action: POST /reports/send
-      - SMTP_EMAIL=${SMTP_EMAIL}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_EMAIL=${SMTP_EMAIL:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_TO=${SMTP_TO:-}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -96,6 +102,7 @@ services:
       - ./openrouter_client.py:/app/openrouter_client.py
       - ./openrouter_system_prompt.md:/app/openrouter_system_prompt.md
       - ./lm_studio_system_prompt.md:/app/lm_studio_system_prompt.md
+      - ./reports_supabase.py:/app/reports_supabase.py
       - ./clickup_mcp:/app/clickup_mcp
       - ./app:/app/app
       - reports:/app/reports
@@ -135,6 +142,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./.env
     container_name: clickup-ai-client
     restart: unless-stopped
     stdin_open: true
@@ -188,6 +197,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.motia
+    env_file:
+      - ./.env
     container_name: clickup-motia-reports
     restart: unless-stopped
     ports:
@@ -197,8 +208,8 @@ services:
       - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-3301011}
-      - SMTP_EMAIL=${SMTP_EMAIL}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_EMAIL=${SMTP_EMAIL:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -215,6 +226,7 @@ services:
     volumes:
       - ./clickup-motia-reports/steps:/app/steps
       - ./monitoring_config.json:/app/monitoring_config.json:ro
+      - ./report_spaces_config.json:/app/report_spaces_config.json:ro
       - motia-data:/app/data
     networks:
       - clickup-net

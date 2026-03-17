@@ -21,6 +21,7 @@ venv/
 .jobs_cache.json
 project_map.json
 monitoring_config.json
+report_spaces_config.json
 node_modules/
 .pytest_cache/
 .coverage
