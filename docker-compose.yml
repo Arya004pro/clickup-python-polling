@@ -91,8 +91,8 @@ services:
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - DATABASE_URL=${DATABASE_URL:-}
       # SMTP for dashboard action: POST /reports/send
-      - SMTP_EMAIL=${SMTP_EMAIL}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_EMAIL=${SMTP_EMAIL:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_TO=${SMTP_TO:-}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -208,8 +208,8 @@ services:
       - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-3301011}
-      - SMTP_EMAIL=${SMTP_EMAIL}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_EMAIL=${SMTP_EMAIL:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
