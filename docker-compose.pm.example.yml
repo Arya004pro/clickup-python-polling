@@ -1,19 +1,39 @@
 # ============================================================
 # ClickUp MCP — PROJECT MANAGER COMPOSE FILE (EXAMPLE)
 # ============================================================
-# This is the TEMPLATE file. The real file (docker-compose.pm.yml)
-# is gitignored because it contains real API keys.
+# Real file name: docker-compose.pm.yml (gitignored)
+#
+# This setup uses:
+# - public app images (mcp/api + motia)
+# - private config image (contains mapping JSON files)
 #
 # To use:
-#   1. Copy this file → docker-compose.pm.yml
-#   2. Fill in all FILL_YOUR_..._HERE values
-#   3. Run: docker compose -f docker-compose.pm.yml up
+#   1) Copy this file -> docker-compose.pm.yml
+#   2) Fill in all FILL_... values
+#   3) docker login (required to pull private config image)
+#   4) docker compose -f docker-compose.pm.yml up
 # ============================================================
 
 services:
+  pm-config-seed:
+    image: ${PM_CONFIG_IMAGE:-arya004/clickup-config-private:latest}
+    container_name: clickup-pm-config-seed
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /pm-config
+        cp -f /seed/monitoring_config.json /pm-config/monitoring_config.json
+        cp -f /seed/project_map.json /pm-config/project_map.json
+        cp -f /seed/report_spaces_config.json /pm-config/report_spaces_config.json
+        echo "private config copied"
+    volumes:
+      - pm-config:/pm-config
 
   mcp-server:
-    image: arya004/clickup-mcp-pm:latest
+    image: ${PM_APP_IMAGE:-arya004/clickup-mcp-pm:latest}
     container_name: clickup-mcp-server
     restart: unless-stopped
     ports:
@@ -22,26 +42,34 @@ services:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=FILL_YOUR_CLICKUP_TOKEN_HERE
-      - MCP_SERVER_URL=http://mcp-server:8001/sse
       - CLICKUP_TEAM_ID=FILL_YOUR_TEAM_ID_HERE
+      - MCP_SERVER_URL=http://mcp-server:8001/sse
       - REPORTS_DIR=/app/reports
     volumes:
       - reports:/app/reports
+      - pm-config:/pm-config:ro
     networks:
       - clickup-net
+    depends_on:
+      pm-config-seed:
+        condition: service_completed_successfully
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8001/health || exit 1" ]
+      test: ["CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8001/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
     command:
-      - python
-      - -m
-      - clickup_mcp.server
+      - sh
+      - -c
+      - |
+        cp -f /pm-config/monitoring_config.json /app/monitoring_config.json
+        cp -f /pm-config/project_map.json /app/project_map.json
+        cp -f /pm-config/report_spaces_config.json /app/report_spaces_config.json
+        python -m clickup_mcp.server
 
   api-server:
-    image: arya004/clickup-mcp-pm:latest
+    image: ${PM_APP_IMAGE:-arya004/clickup-mcp-pm:latest}
     container_name: clickup-api-server
     restart: unless-stopped
     ports:
@@ -55,9 +83,13 @@ services:
       - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
       - OPENROUTER_MODEL=qwen/qwen-2.5-7b-instruct
       - OPENROUTER_MODEL_CHAIN=
-      - SMTP_EMAIL=FILL_YOUR_GMAIL_HERE
-      - SMTP_PASSWORD=FILL_YOUR_GMAIL_APP_PASSWORD_HERE
-      - SMTP_TO=FILL_RECIPIENT_EMAIL_HERE
+      - EMAIL_TRANSPORT=brevo_api
+      - BREVO_API_KEY=FILL_YOUR_BREVO_API_KEY_HERE
+      - EMAIL_FROM=reports@yourdomain.com
+      - EMAIL_FROM_NAME=Arya
+      - SMTP_TO=FILL_TESTER_RECIPIENT_EMAIL_HERE
+      - SMTP_EMAIL=
+      - SMTP_PASSWORD=
       - SMTP_HOST=smtp.gmail.com
       - SMTP_PORT=587
       - REPORTS_DIR=/app/reports
@@ -69,7 +101,7 @@ services:
       mcp-server:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8003/ || exit 1" ]
+      test: ["CMD-SHELL", "curl -sS -m 3 -o /dev/null http://localhost:8003/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -79,7 +111,7 @@ services:
       - api_server.py
 
   motia-reports:
-    image: arya004/clickup-motia:latest
+    image: ${PM_MOTIA_IMAGE:-arya004/clickup-motia:latest}
     container_name: clickup-motia-reports
     restart: unless-stopped
     ports:
@@ -89,27 +121,44 @@ services:
       - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=FILL_YOUR_CLICKUP_TOKEN_HERE
       - CLICKUP_TEAM_ID=FILL_YOUR_TEAM_ID_HERE
-      - SMTP_EMAIL=FILL_YOUR_GMAIL_HERE
-      - SMTP_PASSWORD=FILL_YOUR_GMAIL_APP_PASSWORD_HERE
-      - SMTP_TO=FILL_RECIPIENT_EMAIL_HERE
+      - EMAIL_TRANSPORT=brevo_api
+      - BREVO_API_KEY=FILL_YOUR_BREVO_API_KEY_HERE
+      - EMAIL_FROM=reports@yourdomain.com
+      - EMAIL_FROM_NAME=Arya
+      - SMTP_TO=FILL_TESTER_RECIPIENT_EMAIL_HERE
+      - SMTP_EMAIL=
+      - SMTP_PASSWORD=
       - SMTP_HOST=smtp.gmail.com
       - SMTP_PORT=587
       - API_SERVER_URL=http://api-server:8003
       - REPORT_CONCURRENCY=2
-      - REPORT_API_MODE=direct
+      - REPORT_API_MODE=llm
+      - SUPPORT_CRONS_ENABLED=false
       - RUST_LOG=warn
     volumes:
       - motia-data:/app/data
+      - pm-config:/pm-config:ro
     networks:
       - clickup-net
     depends_on:
       api-server:
         condition: service_healthy
+      pm-config-seed:
+        condition: service_completed_successfully
+    command:
+      - sh
+      - -c
+      - |
+        cp -f /pm-config/monitoring_config.json /app/monitoring_config.json
+        cp -f /pm-config/report_spaces_config.json /app/report_spaces_config.json
+        iii-cli start -c iii-config.yaml
 
 volumes:
   reports:
     driver: local
   motia-data:
+    driver: local
+  pm-config:
     driver: local
 
 networks:

@@ -36,3 +36,4 @@ project_map.example.json
 .dockerignore
 Dockerfile
 docker-compose.yml
+DEPLOYMENT_GUIDE.md

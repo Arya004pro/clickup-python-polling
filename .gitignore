@@ -1,6 +1,7 @@
 myenv/
 venv/
 .env
+.env.pm
 __pycache__/
 *.pyc
 .DS_Store
@@ -8,6 +9,7 @@ project_map.json
 monitoring_config.json
 .jobs_cache.json
 report_spaces_config.json
+DEPLOYMENT_GUIDE.md
 
 # PM deployment file - contains real API keys hardcoded, never commit
 docker-compose.pm.yml

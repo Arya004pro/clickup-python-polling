@@ -90,6 +90,11 @@ services:
       - REPORT_DIRECT_ISOLATED_CLIENT=${REPORT_DIRECT_ISOLATED_CLIENT:-true}
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - DATABASE_URL=${DATABASE_URL:-}
+      # Email transport (Brevo API preferred, SMTP fallback)
+      - EMAIL_TRANSPORT=${EMAIL_TRANSPORT:-auto}
+      - BREVO_API_KEY=${BREVO_API_KEY:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Arya}
       # SMTP for dashboard action: POST /reports/send
       - SMTP_EMAIL=${SMTP_EMAIL:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
@@ -208,6 +213,11 @@ services:
       - TZ=Asia/Kolkata
       - CLICKUP_API_TOKEN=${CLICKUP_API_TOKEN}
       - CLICKUP_TEAM_ID=${CLICKUP_TEAM_ID:-3301011}
+      # Email transport (Brevo API preferred, SMTP fallback)
+      - EMAIL_TRANSPORT=${EMAIL_TRANSPORT:-auto}
+      - BREVO_API_KEY=${BREVO_API_KEY:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Arya}
       - SMTP_EMAIL=${SMTP_EMAIL:-}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_TO=${SMTP_TO:-aryapatel.eng@gmail.com}
