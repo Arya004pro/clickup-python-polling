@@ -923,10 +923,17 @@ async def dashboard():
           <div class="reports-wrap">
             <div id="reportsContainer" class="reports-empty">Loading reports...</div>
             <div class="pager" id="reportsPager" style="display:none;">
-              <div id="reportsPageInfo">Page 1</div>
-              <div class="button-row">
-                <button type="button" class="btn-secondary btn-small" id="prevPageBtn">Previous</button>
-                <button type="button" class="btn-secondary btn-small" id="nextPageBtn">Next</button>
+              <div id="reportsPageInfo" style="font-size:12px;color:#475569;"></div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="btn-secondary btn-small" id="firstPageBtn" title="First page">&#171; First</button>
+                <button type="button" class="btn-secondary btn-small" id="prevPageBtn">&#8249; Prev</button>
+                <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:#374151;">
+                  <span>Page</span>
+                  <input type="number" id="pageJumpInput" min="1" style="width:52px;padding:4px 6px;border:1px solid #c6d2ea;border-radius:6px;font-size:12px;text-align:center;" />
+                  <span id="pageTotalLabel">of 1</span>
+                </div>
+                <button type="button" class="btn-secondary btn-small" id="nextPageBtn">Next &#8250;</button>
+                <button type="button" class="btn-secondary btn-small" id="lastPageBtn" title="Last page">Last &#187;</button>
               </div>
             </div>
           </div>
@@ -1113,11 +1120,15 @@ async def dashboard():
     }
 
     function renderReports() {
-      var container = document.getElementById('reportsContainer');
-      var pager     = document.getElementById('reportsPager');
-      var pageInfo  = document.getElementById('reportsPageInfo');
-      var prevBtn   = document.getElementById('prevPageBtn');
-      var nextBtn   = document.getElementById('nextPageBtn');
+      var container    = document.getElementById('reportsContainer');
+      var pager        = document.getElementById('reportsPager');
+      var pageInfo     = document.getElementById('reportsPageInfo');
+      var prevBtn      = document.getElementById('prevPageBtn');
+      var nextBtn      = document.getElementById('nextPageBtn');
+      var firstBtn     = document.getElementById('firstPageBtn');
+      var lastBtn      = document.getElementById('lastPageBtn');
+      var jumpInput    = document.getElementById('pageJumpInput');
+      var totalLabel   = document.getElementById('pageTotalLabel');
       if (!container) return;
 
       syncSelectionWithData();
@@ -1160,10 +1171,34 @@ async def dashboard():
         '<th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table>';
 
-      if (pager)    pager.style.display = 'flex';
-      if (pageInfo) pageInfo.textContent = 'Page ' + reportsPage + ' / ' + totalPages + ' (' + filteredReportsData.length + ' shown)';
-      if (prevBtn)  prevBtn.disabled = reportsPage <= 1;
-      if (nextBtn)  nextBtn.disabled = reportsPage >= totalPages;
+      if (pager)      pager.style.display = 'flex';
+      if (pageInfo)   pageInfo.textContent = filteredReportsData.length + ' report' + (filteredReportsData.length !== 1 ? 's' : '') + ' shown';
+      if (prevBtn)    prevBtn.disabled  = reportsPage <= 1;
+      if (firstBtn)   firstBtn.disabled = reportsPage <= 1;
+      if (nextBtn)    nextBtn.disabled  = reportsPage >= totalPages;
+      if (lastBtn)    lastBtn.disabled  = reportsPage >= totalPages;
+      if (totalLabel) totalLabel.textContent = 'of ' + totalPages;
+      if (jumpInput) {
+        jumpInput.max   = totalPages;
+        jumpInput.value = reportsPage;
+        jumpInput.onchange = null;
+        jumpInput.oninput  = null;
+        jumpInput.onkeydown = function(e) {
+          if (e.key === 'Enter') {
+            var v = parseInt(jumpInput.value, 10);
+            if (!isNaN(v)) { reportsPage = Math.max(1, Math.min(v, totalPages)); renderReports(); }
+          }
+        };
+        jumpInput.onblur = function() {
+          var v = parseInt(jumpInput.value, 10);
+          if (!isNaN(v)) { reportsPage = Math.max(1, Math.min(v, totalPages)); renderReports(); }
+        };
+      }
+
+      if (firstBtn) firstBtn.onclick = function() { reportsPage = 1; renderReports(); };
+      if (lastBtn)  lastBtn.onclick  = function() { reportsPage = totalPages; renderReports(); };
+      if (prevBtn)  prevBtn.onclick  = function() { if (reportsPage > 1) { reportsPage--; renderReports(); } };
+      if (nextBtn)  nextBtn.onclick  = function() { if (reportsPage < totalPages) { reportsPage++; renderReports(); } };
 
       var selectAll = document.getElementById('selectAllOnPage');
       if (selectAll) {
