@@ -875,6 +875,101 @@ async def dashboard():
       .response-header { flex-direction: column; align-items: flex-start; }
       .pager { flex-direction: column; align-items: flex-start; gap: 8px; }
     }
+    .compare-selectors {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .compare-selectors select {
+      width: 100%;
+      border: 1px solid #c6d2ea;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #fff;
+      color: #1f2937;
+    }
+    .compare-selectors select:focus {
+      outline: none;
+      border-color: #4d73b9;
+      box-shadow: 0 0 0 2px rgba(77,115,185,0.12);
+    }
+    .diff-summary-bar {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      background: #f0f4ff;
+      border: 1px solid #d0dcf5;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .diff-summary-bar .stat { font-weight: 700; }
+    .diff-summary-bar .stat.added { color: #1a7f3c; }
+    .diff-summary-bar .stat.removed { color: #b62424; }
+    .diff-summary-bar .stat.unchanged { color: #4a5568; }
+    .diff-view {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      max-height: 68vh;
+      overflow: auto;
+    }
+    .diff-pane {
+      border: 1px solid #d7e1f5;
+      border-radius: 8px;
+      overflow: auto;
+      background: #fff;
+    }
+    .diff-pane-header {
+      background: #edf2ff;
+      border-bottom: 1px solid #d7e1f5;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #1d3b66;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .diff-lines { font-family: monospace; font-size: 12px; line-height: 1.7; }
+    .diff-line {
+      display: flex;
+      padding: 0 10px;
+      min-height: 22px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .diff-line.added   { background: #d6f5e3; color: #1a5c30; }
+    .diff-line.removed { background: #fde8e8; color: #8b1a1a; }
+    .diff-line.unchanged { color: #374151; }
+    .diff-line .ln {
+      min-width: 32px;
+      color: #9ca3af;
+      user-select: none;
+      padding-right: 10px;
+      text-align: right;
+    }
+    .diff-line .marker {
+      min-width: 16px;
+      font-weight: 700;
+      padding-right: 6px;
+    }
+    .diff-line.added .marker   { color: #1a7f3c; }
+    .diff-line.removed .marker { color: #b62424; }
+    .diff-empty {
+      padding: 24px;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 13px;
+    }
+    @media (max-width: 980px) {
+      .compare-selectors { grid-template-columns: 1fr; }
+      .diff-view { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -887,6 +982,7 @@ async def dashboard():
     <div class="tabs">
       <button class="tab-btn active" id="tabQueryBtn" onclick="showTab('query')">Query</button>
       <button class="tab-btn" id="tabReportsBtn" onclick="showTab('reports')">Reports</button>
+      <button class="tab-btn" id="tabCompareBtn" onclick="showTab('compare')">Compare</button>
     </div>
     <div class="content">
       <section class="page active" id="pageQuery">
@@ -950,6 +1046,42 @@ async def dashboard():
           <div class="toast" id="mailToast"></div>
         </div>
       </section>
+
+      <section class="page" id="pageCompare">
+        <div class="card">
+          <div class="compare-selectors">
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="compareSelectA">Report A (older / baseline)</label>
+              <select id="compareSelectA">
+                <option value="">— select a report —</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label for="compareSelectB">Report B (newer / changed)</label>
+              <select id="compareSelectB">
+                <option value="">— select a report —</option>
+              </select>
+            </div>
+          </div>
+          <div class="button-row" style="margin-bottom:14px;">
+            <button class="btn-primary" onclick="runDiff()">Compare Reports</button>
+            <button class="btn-secondary" onclick="clearDiff()">Clear</button>
+            <button class="btn-secondary" onclick="showTab('reports')">Back to Reports</button>
+          </div>
+          <div id="diffSummaryBar" class="diff-summary-bar" style="display:none;"></div>
+          <div id="diffView" class="diff-view" style="display:none;">
+            <div class="diff-pane">
+              <div class="diff-pane-header" id="diffHeaderA">Report A</div>
+              <div class="diff-lines" id="diffLinesA"></div>
+            </div>
+            <div class="diff-pane">
+              <div class="diff-pane-header" id="diffHeaderB">Report B</div>
+              <div class="diff-lines" id="diffLinesB"></div>
+            </div>
+          </div>
+          <div id="diffEmpty" class="diff-empty">Select two reports above and click <strong>Compare Reports</strong>.</div>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -966,12 +1098,14 @@ async def dashboard():
     const HEARTBEAT_HIDDEN_MS = 30000;
 
     function showTab(tab) {
-      const isQuery = tab === 'query';
-      document.getElementById('pageQuery').classList.toggle('active', isQuery);
-      document.getElementById('pageReports').classList.toggle('active', !isQuery);
-      document.getElementById('tabQueryBtn').classList.toggle('active', isQuery);
-      document.getElementById('tabReportsBtn').classList.toggle('active', !isQuery);
-      if (!isQuery) refreshReports();
+      ['query','reports','compare'].forEach(t => {
+        document.getElementById('page' + t.charAt(0).toUpperCase() + t.slice(1))
+          .classList.toggle('active', t === tab);
+        const btn = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
+        if (btn) btn.classList.toggle('active', t === tab);
+      });
+      if (tab === 'reports') refreshReports();
+      if (tab === 'compare') loadCompareDropdowns();
     }
 
     function escapeHtml(text) {
@@ -1443,6 +1577,198 @@ async def dashboard():
 
     refreshReports();
     heartbeatCheck();
+    async function loadCompareDropdowns() {
+      let reports = [];
+      try {
+        const res = await fetch('/reports?limit=500', { cache: 'no-store' });
+        const data = await res.json();
+        reports = Array.isArray(data.reports) ? data.reports : [];
+      } catch(e) {
+        return;
+      }
+      const selA = document.getElementById('compareSelectA');
+      const selB = document.getElementById('compareSelectB');
+      const prevA = selA.value;
+      const prevB = selB.value;
+      selA.innerHTML = '<option value="">— select a report —</option>';
+      selB.innerHTML = '<option value="">— select a report —</option>';
+      reports.forEach(r => {
+        const name = r.name || '';
+        if (!name) return;
+        const label = name.replace(/\.md$/, '');
+        selA.innerHTML += `<option value="${encodeURIComponent(name)}">${escapeHtml(label)}</option>`;
+        selB.innerHTML += `<option value="${encodeURIComponent(name)}">${escapeHtml(label)}</option>`;
+      });
+      if (prevA) selA.value = prevA;
+      if (prevB) selB.value = prevB;
+    }
+
+    async function runDiff() {
+      const selA = document.getElementById('compareSelectA');
+      const selB = document.getElementById('compareSelectB');
+      const nameA = decodeURIComponent(selA.value || '');
+      const nameB = decodeURIComponent(selB.value || '');
+      const emptyEl = document.getElementById('diffEmpty');
+      const viewEl = document.getElementById('diffView');
+      const summaryEl = document.getElementById('diffSummaryBar');
+
+      if (!nameA || !nameB) {
+        emptyEl.textContent = 'Please select both reports before comparing.';
+        emptyEl.style.display = 'block';
+        viewEl.style.display = 'none';
+        summaryEl.style.display = 'none';
+        return;
+      }
+      if (nameA === nameB) {
+        emptyEl.textContent = 'Both dropdowns point to the same report. Pick two different ones.';
+        emptyEl.style.display = 'block';
+        viewEl.style.display = 'none';
+        summaryEl.style.display = 'none';
+        return;
+      }
+
+      emptyEl.textContent = 'Loading reports…';
+      emptyEl.style.display = 'block';
+      viewEl.style.display = 'none';
+      summaryEl.style.display = 'none';
+
+      let textA = '', textB = '';
+      try {
+        const [rA, rB] = await Promise.all([
+          fetch(`/reports/${encodeURIComponent(nameA)}`),
+          fetch(`/reports/${encodeURIComponent(nameB)}`)
+        ]);
+        textA = await rA.text();
+        textB = await rB.text();
+      } catch(e) {
+        emptyEl.textContent = 'Failed to load one or both reports. Check the console.';
+        return;
+      }
+
+      const linesA = textA.split('\n');
+      const linesB = textB.split('\n');
+
+      // LCS-based diff (Myers-style simplified)
+      const diff = computeDiff(linesA, linesB);
+
+      let addedCount = 0, removedCount = 0, unchangedCount = 0;
+      const aHtml = [], bHtml = [];
+      let aLine = 1, bLine = 1;
+
+      diff.forEach(op => {
+        if (op.type === 'equal') {
+          op.lines.forEach(l => {
+            aHtml.push(diffLineHtml('unchanged', aLine++, ' ', l));
+            bHtml.push(diffLineHtml('unchanged', bLine++, ' ', l));
+            unchangedCount++;
+          });
+        } else if (op.type === 'delete') {
+          op.lines.forEach(l => {
+            aHtml.push(diffLineHtml('removed', aLine++, '-', l));
+            bHtml.push(diffLineHtml('removed', null, ' ', ''));
+            removedCount++;
+          });
+        } else if (op.type === 'insert') {
+          op.lines.forEach(l => {
+            aHtml.push(diffLineHtml('added', null, ' ', ''));
+            bHtml.push(diffLineHtml('added', bLine++, '+', l));
+            addedCount++;
+          });
+        }
+      });
+
+      document.getElementById('diffLinesA').innerHTML = aHtml.join('');
+      document.getElementById('diffLinesB').innerHTML = bHtml.join('');
+      document.getElementById('diffHeaderA').textContent = nameA.replace(/\.md$/, '');
+      document.getElementById('diffHeaderB').textContent = nameB.replace(/\.md$/, '');
+
+      summaryEl.innerHTML = `
+        <span class="stat added">+${addedCount} added</span>
+        <span class="stat removed">-${removedCount} removed</span>
+        <span class="stat unchanged">${unchangedCount} unchanged</span>
+        <span style="color:#6b7280;margin-left:auto;font-size:12px;">Comparing line-by-line • markdown format</span>
+      `;
+
+      emptyEl.style.display = 'none';
+      viewEl.style.display = 'grid';
+      summaryEl.style.display = 'flex';
+    }
+
+    function diffLineHtml(type, lineNum, marker, text) {
+      const ln = lineNum !== null ? lineNum : '';
+      return `<div class="diff-line ${type}"><span class="ln">${ln}</span><span class="marker">${escapeHtml(marker)}</span>${escapeHtml(text)}</div>`;
+    }
+
+    function clearDiff() {
+      document.getElementById('diffLinesA').innerHTML = '';
+      document.getElementById('diffLinesB').innerHTML = '';
+      document.getElementById('diffView').style.display = 'none';
+      document.getElementById('diffSummaryBar').style.display = 'none';
+      document.getElementById('diffEmpty').textContent = 'Select two reports above and click Compare Reports.';
+      document.getElementById('diffEmpty').style.display = 'block';
+      document.getElementById('compareSelectA').value = '';
+      document.getElementById('compareSelectB').value = '';
+    }
+
+    // Simplified patience/LCS diff
+    function computeDiff(a, b) {
+      const ops = [];
+      const memo = {};
+
+      function lcs(i, j) {
+        const key = i + ',' + j;
+        if (key in memo) return memo[key];
+        if (i >= a.length || j >= b.length) return memo[key] = 0;
+        if (a[i] === b[j]) return memo[key] = 1 + lcs(i+1, j+1);
+        return memo[key] = Math.max(lcs(i+1, j), lcs(i, j+1));
+      }
+
+      function build(i, j) {
+        if (i >= a.length && j >= b.length) return;
+        if (i < a.length && j < b.length && a[i] === b[j]) {
+          const last = ops[ops.length - 1];
+          if (last && last.type === 'equal') last.lines.push(a[i]);
+          else ops.push({ type: 'equal', lines: [a[i]] });
+          build(i+1, j+1);
+        } else if (j < b.length && (i >= a.length || lcs(i, j+1) >= lcs(i+1, j))) {
+          const last = ops[ops.length - 1];
+          if (last && last.type === 'insert') last.lines.push(b[j]);
+          else ops.push({ type: 'insert', lines: [b[j]] });
+          build(i, j+1);
+        } else {
+          const last = ops[ops.length - 1];
+          if (last && last.type === 'delete') last.lines.push(a[i]);
+          else ops.push({ type: 'delete', lines: [a[i]] });
+          build(i+1, j);
+        }
+      }
+
+      // For large files cap the LCS to avoid stack overflow - use linear diff
+      if (a.length + b.length > 1500) {
+        return linearDiff(a, b);
+      }
+      build(0, 0);
+      return ops;
+    }
+
+    // O(n) line diff fallback for large files (no LCS, just changed blocks)
+    function linearDiff(a, b) {
+      const ops = [];
+      const maxLen = Math.max(a.length, b.length);
+      for (let i = 0; i < maxLen; i++) {
+        const la = i < a.length ? a[i] : null;
+        const lb = i < b.length ? b[i] : null;
+        if (la === lb) {
+          const last = ops[ops.length - 1];
+          if (last && last.type === 'equal') last.lines.push(la);
+          else ops.push({ type: 'equal', lines: [la] });
+        } else {
+          if (la !== null) ops.push({ type: 'delete', lines: [la] });
+          if (lb !== null) ops.push({ type: 'insert', lines: [lb] });
+        }
+      }
+      return ops;
+    }
   </script>
 </body>
 </html>
