@@ -959,7 +959,7 @@ async def dashboard():
         <div class="card">
 
           <!-- ── Search / filter bar ── -->
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding:10px 12px;background:#f0f4ff;border:1px solid #dce5f5;border-radius:8px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding:10px 12px;border-radius:8px;">
             <div style="flex:2;min-width:180px;">
               <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Search report name</label>
               <input id="reportSearch" type="text" placeholder="e.g. blogmanager, aix…" oninput="applyReportFilters()" style="width:100%;padding:7px 10px;border:1px solid #c6d2ea;border-radius:6px;font-size:13px;" />
@@ -998,13 +998,13 @@ async def dashboard():
           <div class="reports-wrap">
             <div id="reportsContainer" class="reports-empty">Loading reports...</div>
             <div class="pager" id="reportsPager" style="display:none;">
-              <div id="reportsPageInfo" style="font-size:12px;color:#475569;"></div>
+              <div id="reportsPageInfo" style="font-size:12px;"></div>
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                 <button type="button" class="btn-secondary btn-small" id="firstPageBtn" title="First page">&#171; First</button>
                 <button type="button" class="btn-secondary btn-small" id="prevPageBtn">&#8249; Prev</button>
-                <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:#374151;">
+                <div style="display:flex;align-items:center;gap:4px;font-size:12px;">
                   <span>Page</span>
-                  <input type="number" id="pageJumpInput" min="1" style="width:52px;padding:4px 6px;border:1px solid #c6d2ea;border-radius:6px;font-size:12px;text-align:center;" />
+                  <input type="number" id="pageJumpInput" min="1" style="width:52px;padding:4px 6px;border-radius:6px;font-size:12px;text-align:center;" />
                   <span id="pageTotalLabel">of 1</span>
                 </div>
                 <button type="button" class="btn-secondary btn-small" id="nextPageBtn">Next &#8250;</button>
