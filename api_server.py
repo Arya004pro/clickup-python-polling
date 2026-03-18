@@ -638,7 +638,7 @@ async def shutdown_event():
 async def dashboard():
     return """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" id="htmlRoot">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -833,14 +833,89 @@ async def dashboard():
       .compare-selectors { grid-template-columns: 1fr; }
       .diff-view { grid-template-columns: 1fr; }
     }
+    /* ── dark mode toggle button ── */
+    #themeToggle {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: background 0.2s;
+    }
+    #themeToggle:hover { background: rgba(255,255,255,0.25); }
+    .header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; }
+    .header-text { flex: 1; }
+    /* ── dark mode overrides ── */
+    html.dark body {
+      background: linear-gradient(135deg, #0f1923 0%, #1a1a2e 50%, #16213e 100%);
+      color: #d1d5db;
+    }
+    html.dark .container { background: #1e2432; box-shadow: 0 24px 60px rgba(0,0,0,0.6); }
+    html.dark .tabs { background: #161b27; border-bottom-color: #2d3748; }
+    html.dark .tab-btn { background: #252d3d; border-color: #3a4560; color: #a0aec0; }
+    html.dark .tab-btn.active { background: #1e2432; border-bottom-color: #1e2432; color: #e2e8f0; }
+    html.dark .content { background: #1e2432; }
+    html.dark .card { background: #252d3d; border-color: #2d3748; }
+    html.dark label { color: #a0aec0; }
+    html.dark textarea, html.dark input, html.dark select {
+      background: #1a2033; border-color: #3a4560; color: #e2e8f0;
+    }
+    html.dark textarea:focus, html.dark input:focus, html.dark select:focus {
+      border-color: #5b8dd9; box-shadow: 0 0 0 2px rgba(91,141,217,0.18);
+    }
+    html.dark .btn-primary { background: #2a5298; color: #fff; }
+    html.dark .btn-secondary { background: #2d3748; color: #cbd5e0; }
+    html.dark .loader { background: #1a2539; border-color: #2d4070; color: #90b4e8; }
+    html.dark .error { background: #2d1515; color: #fc8181; border-color: #742a2a; }
+    html.dark .response-box { background: #1a2033; border-color: #2d3a55; }
+    html.dark .response-title { color: #90cdf4; }
+    html.dark .response-content { color: #e2e8f0; }
+    html.dark .response-content table { background: #1a2033; }
+    html.dark .response-content th { background: #1e3a6e; color: #e2e8f0; }
+    html.dark .response-content td { border-color: #2d3a55; }
+    html.dark .response-content tr:nth-child(even) td { background: #1f2840; }
+    html.dark .status-line { color: #718096; }
+    html.dark .status-line a { color: #63b3ed; }
+    html.dark .reports-wrap { background: #1a2033; border-color: #2d3748; }
+    html.dark .reports-table th { background: #1f2840; color: #90b4e8; }
+    html.dark .reports-table td { border-color: #2d3748; color: #d1d5db; }
+    html.dark .reports-table thead th { background: #1f2840; }
+    html.dark .reports-table tbody tr:nth-child(even) td { background: #1e2535; }
+    html.dark .reports-table a { color: #63b3ed; }
+    html.dark .pager { background: #1a2033; border-top-color: #2d3748; color: #718096; }
+    html.dark .toast.ok { background: #1a3a2a; color: #68d391; border-color: #2f6b47; }
+    html.dark .toast.err { background: #2d1515; color: #fc8181; border-color: #742a2a; }
+    html.dark .reports-empty { color: #718096; }
+    html.dark .diff-pane { background: #1a2033; border-color: #2d3748; }
+    html.dark .diff-pane-header { background: #1f2840; border-bottom-color: #2d3748; color: #90b4e8; }
+    html.dark .diff-line.added { background: #1a3a2a; color: #68d391; }
+    html.dark .diff-line.removed { background: #2d1515; color: #fc8181; }
+    html.dark .diff-line.unchanged { color: #a0aec0; }
+    html.dark .diff-summary-bar { background: #1f2840; border-color: #2d3a55; }
+    html.dark .diff-empty { color: #718096; }
+    html.dark .compare-selectors label { color: #a0aec0; }
+    html.dark .live-status { background: #1a3a2a; color: #68d391; border-color: #2f6b47; }
+    html.dark .live-status.offline { background: #2d1515; color: #fc8181; border-color: #742a2a; }
   </style>
 </head>
 <body>
   <div class="live-status" id="liveStatus">API Connected</div>
   <div class="container">
     <div class="header">
-      <h1>ClickUp MCP Dashboard</h1>
-      <p>Query ClickUp tools, browse saved reports, and send a selected report to email.</p>
+      <div class="header-text">
+        <h1>ClickUp MCP Dashboard</h1>
+        <p>Query ClickUp tools, browse saved reports, and send a selected report to email.</p>
+      </div>
+      <button id="themeToggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+        <span id="themeIcon">🌙</span> <span id="themeLabel">Dark</span>
+      </button>
     </div>
     <div class="tabs">
       <button type="button" class="tab-btn active" id="tabQueryBtn" onclick="showTab('query')">Query</button>
@@ -1647,7 +1722,26 @@ async def dashboard():
       }
     });
 
+    // ─── dark mode ────────────────────────────────────────────────────────────
+    function initTheme() {
+      var saved = '';
+      try { saved = localStorage.getItem('dashboard-theme') || ''; } catch(e) {}
+      var isDark = saved === 'dark';
+      document.getElementById('htmlRoot').classList.toggle('dark', isDark);
+      document.getElementById('themeIcon').textContent  = isDark ? '☀️' : '🌙';
+      document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+    }
+
+    function toggleTheme() {
+      var root = document.getElementById('htmlRoot');
+      var isDark = root.classList.toggle('dark');
+      try { localStorage.setItem('dashboard-theme', isDark ? 'dark' : 'light'); } catch(e) {}
+      document.getElementById('themeIcon').textContent  = isDark ? '☀️' : '🌙';
+      document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+    }
+
     // kick off
+    initTheme();
     refreshReports();
     heartbeatCheck();
   </script>
