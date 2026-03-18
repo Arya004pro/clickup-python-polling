@@ -882,6 +882,27 @@ async def dashboard():
       <!-- ===== REPORTS TAB ===== -->
       <div id="pageReports" class="page">
         <div class="card">
+
+          <!-- ── Search / filter bar ── -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding:10px 12px;background:#f0f4ff;border:1px solid #dce5f5;border-radius:8px;">
+            <div style="flex:2;min-width:180px;">
+              <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Search report name</label>
+              <input id="reportSearch" type="text" placeholder="e.g. blogmanager, aix…" oninput="applyReportFilters()" style="width:100%;padding:7px 10px;border:1px solid #c6d2ea;border-radius:6px;font-size:13px;" />
+            </div>
+            <div style="flex:1;min-width:130px;">
+              <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">From date</label>
+              <input id="reportDateFrom" type="date" oninput="applyReportFilters()" style="width:100%;padding:7px 10px;border:1px solid #c6d2ea;border-radius:6px;font-size:13px;" />
+            </div>
+            <div style="flex:1;min-width:130px;">
+              <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">To date</label>
+              <input id="reportDateTo" type="date" oninput="applyReportFilters()" style="width:100%;padding:7px 10px;border:1px solid #c6d2ea;border-radius:6px;font-size:13px;" />
+            </div>
+            <div>
+              <button type="button" class="btn-secondary" onclick="clearReportFilters()" style="height:34px;margin-top:18px;">Clear filters</button>
+            </div>
+            <div id="filterResultCount" style="font-size:12px;color:#4a5568;align-self:flex-end;padding-bottom:6px;white-space:nowrap;"></div>
+          </div>
+
           <div class="grid-2">
             <div class="form-group" style="margin-bottom:0;">
               <label for="recipientEmail">Send report to email (optional override)</label>
@@ -959,9 +980,13 @@ async def dashboard():
     var backendWasOffline = false;
     var heartbeatTimer = null;
     var reportsData = [];
+    var filteredReportsData = [];
     var selectedReports = new Set();
     var reportsPage = 1;
     var REPORTS_PAGE_SIZE = 15;
+    var reportsFilterText = '';
+    var reportsFilterDateFrom = '';
+    var reportsFilterDateTo = '';
     var HEARTBEAT_ONLINE_MS  = 10000;
     var HEARTBEAT_OFFLINE_MS = 2500;
     var HEARTBEAT_HIDDEN_MS  = 30000;
@@ -1041,6 +1066,52 @@ async def dashboard():
       renderReports();
     }
 
+    function applyReportFilters() {
+      var text    = (document.getElementById('reportSearch').value || '').trim().toLowerCase();
+      var dateFrom = document.getElementById('reportDateFrom').value || '';
+      var dateTo   = document.getElementById('reportDateTo').value || '';
+
+      filteredReportsData = reportsData.filter(function(r) {
+        var name = (r.name || '').toLowerCase();
+        if (text && name.indexOf(text) === -1) return false;
+        if (dateFrom || dateTo) {
+          var match = (r.name || '').match(/(\d{4}-\d{2}-\d{2})/);
+          if (match) {
+            var rDate = match[1];
+            if (dateFrom && rDate < dateFrom) return false;
+            if (dateTo   && rDate > dateTo)   return false;
+          }
+        }
+        return true;
+      });
+
+      var countEl = document.getElementById('filterResultCount');
+      if (countEl) {
+        var showing = filteredReportsData.length;
+        var total   = reportsData.length;
+        countEl.textContent = (showing < total)
+          ? showing + ' of ' + total + ' reports'
+          : total + ' report' + (total !== 1 ? 's' : '');
+      }
+
+      reportsPage = 1;
+      renderReports();
+    }
+
+    function clearReportFilters() {
+      var s = document.getElementById('reportSearch');
+      var f = document.getElementById('reportDateFrom');
+      var t = document.getElementById('reportDateTo');
+      if (s) s.value = '';
+      if (f) f.value = '';
+      if (t) t.value = '';
+      filteredReportsData = reportsData.slice();
+      var countEl = document.getElementById('filterResultCount');
+      if (countEl) countEl.textContent = reportsData.length + ' report' + (reportsData.length !== 1 ? 's' : '');
+      reportsPage = 1;
+      renderReports();
+    }
+
     function renderReports() {
       var container = document.getElementById('reportsContainer');
       var pager     = document.getElementById('reportsPager');
@@ -1052,16 +1123,16 @@ async def dashboard():
       syncSelectionWithData();
       updateSelectionUI();
 
-      if (!reportsData.length) {
-        container.innerHTML = '<div class="reports-empty">No reports found.</div>';
+      if (!filteredReportsData.length) {
+        container.innerHTML = '<div class="reports-empty">' + (reportsData.length ? 'No reports match the current filters.' : 'No reports found.') + '</div>';
         if (pager) pager.style.display = 'none';
         return;
       }
 
-      var totalPages = Math.max(1, Math.ceil(reportsData.length / REPORTS_PAGE_SIZE));
+      var totalPages = Math.max(1, Math.ceil(filteredReportsData.length / REPORTS_PAGE_SIZE));
       reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
       var start    = (reportsPage - 1) * REPORTS_PAGE_SIZE;
-      var pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
+      var pageRows = filteredReportsData.slice(start, start + REPORTS_PAGE_SIZE);
       var allPageSelected = pageRows.length > 0 && pageRows.every(function(r) { return selectedReports.has(r.name || ''); });
 
       var rows = pageRows.map(function(r) {
@@ -1090,7 +1161,7 @@ async def dashboard():
         '</tr></thead><tbody>' + rows + '</tbody></table>';
 
       if (pager)    pager.style.display = 'flex';
-      if (pageInfo) pageInfo.textContent = 'Page ' + reportsPage + ' / ' + totalPages + ' (' + reportsData.length + ' reports)';
+      if (pageInfo) pageInfo.textContent = 'Page ' + reportsPage + ' / ' + totalPages + ' (' + filteredReportsData.length + ' shown)';
       if (prevBtn)  prevBtn.disabled = reportsPage <= 1;
       if (nextBtn)  nextBtn.disabled = reportsPage >= totalPages;
 
@@ -1135,7 +1206,7 @@ async def dashboard():
         var data = await response.json();
         reportsData = Array.isArray(data.reports) ? data.reports : [];
         syncSelectionWithData();
-        renderReports();
+        applyReportFilters();
       } catch (err) {
         container.innerHTML = '<div class="reports-empty">Unable to load reports list.</div>';
       }
