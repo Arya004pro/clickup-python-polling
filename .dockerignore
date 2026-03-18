@@ -37,3 +37,4 @@ project_map.example.json
 Dockerfile
 docker-compose.yml
 DEPLOYMENT_GUIDE.md
+docker-compose.pm.yml
