@@ -1098,12 +1098,14 @@ async def dashboard():
     const HEARTBEAT_HIDDEN_MS = 30000;
 
     function showTab(tab) {
-      ['query','reports','compare'].forEach(t => {
-        document.getElementById('page' + t.charAt(0).toUpperCase() + t.slice(1))
-          .classList.toggle('active', t === tab);
-        const btn = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
-        if (btn) btn.classList.toggle('active', t === tab);
-      });
+      var pages = { query: 'pageQuery', reports: 'pageReports', compare: 'pageCompare' };
+      var btns  = { query: 'tabQueryBtn', reports: 'tabReportsBtn', compare: 'tabCompareBtn' };
+      for (var t in pages) {
+        var pageEl = document.getElementById(pages[t]);
+        var btnEl  = document.getElementById(btns[t]);
+        if (pageEl) { pageEl.style.display = (t === tab) ? 'block' : 'none'; }
+        if (btnEl)  { btnEl.className = 'tab-btn' + (t === tab ? ' active' : ''); }
+      }
       if (tab === 'reports') refreshReports();
       if (tab === 'compare') loadCompareDropdowns();
     }
