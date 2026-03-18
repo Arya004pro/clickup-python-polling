@@ -980,9 +980,9 @@ async def dashboard():
       <p>Query ClickUp tools, browse saved reports, and send a selected report to email.</p>
     </div>
     <div class="tabs">
-      <button class="tab-btn active" id="tabQueryBtn" onclick="showTab('query')">Query</button>
-      <button class="tab-btn" id="tabReportsBtn" onclick="showTab('reports')">Reports</button>
-      <button class="tab-btn" id="tabCompareBtn" onclick="showTab('compare')">Compare</button>
+      <button type="button" class="tab-btn active" id="tabQueryBtn" onclick="showTab('query')">Query</button>
+      <button type="button" class="tab-btn" id="tabReportsBtn" onclick="showTab('reports')">Reports</button>
+      <button type="button" class="tab-btn" id="tabCompareBtn" onclick="showTab('compare')">Compare</button>
     </div>
     <div class="content">
       <section class="page active" id="pageQuery">
@@ -1004,8 +1004,8 @@ async def dashboard():
             <div class="response-header">
               <div class="response-title">Response</div>
               <div class="response-actions">
-                <button class="btn-primary btn-small" onclick="downloadReport()" id="downloadBtn" style="display:none;">Download</button>
-                <button class="btn-secondary btn-small" onclick="clearReportView()" id="clearReportBtn" style="display:none;">Clear</button>
+                <button type="button" class="btn-primary btn-small" onclick="downloadReport()" id="downloadBtn" style="display:none;">Download</button>
+                <button type="button" class="btn-secondary btn-small" onclick="clearReportView()" id="clearReportBtn" style="display:none;">Clear</button>
               </div>
             </div>
             <div class="response-content" id="responseContent"></div>
@@ -1027,19 +1027,19 @@ async def dashboard():
             </div>
           </div>
           <div class="button-row" style="margin-bottom:10px;">
-            <button class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
-            <button class="btn-primary" id="bulkSendBtn" onclick="sendSelectedReports()" disabled>Send Selected (0)</button>
-            <button class="btn-secondary" id="bulkDeleteBtn" onclick="deleteSelectedReports()" disabled>Delete Selected (0)</button>
-            <button class="btn-secondary" id="clearSelectionBtn" onclick="clearReportSelection()" disabled>Clear Selection</button>
-            <button class="btn-secondary" onclick="showTab('query')">Back to Query</button>
+            <button type="button" class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
+            <button type="button" class="btn-primary" id="bulkSendBtn" onclick="sendSelectedReports()" disabled>Send Selected (0)</button>
+            <button type="button" class="btn-secondary" id="bulkDeleteBtn" onclick="deleteSelectedReports()" disabled>Delete Selected (0)</button>
+            <button type="button" class="btn-secondary" id="clearSelectionBtn" onclick="clearReportSelection()" disabled>Clear Selection</button>
+            <button type="button" class="btn-secondary" onclick="showTab('query')">Back to Query</button>
           </div>
           <div class="reports-wrap">
             <div id="reportsContainer" class="reports-empty">Loading reports...</div>
             <div class="pager" id="reportsPager" style="display:none;">
               <div id="reportsPageInfo">Page 1</div>
               <div class="button-row">
-                <button class="btn-secondary btn-small" id="prevPageBtn">Previous</button>
-                <button class="btn-secondary btn-small" id="nextPageBtn">Next</button>
+                <button type="button" class="btn-secondary btn-small" id="prevPageBtn">Previous</button>
+                <button type="button" class="btn-secondary btn-small" id="nextPageBtn">Next</button>
               </div>
             </div>
           </div>
@@ -1064,9 +1064,9 @@ async def dashboard():
             </div>
           </div>
           <div class="button-row" style="margin-bottom:14px;">
-            <button class="btn-primary" onclick="runDiff()">Compare Reports</button>
-            <button class="btn-secondary" onclick="clearDiff()">Clear</button>
-            <button class="btn-secondary" onclick="showTab('reports')">Back to Reports</button>
+            <button type="button" class="btn-primary" onclick="runDiff()">Compare Reports</button>
+            <button type="button" class="btn-secondary" onclick="clearDiff()">Clear</button>
+            <button type="button" class="btn-secondary" onclick="showTab('reports')">Back to Reports</button>
           </div>
           <div id="diffSummaryBar" class="diff-summary-bar" style="display:none;"></div>
           <div id="diffView" class="diff-view" style="display:none;">
@@ -1181,8 +1181,8 @@ async def dashboard():
             <td>
               <div class="actions">
                 <a class="btn-secondary btn-small" href="/reports/${encodedName}" target="_blank">Open</a>
-                <button class="btn-primary btn-small send-btn" data-report="${encodedName}">Send</button>
-                <button class="btn-secondary btn-small delete-btn" data-report="${encodedName}">Delete</button>
+                <button type="button" class="btn-primary btn-small send-btn" data-report="${encodedName}">Send</button>
+                <button type="button" class="btn-secondary btn-small delete-btn" data-report="${encodedName}">Delete</button>
               </div>
             </td>
           </tr>
