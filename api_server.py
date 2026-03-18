@@ -659,7 +659,7 @@ async def dashboard():
       background: #fff;
       border-radius: 14px;
       overflow: hidden;
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+      box-shadow: 0 24px 60px rgba(0,0,0,0.28);
     }
     .header {
       background: linear-gradient(95deg, #1f3b68, #2d5f8b);
@@ -685,10 +685,7 @@ async def dashboard():
       font-size: 13px;
       cursor: pointer;
     }
-    .tab-btn.active {
-      background: #fff;
-      border-bottom-color: #fff;
-    }
+    .tab-btn.active { background: #fff; border-bottom-color: #fff; }
     .content { padding: 20px; }
     .page { display: none; }
     .page.active { display: block; }
@@ -700,24 +697,22 @@ async def dashboard():
     }
     .form-group { margin-bottom: 14px; }
     label { display: block; font-weight: 700; margin-bottom: 6px; font-size: 13px; }
-    textarea, input {
+    textarea, input, select {
       width: 100%;
       border: 1px solid #c6d2ea;
       border-radius: 8px;
       padding: 10px;
       font-size: 13px;
+      background: #fff;
+      color: #1f2937;
     }
     textarea { min-height: 110px; resize: vertical; }
-    textarea:focus, input:focus {
+    textarea:focus, input:focus, select:focus {
       outline: none;
       border-color: #4d73b9;
-      box-shadow: 0 0 0 2px rgba(77, 115, 185, 0.12);
+      box-shadow: 0 0 0 2px rgba(77,115,185,0.12);
     }
-    .button-row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
+    .button-row { display: flex; gap: 10px; flex-wrap: wrap; }
     button {
       border: 0;
       border-radius: 8px;
@@ -729,9 +724,7 @@ async def dashboard():
     .btn-primary { background: #2d5f8b; color: #fff; }
     .btn-secondary { background: #e4eaf7; color: #1f2f49; }
     .btn-small { padding: 6px 10px; font-size: 12px; }
-    .btn-primary[disabled], .btn-secondary[disabled] {
-      opacity: 0.7; cursor: not-allowed;
-    }
+    .btn-primary[disabled], .btn-secondary[disabled] { opacity: 0.7; cursor: not-allowed; }
     .loader {
       display: none;
       margin-top: 14px;
@@ -775,198 +768,68 @@ async def dashboard():
     .response-title { color: #204974; font-weight: 800; font-size: 14px; }
     .response-actions { display: flex; gap: 8px; }
     .response-content { color: #1f2937; font-size: 13px; line-height: 1.6; }
-    .response-content table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 10px 0;
-      font-size: 12px;
-      background: #fff;
-    }
-    .response-content th, .response-content td {
-      border: 1px solid #dce3f3;
-      padding: 7px 9px;
-      text-align: left;
-      vertical-align: top;
-    }
+    .response-content table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; background: #fff; }
+    .response-content th, .response-content td { border: 1px solid #dce3f3; padding: 7px 9px; text-align: left; vertical-align: top; }
     .response-content th { background: #2d5f8b; color: #fff; }
     .response-content tr:nth-child(even) td { background: #f7faff; }
     .status-line { margin-top: 8px; font-size: 12px; color: #475569; }
     .status-line a { color: #2d5f8b; }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .reports-wrap {
-      border: 1px solid #d7e1f5;
-      border-radius: 10px;
-      overflow: hidden;
-      background: #fff;
-    }
-    .reports-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    .reports-table th, .reports-table td {
-      border-bottom: 1px solid #e4eaf7;
-      padding: 8px 10px;
-      text-align: left;
-      vertical-align: middle;
-    }
-    .reports-table thead th {
-      background: #f2f6ff;
-      color: #27456f;
-      font-weight: 800;
-    }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .reports-wrap { border: 1px solid #d7e1f5; border-radius: 10px; overflow: hidden; background: #fff; }
+    .reports-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .reports-table th, .reports-table td { border-bottom: 1px solid #e4eaf7; padding: 8px 10px; text-align: left; vertical-align: middle; }
+    .reports-table thead th { background: #f2f6ff; color: #27456f; font-weight: 800; }
     .reports-table tbody tr:nth-child(even) td { background: #fbfcff; }
     .actions { display: flex; gap: 6px; }
-    .pager {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px;
-      border-top: 1px solid #e4eaf7;
-      background: #fafcff;
-      font-size: 12px;
-    }
-    .toast {
-      margin-top: 10px;
-      font-size: 12px;
-      padding: 8px 10px;
-      border-radius: 8px;
-      display: none;
-    }
+    .pager { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-top: 1px solid #e4eaf7; background: #fafcff; font-size: 12px; }
+    .toast { margin-top: 10px; font-size: 12px; padding: 8px 10px; border-radius: 8px; display: none; }
     .toast.show { display: block; }
     .toast.ok { background: #e9f9ee; color: #115d2f; border: 1px solid #b6e3c6; }
     .toast.err { background: #ffecec; color: #8f1f1f; border: 1px solid #f0b7b7; }
-    .reports-empty {
-      padding: 16px;
-      color: #6b7280;
-      font-size: 13px;
-    }
+    .reports-empty { padding: 16px; color: #6b7280; font-size: 13px; }
     .live-status {
-      position: fixed;
-      top: 12px;
-      right: 14px;
-      z-index: 9999;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: #d6f5e4;
-      color: #0f6b3f;
-      border: 1px solid #9ed8bc;
-      transition: all 0.2s ease;
+      position: fixed; top: 12px; right: 14px; z-index: 9999;
+      font-size: 11px; font-weight: 700; padding: 6px 10px; border-radius: 999px;
+      background: #d6f5e4; color: #0f6b3f; border: 1px solid #9ed8bc; transition: all 0.2s ease;
     }
     .live-status.offline {
-      background: #ffefef;
-      color: #b62424;
-      border-color: #f0b3b3;
+      background: #ffefef; color: #b62424; border-color: #f0b3b3;
       animation: status-blink 1.1s ease-in-out infinite;
     }
-    @keyframes status-blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.45; }
-    }
-    @media (max-width: 980px) {
-      .grid-2 { grid-template-columns: 1fr; }
-      .response-header { flex-direction: column; align-items: flex-start; }
-      .pager { flex-direction: column; align-items: flex-start; gap: 8px; }
-    }
-    .compare-selectors {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin-bottom: 14px;
-    }
-    .compare-selectors select {
-      width: 100%;
-      border: 1px solid #c6d2ea;
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-size: 13px;
-      background: #fff;
-      color: #1f2937;
-    }
-    .compare-selectors select:focus {
-      outline: none;
-      border-color: #4d73b9;
-      box-shadow: 0 0 0 2px rgba(77,115,185,0.12);
-    }
+    @keyframes status-blink { 0%,100%{opacity:1} 50%{opacity:0.45} }
+    /* Compare tab */
+    .compare-selectors { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
     .diff-summary-bar {
-      display: flex;
-      gap: 16px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 14px;
-      padding: 10px 14px;
-      background: #f0f4ff;
-      border: 1px solid #d0dcf5;
-      border-radius: 8px;
-      font-size: 13px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 14px; padding: 10px 14px;
+      background: #f0f4ff; border: 1px solid #d0dcf5; border-radius: 8px; font-size: 13px;
     }
     .diff-summary-bar .stat { font-weight: 700; }
     .diff-summary-bar .stat.added { color: #1a7f3c; }
     .diff-summary-bar .stat.removed { color: #b62424; }
     .diff-summary-bar .stat.unchanged { color: #4a5568; }
-    .diff-view {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      max-height: 68vh;
-      overflow: auto;
-    }
-    .diff-pane {
-      border: 1px solid #d7e1f5;
-      border-radius: 8px;
-      overflow: auto;
-      background: #fff;
-    }
+    .diff-view { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-height: 68vh; overflow: auto; }
+    .diff-pane { border: 1px solid #d7e1f5; border-radius: 8px; overflow: auto; background: #fff; }
     .diff-pane-header {
-      background: #edf2ff;
-      border-bottom: 1px solid #d7e1f5;
-      padding: 8px 12px;
-      font-size: 12px;
-      font-weight: 700;
-      color: #1d3b66;
-      position: sticky;
-      top: 0;
-      z-index: 1;
+      background: #edf2ff; border-bottom: 1px solid #d7e1f5;
+      padding: 8px 12px; font-size: 12px; font-weight: 700; color: #1d3b66;
+      position: sticky; top: 0; z-index: 1;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .diff-lines { font-family: monospace; font-size: 12px; line-height: 1.7; }
-    .diff-line {
-      display: flex;
-      padding: 0 10px;
-      min-height: 22px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
+    .diff-line { display: flex; padding: 0 10px; min-height: 22px; white-space: pre-wrap; word-break: break-word; }
     .diff-line.added   { background: #d6f5e3; color: #1a5c30; }
     .diff-line.removed { background: #fde8e8; color: #8b1a1a; }
     .diff-line.unchanged { color: #374151; }
-    .diff-line .ln {
-      min-width: 32px;
-      color: #9ca3af;
-      user-select: none;
-      padding-right: 10px;
-      text-align: right;
-    }
-    .diff-line .marker {
-      min-width: 16px;
-      font-weight: 700;
-      padding-right: 6px;
-    }
+    .diff-line .ln { min-width: 32px; color: #9ca3af; user-select: none; padding-right: 10px; text-align: right; flex-shrink: 0; }
+    .diff-line .marker { min-width: 16px; font-weight: 700; padding-right: 6px; flex-shrink: 0; }
     .diff-line.added .marker   { color: #1a7f3c; }
     .diff-line.removed .marker { color: #b62424; }
-    .diff-empty {
-      padding: 24px;
-      text-align: center;
-      color: #9ca3af;
-      font-size: 13px;
-    }
+    .diff-empty { padding: 24px; text-align: center; color: #9ca3af; font-size: 13px; }
     @media (max-width: 980px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      .response-header { flex-direction: column; align-items: flex-start; }
+      .pager { flex-direction: column; align-items: flex-start; gap: 8px; }
       .compare-selectors { grid-template-columns: 1fr; }
       .diff-view { grid-template-columns: 1fr; }
     }
@@ -985,7 +848,9 @@ async def dashboard():
       <button type="button" class="tab-btn" id="tabCompareBtn" onclick="showTab('compare')">Compare</button>
     </div>
     <div class="content">
-      <section class="page active" id="pageQuery">
+
+      <!-- ===== QUERY TAB ===== -->
+      <div id="pageQuery" class="page active">
         <div class="card">
           <form id="queryForm">
             <div class="form-group">
@@ -1012,9 +877,10 @@ async def dashboard():
             <div class="status-line" id="responseStatus"></div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <section class="page" id="pageReports">
+      <!-- ===== REPORTS TAB ===== -->
+      <div id="pageReports" class="page">
         <div class="card">
           <div class="grid-2">
             <div class="form-group" style="margin-bottom:0;">
@@ -1027,7 +893,7 @@ async def dashboard():
             </div>
           </div>
           <div class="button-row" style="margin-bottom:10px;">
-            <button type="button" class="btn-secondary" onclick="refreshReports()">Refresh Reports</button>
+            <button type="button" class="btn-secondary" onclick="refreshReports()">Refresh</button>
             <button type="button" class="btn-primary" id="bulkSendBtn" onclick="sendSelectedReports()" disabled>Send Selected (0)</button>
             <button type="button" class="btn-secondary" id="bulkDeleteBtn" onclick="deleteSelectedReports()" disabled>Delete Selected (0)</button>
             <button type="button" class="btn-secondary" id="clearSelectionBtn" onclick="clearReportSelection()" disabled>Clear Selection</button>
@@ -1045,9 +911,10 @@ async def dashboard():
           </div>
           <div class="toast" id="mailToast"></div>
         </div>
-      </section>
+      </div>
 
-      <section class="page" id="pageCompare">
+      <!-- ===== COMPARE TAB ===== -->
+      <div id="pageCompare" class="page">
         <div class="card">
           <div class="compare-selectors">
             <div class="form-group" style="margin-bottom:0;">
@@ -1081,35 +948,39 @@ async def dashboard():
           </div>
           <div id="diffEmpty" class="diff-empty">Select two reports above and click <strong>Compare Reports</strong>.</div>
         </div>
-      </section>
-    </div>
-  </div>
+      </div>
+
+    </div><!-- /.content -->
+  </div><!-- /.container -->
 
   <script>
-    let lastResponse = '';
-    let backendWasOffline = false;
-    let heartbeatTimer = null;
-    let reportsData = [];
-    let selectedReports = new Set();
-    let reportsPage = 1;
-    const REPORTS_PAGE_SIZE = 15;
-    const HEARTBEAT_ONLINE_MS = 10000;
-    const HEARTBEAT_OFFLINE_MS = 2500;
-    const HEARTBEAT_HIDDEN_MS = 30000;
+    // ─── state ────────────────────────────────────────────────────────────────
+    var lastResponse = '';
+    var backendWasOffline = false;
+    var heartbeatTimer = null;
+    var reportsData = [];
+    var selectedReports = new Set();
+    var reportsPage = 1;
+    var REPORTS_PAGE_SIZE = 15;
+    var HEARTBEAT_ONLINE_MS  = 10000;
+    var HEARTBEAT_OFFLINE_MS = 2500;
+    var HEARTBEAT_HIDDEN_MS  = 30000;
 
+    // ─── tab switching ────────────────────────────────────────────────────────
     function showTab(tab) {
-      var pages = { query: 'pageQuery', reports: 'pageReports', compare: 'pageCompare' };
-      var btns  = { query: 'tabQueryBtn', reports: 'tabReportsBtn', compare: 'tabCompareBtn' };
-      for (var t in pages) {
-        var pageEl = document.getElementById(pages[t]);
-        var btnEl  = document.getElementById(btns[t]);
-        if (pageEl) { pageEl.style.display = (t === tab) ? 'block' : 'none'; }
-        if (btnEl)  { btnEl.className = 'tab-btn' + (t === tab ? ' active' : ''); }
-      }
+      var map = { query: 'pageQuery', reports: 'pageReports', compare: 'pageCompare' };
+      var btnMap = { query: 'tabQueryBtn', reports: 'tabReportsBtn', compare: 'tabCompareBtn' };
+      Object.keys(map).forEach(function(t) {
+        var pg = document.getElementById(map[t]);
+        var bt = document.getElementById(btnMap[t]);
+        if (pg) pg.style.display = (t === tab) ? 'block' : 'none';
+        if (bt) bt.className = 'tab-btn' + (t === tab ? ' active' : '');
+      });
       if (tab === 'reports') refreshReports();
       if (tab === 'compare') loadCompareDropdowns();
     }
 
+    // ─── helpers ──────────────────────────────────────────────────────────────
     function escapeHtml(text) {
       return (text || '')
         .replace(/&/g, '&amp;')
@@ -1126,143 +997,43 @@ async def dashboard():
         }
         return window.marked.parse(markdown || '');
       }
-      return `<pre>${escapeHtml(markdown || '')}</pre>`;
+      return '<pre>' + escapeHtml(markdown || '') + '</pre>';
     }
 
     function formatBytes(bytes) {
-      const value = Number(bytes || 0);
-      if (value < 1024) return `${value} B`;
-      if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-      return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+      var value = Number(bytes || 0);
+      if (value < 1024) return value + ' B';
+      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+      return (value / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    function showToast(message, ok=true) {
-      const el = document.getElementById('mailToast');
+    function showToast(message, ok) {
+      var el = document.getElementById('mailToast');
+      if (!el) return;
       el.textContent = message;
-      el.className = `toast show ${ok ? 'ok' : 'err'}`;
-      setTimeout(() => {
-        el.classList.remove('show');
-      }, 4000);
+      el.className = 'toast show ' + (ok ? 'ok' : 'err');
+      setTimeout(function() { el.classList.remove('show'); }, 4000);
     }
 
-    function renderReports() {
-      const container = document.getElementById('reportsContainer');
-      const pager = document.getElementById('reportsPager');
-      const pageInfo = document.getElementById('reportsPageInfo');
-      const prevBtn = document.getElementById('prevPageBtn');
-      const nextBtn = document.getElementById('nextPageBtn');
-
-      syncSelectionWithData();
-      updateSelectionUI();
-
-      if (!reportsData.length) {
-        container.innerHTML = '<div class="reports-empty">No reports found.</div>';
-        pager.style.display = 'none';
-        return;
-      }
-
-      const totalPages = Math.max(1, Math.ceil(reportsData.length / REPORTS_PAGE_SIZE));
-      reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
-      const start = (reportsPage - 1) * REPORTS_PAGE_SIZE;
-      const pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
-      const allPageSelected = pageRows.length > 0 && pageRows.every((r) => selectedReports.has(r.name || ''));
-
-      const rows = pageRows.map((r) => {
-        const rawName = r.name || '';
-        const name = escapeHtml(rawName);
-        const encodedName = encodeURIComponent(rawName);
-        const isSelected = selectedReports.has(rawName);
-        const modified = escapeHtml(r.modified || '');
-        const size = formatBytes(r.size_bytes || 0);
-        return `
-          <tr>
-            <td><input type="checkbox" class="report-select" data-report="${encodedName}" ${isSelected ? 'checked' : ''} /></td>
-            <td><a href="/reports/${encodedName}" target="_blank">${name}</a></td>
-            <td>${modified}</td>
-            <td>${size}</td>
-            <td>
-              <div class="actions">
-                <a class="btn-secondary btn-small" href="/reports/${encodedName}" target="_blank">Open</a>
-                <button type="button" class="btn-primary btn-small send-btn" data-report="${encodedName}">Send</button>
-                <button type="button" class="btn-secondary btn-small delete-btn" data-report="${encodedName}">Delete</button>
-              </div>
-            </td>
-          </tr>
-        `;
-      }).join('');
-
-      container.innerHTML = `
-        <table class="reports-table">
-          <thead>
-            <tr><th><input type="checkbox" id="selectAllOnPage" ${allPageSelected ? 'checked' : ''} /></th><th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th></tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-
-      pager.style.display = 'flex';
-      pageInfo.textContent = `Page ${reportsPage} / ${totalPages} (${reportsData.length} reports)`;
-      prevBtn.disabled = reportsPage <= 1;
-      nextBtn.disabled = reportsPage >= totalPages;
-
-      const selectAll = document.getElementById('selectAllOnPage');
-      if (selectAll) {
-        selectAll.addEventListener('change', () => {
-          const checked = selectAll.checked;
-          pageRows.forEach((r) => {
-            const reportName = r.name || '';
-            if (!reportName) return;
-            if (checked) {
-              selectedReports.add(reportName);
-            } else {
-              selectedReports.delete(reportName);
-            }
-          });
-          renderReports();
-        });
-      }
-
-      document.querySelectorAll('.report-select').forEach((cb) => {
-        cb.addEventListener('change', () => {
-          const reportName = decodeURIComponent(cb.dataset.report || '');
-          if (!reportName) return;
-          if (cb.checked) {
-            selectedReports.add(reportName);
-          } else {
-            selectedReports.delete(reportName);
-          }
-          updateSelectionUI();
-          const allChecked = Array.from(document.querySelectorAll('.report-select')).every((item) => item.checked);
-          if (selectAll) {
-            selectAll.checked = allChecked;
-          }
-        });
-      });
-
-      document.querySelectorAll('.send-btn').forEach((btn) => {
-        btn.addEventListener('click', () => sendReportByEmail(decodeURIComponent(btn.dataset.report || ''), btn));
-      });
-
-      document.querySelectorAll('.delete-btn').forEach((btn) => {
-        btn.addEventListener('click', () => deleteReport(decodeURIComponent(btn.dataset.report || ''), btn));
-      });
-    }
-
+    // ─── reports tab ──────────────────────────────────────────────────────────
     function syncSelectionWithData() {
-      const available = new Set(reportsData.map((r) => r.name || ''));
-      selectedReports = new Set(Array.from(selectedReports).filter((name) => available.has(name)));
+      var available = new Set(reportsData.map(function(r) { return r.name || ''; }));
+      var next = new Set();
+      selectedReports.forEach(function(n) { if (available.has(n)) next.add(n); });
+      selectedReports = next;
     }
 
     function updateSelectionUI() {
-      const count = selectedReports.size;
-      const sendBtn = document.getElementById('bulkSendBtn');
-      const deleteBtn = document.getElementById('bulkDeleteBtn');
-      const clearBtn = document.getElementById('clearSelectionBtn');
-      sendBtn.textContent = `Send Selected (${count})`;
-      deleteBtn.textContent = `Delete Selected (${count})`;
-      sendBtn.disabled = count === 0;
+      var count = selectedReports.size;
+      var sendBtn   = document.getElementById('bulkSendBtn');
+      var deleteBtn = document.getElementById('bulkDeleteBtn');
+      var clearBtn  = document.getElementById('clearSelectionBtn');
+      if (!sendBtn) return;
+      sendBtn.textContent   = 'Send Selected (' + count + ')';
+      deleteBtn.textContent = 'Delete Selected (' + count + ')';
+      sendBtn.disabled   = count === 0;
       deleteBtn.disabled = count === 0;
-      clearBtn.disabled = count === 0;
+      clearBtn.disabled  = count === 0;
     }
 
     function clearReportSelection() {
@@ -1270,12 +1041,98 @@ async def dashboard():
       renderReports();
     }
 
+    function renderReports() {
+      var container = document.getElementById('reportsContainer');
+      var pager     = document.getElementById('reportsPager');
+      var pageInfo  = document.getElementById('reportsPageInfo');
+      var prevBtn   = document.getElementById('prevPageBtn');
+      var nextBtn   = document.getElementById('nextPageBtn');
+      if (!container) return;
+
+      syncSelectionWithData();
+      updateSelectionUI();
+
+      if (!reportsData.length) {
+        container.innerHTML = '<div class="reports-empty">No reports found.</div>';
+        if (pager) pager.style.display = 'none';
+        return;
+      }
+
+      var totalPages = Math.max(1, Math.ceil(reportsData.length / REPORTS_PAGE_SIZE));
+      reportsPage = Math.max(1, Math.min(reportsPage, totalPages));
+      var start    = (reportsPage - 1) * REPORTS_PAGE_SIZE;
+      var pageRows = reportsData.slice(start, start + REPORTS_PAGE_SIZE);
+      var allPageSelected = pageRows.length > 0 && pageRows.every(function(r) { return selectedReports.has(r.name || ''); });
+
+      var rows = pageRows.map(function(r) {
+        var rawName     = r.name || '';
+        var name        = escapeHtml(rawName);
+        var encodedName = encodeURIComponent(rawName);
+        var isSelected  = selectedReports.has(rawName);
+        var modified    = escapeHtml(r.modified || '');
+        var size        = formatBytes(r.size_bytes || 0);
+        return '<tr>' +
+          '<td><input type="checkbox" class="report-select" data-report="' + encodedName + '" ' + (isSelected ? 'checked' : '') + ' /></td>' +
+          '<td><a href="/reports/' + encodedName + '" target="_blank">' + name + '</a></td>' +
+          '<td>' + modified + '</td>' +
+          '<td>' + size + '</td>' +
+          '<td><div class="actions">' +
+            '<a class="btn-secondary btn-small" href="/reports/' + encodedName + '" target="_blank">Open</a>' +
+            '<button type="button" class="btn-primary btn-small send-btn" data-report="' + encodedName + '">Send</button>' +
+            '<button type="button" class="btn-secondary btn-small delete-btn" data-report="' + encodedName + '">Delete</button>' +
+          '</div></td></tr>';
+      }).join('');
+
+      container.innerHTML =
+        '<table class="reports-table"><thead><tr>' +
+        '<th><input type="checkbox" id="selectAllOnPage" ' + (allPageSelected ? 'checked' : '') + ' /></th>' +
+        '<th>Report</th><th>Modified (IST)</th><th>Size</th><th>Actions</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+      if (pager)    pager.style.display = 'flex';
+      if (pageInfo) pageInfo.textContent = 'Page ' + reportsPage + ' / ' + totalPages + ' (' + reportsData.length + ' reports)';
+      if (prevBtn)  prevBtn.disabled = reportsPage <= 1;
+      if (nextBtn)  nextBtn.disabled = reportsPage >= totalPages;
+
+      var selectAll = document.getElementById('selectAllOnPage');
+      if (selectAll) {
+        selectAll.addEventListener('change', function() {
+          var checked = selectAll.checked;
+          pageRows.forEach(function(r) {
+            var n = r.name || '';
+            if (!n) return;
+            if (checked) selectedReports.add(n); else selectedReports.delete(n);
+          });
+          renderReports();
+        });
+      }
+
+      document.querySelectorAll('.report-select').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+          var n = decodeURIComponent(cb.dataset.report || '');
+          if (!n) return;
+          if (cb.checked) selectedReports.add(n); else selectedReports.delete(n);
+          updateSelectionUI();
+          var allChecked = Array.from(document.querySelectorAll('.report-select')).every(function(i) { return i.checked; });
+          if (selectAll) selectAll.checked = allChecked;
+        });
+      });
+
+      document.querySelectorAll('.send-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() { sendReportByEmail(decodeURIComponent(btn.dataset.report || ''), btn); });
+      });
+      document.querySelectorAll('.delete-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() { deleteReport(decodeURIComponent(btn.dataset.report || ''), btn); });
+      });
+    }
+
     async function refreshReports() {
-      const container = document.getElementById('reportsContainer');
+      var container = document.getElementById('reportsContainer');
+      if (!container) return;
       container.innerHTML = '<div class="reports-empty">Loading reports...</div>';
       try {
-        const response = await fetch('/reports?limit=500', { cache: 'no-store' });
-        const data = await response.json();
+        var response = await fetch('/reports?limit=500', { cache: 'no-store' });
+        var data = await response.json();
         reportsData = Array.isArray(data.reports) ? data.reports : [];
         syncSelectionWithData();
         renderReports();
@@ -1284,160 +1141,97 @@ async def dashboard():
       }
     }
 
-    async function sendReportByEmail(reportName, btn, options = {}) {
-      const showPerReportToast = options.showPerReportToast !== false;
+    async function sendReportByEmail(reportName, btn, options) {
+      options = options || {};
+      var showPerReportToast = options.showPerReportToast !== false;
       if (!reportName) return;
-      const toEmail = (document.getElementById('recipientEmail').value || '').trim();
-      const subject = (document.getElementById('emailSubject').value || '').trim();
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Sending...';
-      }
+      var toEmail = (document.getElementById('recipientEmail').value || '').trim();
+      var subject = (document.getElementById('emailSubject').value || '').trim();
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
       try {
-        const response = await fetch('/reports/send', {
+        var response = await fetch('/reports/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            report_name: reportName,
-            to_email: toEmail || null,
-            subject: subject || null,
-          }),
+          body: JSON.stringify({ report_name: reportName, to_email: toEmail || null, subject: subject || null }),
         });
-        const data = await response.json();
+        var data = await response.json();
         if (data.status === 'success') {
-          if (showPerReportToast) {
-            showToast(`Sent ${reportName} to ${data.to_email}`, true);
-          }
-          return { ok: true, reportName };
+          if (showPerReportToast) showToast('Sent ' + reportName + ' to ' + data.to_email, true);
+          return { ok: true, reportName: reportName };
         } else {
-          if (showPerReportToast) {
-            showToast(`Send failed: ${data.error || 'unknown error'}`, false);
-          }
-          return { ok: false, reportName, error: data.error || 'unknown error' };
+          if (showPerReportToast) showToast('Send failed: ' + (data.error || 'unknown error'), false);
+          return { ok: false, reportName: reportName, error: data.error || 'unknown error' };
         }
       } catch (err) {
-        if (showPerReportToast) {
-          showToast(`Send failed: ${err.message}`, false);
-        }
-        return { ok: false, reportName, error: err.message };
+        if (showPerReportToast) showToast('Send failed: ' + err.message, false);
+        return { ok: false, reportName: reportName, error: err.message };
       } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = 'Send';
-        }
+        if (btn) { btn.disabled = false; btn.textContent = 'Send'; }
       }
     }
 
     async function sendSelectedReports() {
-      const selected = Array.from(selectedReports);
-      if (!selected.length) {
-        showToast('Select at least one report to send.', false);
-        return;
+      var selected = Array.from(selectedReports);
+      if (!selected.length) { showToast('Select at least one report to send.', false); return; }
+      var bulkBtn = document.getElementById('bulkSendBtn');
+      bulkBtn.disabled = true; bulkBtn.textContent = 'Sending...';
+      var successCount = 0; var failures = [];
+      for (var i = 0; i < selected.length; i++) {
+        var result = await sendReportByEmail(selected[i], null, { showPerReportToast: false });
+        if (result && result.ok) successCount++; else failures.push(selected[i]);
       }
-
-      const bulkBtn = document.getElementById('bulkSendBtn');
-      bulkBtn.disabled = true;
-      bulkBtn.textContent = 'Sending...';
-
-      let successCount = 0;
-      const failures = [];
-      for (const reportName of selected) {
-        const result = await sendReportByEmail(reportName, null, { showPerReportToast: false });
-        if (result && result.ok) {
-          successCount += 1;
-        } else {
-          failures.push(reportName);
-        }
-      }
-
       updateSelectionUI();
-      if (!failures.length) {
-        showToast(`Sent ${successCount} report(s).`, true);
-      } else {
-        showToast(`Sent ${successCount}, failed ${failures.length}.`, false);
-      }
+      if (!failures.length) showToast('Sent ' + successCount + ' report(s).', true);
+      else showToast('Sent ' + successCount + ', failed ' + failures.length + '.', false);
     }
 
-    async function deleteReport(reportName, btn, skipConfirm = false) {
+    async function deleteReport(reportName, btn, skipConfirm) {
       if (!reportName) return { ok: false, error: 'Invalid report name' };
       if (!skipConfirm) {
-        const approved = window.confirm(`Delete report \"${reportName}\"? This cannot be undone.`);
-        if (!approved) return { ok: false, cancelled: true };
+        if (!window.confirm('Delete report "' + reportName + '"? This cannot be undone.')) return { ok: false, cancelled: true };
       }
-
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Deleting...';
-      }
-
+      if (btn) { btn.disabled = true; btn.textContent = 'Deleting...'; }
       try {
-        const response = await fetch(`/reports/${encodeURIComponent(reportName)}`, {
-          method: 'DELETE',
-        });
-        const data = await response.json();
+        var response = await fetch('/reports/' + encodeURIComponent(reportName), { method: 'DELETE' });
+        var data = await response.json();
         if (response.ok && data.status === 'success') {
           selectedReports.delete(reportName);
-          if (!skipConfirm) {
-            showToast(`Deleted ${reportName}`, true);
-            await refreshReports();
-          }
+          if (!skipConfirm) { showToast('Deleted ' + reportName, true); await refreshReports(); }
           return { ok: true };
         }
-        if (!skipConfirm) {
-          showToast(`Delete failed: ${data.detail || data.error || 'unknown error'}`, false);
-        }
+        if (!skipConfirm) showToast('Delete failed: ' + (data.detail || data.error || 'unknown error'), false);
         return { ok: false, error: data.detail || data.error || 'unknown error' };
       } catch (err) {
-        if (!skipConfirm) {
-          showToast(`Delete failed: ${err.message}`, false);
-        }
+        if (!skipConfirm) showToast('Delete failed: ' + err.message, false);
         return { ok: false, error: err.message };
       } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = 'Delete';
-        }
+        if (btn) { btn.disabled = false; btn.textContent = 'Delete'; }
       }
     }
 
     async function deleteSelectedReports() {
-      const selected = Array.from(selectedReports);
-      if (!selected.length) {
-        showToast('Select at least one report to delete.', false);
-        return;
+      var selected = Array.from(selectedReports);
+      if (!selected.length) { showToast('Select at least one report to delete.', false); return; }
+      if (!window.confirm('Delete ' + selected.length + ' selected report(s)? This cannot be undone.')) return;
+      var bulkBtn = document.getElementById('bulkDeleteBtn');
+      bulkBtn.disabled = true; bulkBtn.textContent = 'Deleting...';
+      var successCount = 0; var failures = [];
+      for (var i = 0; i < selected.length; i++) {
+        var result = await deleteReport(selected[i], null, true);
+        if (result && result.ok) successCount++;
+        else if (!result || !result.cancelled) failures.push(selected[i]);
       }
-
-      const approved = window.confirm(`Delete ${selected.length} selected report(s)? This cannot be undone.`);
-      if (!approved) return;
-
-      const bulkBtn = document.getElementById('bulkDeleteBtn');
-      bulkBtn.disabled = true;
-      bulkBtn.textContent = 'Deleting...';
-
-      let successCount = 0;
-      const failures = [];
-      for (const reportName of selected) {
-        const result = await deleteReport(reportName, null, true);
-        if (result && result.ok) {
-          successCount += 1;
-        } else if (!result || !result.cancelled) {
-          failures.push(reportName);
-        }
-      }
-
       await refreshReports();
-      if (!failures.length) {
-        showToast(`Deleted ${successCount} report(s).`, true);
-      } else {
-        showToast(`Deleted ${successCount}, failed ${failures.length}.`, false);
-      }
+      if (!failures.length) showToast('Deleted ' + successCount + ' report(s).', true);
+      else showToast('Deleted ' + successCount + ', failed ' + failures.length + '.', false);
     }
 
+    // ─── query tab ────────────────────────────────────────────────────────────
     function downloadReport() {
       if (!lastResponse) return;
-      const element = document.createElement('a');
+      var element = document.createElement('a');
       element.setAttribute('href', 'data:text/markdown;charset=utf-8,' + encodeURIComponent(lastResponse));
-      element.setAttribute('download', `report_${new Date().toISOString().slice(0,10)}.md`);
+      element.setAttribute('download', 'report_' + new Date().toISOString().slice(0,10) + '.md');
       element.style.display = 'none';
       document.body.appendChild(element);
       element.click();
@@ -1459,8 +1253,181 @@ async def dashboard():
       document.getElementById('error').classList.remove('show');
     }
 
+    // ─── compare tab ──────────────────────────────────────────────────────────
+    async function loadCompareDropdowns() {
+      var reports = [];
+      try {
+        var res = await fetch('/reports?limit=500', { cache: 'no-store' });
+        var data = await res.json();
+        reports = Array.isArray(data.reports) ? data.reports : [];
+      } catch(e) { return; }
+      var selA = document.getElementById('compareSelectA');
+      var selB = document.getElementById('compareSelectB');
+      var prevA = selA.value; var prevB = selB.value;
+      selA.innerHTML = '<option value="">— select a report —</option>';
+      selB.innerHTML = '<option value="">— select a report —</option>';
+      reports.forEach(function(r) {
+        var name = r.name || '';
+        if (!name) return;
+        var label = name.replace(/\\.md$/, '');
+        var opt = '<option value="' + encodeURIComponent(name) + '">' + escapeHtml(label) + '</option>';
+        selA.innerHTML += opt;
+        selB.innerHTML += opt;
+      });
+      if (prevA) selA.value = prevA;
+      if (prevB) selB.value = prevB;
+    }
+
+    async function runDiff() {
+      var selA = document.getElementById('compareSelectA');
+      var selB = document.getElementById('compareSelectB');
+      var nameA = decodeURIComponent(selA.value || '');
+      var nameB = decodeURIComponent(selB.value || '');
+      var emptyEl   = document.getElementById('diffEmpty');
+      var viewEl    = document.getElementById('diffView');
+      var summaryEl = document.getElementById('diffSummaryBar');
+
+      if (!nameA || !nameB) {
+        emptyEl.textContent = 'Please select both reports before comparing.';
+        emptyEl.style.display = 'block'; viewEl.style.display = 'none'; summaryEl.style.display = 'none';
+        return;
+      }
+      if (nameA === nameB) {
+        emptyEl.textContent = 'Both dropdowns point to the same report. Pick two different ones.';
+        emptyEl.style.display = 'block'; viewEl.style.display = 'none'; summaryEl.style.display = 'none';
+        return;
+      }
+      emptyEl.textContent = 'Loading reports…';
+      emptyEl.style.display = 'block'; viewEl.style.display = 'none'; summaryEl.style.display = 'none';
+
+      var textA = '', textB = '';
+      try {
+        var results = await Promise.all([
+          fetch('/reports/' + encodeURIComponent(nameA)),
+          fetch('/reports/' + encodeURIComponent(nameB))
+        ]);
+        textA = await results[0].text();
+        textB = await results[1].text();
+      } catch(e) {
+        emptyEl.textContent = 'Failed to load one or both reports.';
+        return;
+      }
+
+      var linesA = textA.split('\\n');
+      var linesB = textB.split('\\n');
+      var diff = (linesA.length + linesB.length > 1500) ? linearDiff(linesA, linesB) : lcsDiff(linesA, linesB);
+
+      var addedCount = 0, removedCount = 0, unchangedCount = 0;
+      var aHtml = [], bHtml = [];
+      var aLine = 1, bLine = 1;
+
+      diff.forEach(function(op) {
+        if (op.type === 'equal') {
+          op.lines.forEach(function(l) {
+            aHtml.push(diffLineHtml('unchanged', aLine++, ' ', l));
+            bHtml.push(diffLineHtml('unchanged', bLine++, ' ', l));
+            unchangedCount++;
+          });
+        } else if (op.type === 'delete') {
+          op.lines.forEach(function(l) {
+            aHtml.push(diffLineHtml('removed', aLine++, '-', l));
+            bHtml.push(diffLineHtml('removed', null, ' ', ''));
+            removedCount++;
+          });
+        } else if (op.type === 'insert') {
+          op.lines.forEach(function(l) {
+            aHtml.push(diffLineHtml('added', null, ' ', ''));
+            bHtml.push(diffLineHtml('added', bLine++, '+', l));
+            addedCount++;
+          });
+        }
+      });
+
+      document.getElementById('diffLinesA').innerHTML = aHtml.join('');
+      document.getElementById('diffLinesB').innerHTML = bHtml.join('');
+      document.getElementById('diffHeaderA').textContent = nameA.replace(/\\.md$/, '');
+      document.getElementById('diffHeaderB').textContent = nameB.replace(/\\.md$/, '');
+
+      summaryEl.innerHTML =
+        '<span class="stat added">+' + addedCount + ' added</span>' +
+        '<span class="stat removed">-' + removedCount + ' removed</span>' +
+        '<span class="stat unchanged">' + unchangedCount + ' unchanged</span>' +
+        '<span style="color:#6b7280;margin-left:auto;font-size:12px;">line-by-line diff</span>';
+
+      emptyEl.style.display = 'none';
+      viewEl.style.display = 'grid';
+      summaryEl.style.display = 'flex';
+    }
+
+    function diffLineHtml(type, lineNum, marker, text) {
+      var ln = lineNum !== null ? lineNum : '';
+      return '<div class="diff-line ' + type + '"><span class="ln">' + ln + '</span><span class="marker">' + escapeHtml(marker) + '</span>' + escapeHtml(text) + '</div>';
+    }
+
+    function clearDiff() {
+      document.getElementById('diffLinesA').innerHTML = '';
+      document.getElementById('diffLinesB').innerHTML = '';
+      document.getElementById('diffView').style.display = 'none';
+      document.getElementById('diffSummaryBar').style.display = 'none';
+      document.getElementById('diffEmpty').textContent = 'Select two reports above and click Compare Reports.';
+      document.getElementById('diffEmpty').style.display = 'block';
+      document.getElementById('compareSelectA').value = '';
+      document.getElementById('compareSelectB').value = '';
+    }
+
+    function lcsDiff(a, b) {
+      var ops = [];
+      var memo = {};
+      function lcs(i, j) {
+        var key = i + ',' + j;
+        if (key in memo) return memo[key];
+        if (i >= a.length || j >= b.length) return memo[key] = 0;
+        if (a[i] === b[j]) return memo[key] = 1 + lcs(i+1, j+1);
+        return memo[key] = Math.max(lcs(i+1, j), lcs(i, j+1));
+      }
+      function build(i, j) {
+        if (i >= a.length && j >= b.length) return;
+        var last = ops[ops.length - 1];
+        if (i < a.length && j < b.length && a[i] === b[j]) {
+          if (last && last.type === 'equal') last.lines.push(a[i]);
+          else ops.push({ type: 'equal', lines: [a[i]] });
+          build(i+1, j+1);
+        } else if (j < b.length && (i >= a.length || lcs(i, j+1) >= lcs(i+1, j))) {
+          if (last && last.type === 'insert') last.lines.push(b[j]);
+          else ops.push({ type: 'insert', lines: [b[j]] });
+          build(i, j+1);
+        } else {
+          if (last && last.type === 'delete') last.lines.push(a[i]);
+          else ops.push({ type: 'delete', lines: [a[i]] });
+          build(i+1, j);
+        }
+      }
+      build(0, 0);
+      return ops;
+    }
+
+    function linearDiff(a, b) {
+      var ops = [];
+      var maxLen = Math.max(a.length, b.length);
+      for (var i = 0; i < maxLen; i++) {
+        var la = i < a.length ? a[i] : null;
+        var lb = i < b.length ? b[i] : null;
+        var last = ops[ops.length - 1];
+        if (la === lb) {
+          if (last && last.type === 'equal') last.lines.push(la);
+          else ops.push({ type: 'equal', lines: [la] });
+        } else {
+          if (la !== null) ops.push({ type: 'delete', lines: [la] });
+          if (lb !== null) ops.push({ type: 'insert', lines: [lb] });
+        }
+      }
+      return ops;
+    }
+
+    // ─── live status ──────────────────────────────────────────────────────────
     function setLiveStatus(online) {
-      const badge = document.getElementById('liveStatus');
+      var badge = document.getElementById('liveStatus');
+      if (!badge) return;
       if (online) {
         badge.textContent = 'API Connected';
         badge.classList.remove('offline');
@@ -1476,17 +1443,13 @@ async def dashboard():
     }
 
     async function heartbeatCheck() {
-      const nextOnlineDelay = document.hidden ? HEARTBEAT_HIDDEN_MS : HEARTBEAT_ONLINE_MS;
+      var nextDelay = document.hidden ? HEARTBEAT_HIDDEN_MS : HEARTBEAT_ONLINE_MS;
       try {
-        const response = await fetch('/status', { cache: 'no-store' });
+        var response = await fetch('/status', { cache: 'no-store' });
         if (!response.ok) throw new Error('status-check-failed');
         setLiveStatus(true);
-        if (backendWasOffline) {
-          backendWasOffline = false;
-          window.location.reload();
-          return;
-        }
-        scheduleHeartbeat(nextOnlineDelay);
+        if (backendWasOffline) { backendWasOffline = false; window.location.reload(); return; }
+        scheduleHeartbeat(nextDelay);
       } catch (err) {
         setLiveStatus(false);
         backendWasOffline = true;
@@ -1494,50 +1457,50 @@ async def dashboard():
       }
     }
 
-    document.getElementById('prevPageBtn').addEventListener('click', () => {
+    // ─── event listeners + init ───────────────────────────────────────────────
+    document.getElementById('prevPageBtn').addEventListener('click', function() {
       reportsPage = Math.max(1, reportsPage - 1);
       renderReports();
     });
-    document.getElementById('nextPageBtn').addEventListener('click', () => {
+    document.getElementById('nextPageBtn').addEventListener('click', function() {
       reportsPage += 1;
       renderReports();
     });
 
-    const questionInput = document.getElementById('question');
-    questionInput.addEventListener('keydown', (e) => {
+    document.getElementById('question').addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         document.getElementById('queryForm').requestSubmit();
       }
     });
 
-    document.getElementById('queryForm').addEventListener('submit', async (e) => {
+    document.getElementById('queryForm').addEventListener('submit', async function(e) {
       e.preventDefault();
-      const question = document.getElementById('question').value.trim();
+      var question = document.getElementById('question').value.trim();
       if (!question) return;
 
-      const loader = document.getElementById('loader');
-      const error = document.getElementById('error');
-      const responseBox = document.getElementById('responseBox');
-      const downloadBtn = document.getElementById('downloadBtn');
-      const clearReportBtn = document.getElementById('clearReportBtn');
-      const submitBtn = document.getElementById('submitBtn');
+      var loader       = document.getElementById('loader');
+      var error        = document.getElementById('error');
+      var responseBox  = document.getElementById('responseBox');
+      var downloadBtn  = document.getElementById('downloadBtn');
+      var clearRptBtn  = document.getElementById('clearReportBtn');
+      var submitBtn    = document.getElementById('submitBtn');
 
       loader.classList.add('show');
       error.classList.remove('show');
       responseBox.classList.remove('show');
       downloadBtn.style.display = 'none';
-      clearReportBtn.style.display = 'none';
+      clearRptBtn.style.display = 'none';
       submitBtn.disabled = true;
       submitBtn.textContent = 'Working...';
 
       try {
-        const response = await fetch('/query', {
+        var response = await fetch('/query', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question: question }),
         });
-        const data = await response.json();
+        var data = await response.json();
         loader.classList.remove('show');
 
         if (data.status === 'error') {
@@ -1554,17 +1517,18 @@ async def dashboard():
         lastResponse = data.response;
         document.getElementById('responseContent').innerHTML = markdownToHtml(data.response);
 
-        const statusEl = document.getElementById('responseStatus');
-        let statusHtml = `Tokens: input=${data.tokens_used?.input || 0} | output=${data.tokens_used?.output || 0}`;
+        var statusEl = document.getElementById('responseStatus');
+        var tokens = data.tokens_used || {};
+        var statusHtml = 'Tokens: input=' + (tokens.input || 0) + ' | output=' + (tokens.output || 0);
         if (data.report_saved && data.report_file) {
-          statusHtml += ` | Saved: ${data.report_file}`;
+          statusHtml += ' | Saved: ' + data.report_file;
           if (data.report_download_url) {
-            statusHtml += ` | <a href="${data.report_download_url}" target="_blank">Open saved report</a>`;
+            statusHtml += ' | <a href="' + data.report_download_url + '" target="_blank">Open saved report</a>';
           }
         }
         statusEl.innerHTML = statusHtml;
         downloadBtn.style.display = 'inline-block';
-        clearReportBtn.style.display = 'inline-block';
+        clearRptBtn.style.display = 'inline-block';
         responseBox.classList.add('show');
         refreshReports();
       } catch (err) {
@@ -1577,203 +1541,13 @@ async def dashboard():
       }
     });
 
+    // kick off
     refreshReports();
     heartbeatCheck();
-    async function loadCompareDropdowns() {
-      let reports = [];
-      try {
-        const res = await fetch('/reports?limit=500', { cache: 'no-store' });
-        const data = await res.json();
-        reports = Array.isArray(data.reports) ? data.reports : [];
-      } catch(e) {
-        return;
-      }
-      const selA = document.getElementById('compareSelectA');
-      const selB = document.getElementById('compareSelectB');
-      const prevA = selA.value;
-      const prevB = selB.value;
-      selA.innerHTML = '<option value="">— select a report —</option>';
-      selB.innerHTML = '<option value="">— select a report —</option>';
-      reports.forEach(r => {
-        const name = r.name || '';
-        if (!name) return;
-        const label = name.replace(/\.md$/, '');
-        selA.innerHTML += `<option value="${encodeURIComponent(name)}">${escapeHtml(label)}</option>`;
-        selB.innerHTML += `<option value="${encodeURIComponent(name)}">${escapeHtml(label)}</option>`;
-      });
-      if (prevA) selA.value = prevA;
-      if (prevB) selB.value = prevB;
-    }
-
-    async function runDiff() {
-      const selA = document.getElementById('compareSelectA');
-      const selB = document.getElementById('compareSelectB');
-      const nameA = decodeURIComponent(selA.value || '');
-      const nameB = decodeURIComponent(selB.value || '');
-      const emptyEl = document.getElementById('diffEmpty');
-      const viewEl = document.getElementById('diffView');
-      const summaryEl = document.getElementById('diffSummaryBar');
-
-      if (!nameA || !nameB) {
-        emptyEl.textContent = 'Please select both reports before comparing.';
-        emptyEl.style.display = 'block';
-        viewEl.style.display = 'none';
-        summaryEl.style.display = 'none';
-        return;
-      }
-      if (nameA === nameB) {
-        emptyEl.textContent = 'Both dropdowns point to the same report. Pick two different ones.';
-        emptyEl.style.display = 'block';
-        viewEl.style.display = 'none';
-        summaryEl.style.display = 'none';
-        return;
-      }
-
-      emptyEl.textContent = 'Loading reports…';
-      emptyEl.style.display = 'block';
-      viewEl.style.display = 'none';
-      summaryEl.style.display = 'none';
-
-      let textA = '', textB = '';
-      try {
-        const [rA, rB] = await Promise.all([
-          fetch(`/reports/${encodeURIComponent(nameA)}`),
-          fetch(`/reports/${encodeURIComponent(nameB)}`)
-        ]);
-        textA = await rA.text();
-        textB = await rB.text();
-      } catch(e) {
-        emptyEl.textContent = 'Failed to load one or both reports. Check the console.';
-        return;
-      }
-
-      const linesA = textA.split('\n');
-      const linesB = textB.split('\n');
-
-      // LCS-based diff (Myers-style simplified)
-      const diff = computeDiff(linesA, linesB);
-
-      let addedCount = 0, removedCount = 0, unchangedCount = 0;
-      const aHtml = [], bHtml = [];
-      let aLine = 1, bLine = 1;
-
-      diff.forEach(op => {
-        if (op.type === 'equal') {
-          op.lines.forEach(l => {
-            aHtml.push(diffLineHtml('unchanged', aLine++, ' ', l));
-            bHtml.push(diffLineHtml('unchanged', bLine++, ' ', l));
-            unchangedCount++;
-          });
-        } else if (op.type === 'delete') {
-          op.lines.forEach(l => {
-            aHtml.push(diffLineHtml('removed', aLine++, '-', l));
-            bHtml.push(diffLineHtml('removed', null, ' ', ''));
-            removedCount++;
-          });
-        } else if (op.type === 'insert') {
-          op.lines.forEach(l => {
-            aHtml.push(diffLineHtml('added', null, ' ', ''));
-            bHtml.push(diffLineHtml('added', bLine++, '+', l));
-            addedCount++;
-          });
-        }
-      });
-
-      document.getElementById('diffLinesA').innerHTML = aHtml.join('');
-      document.getElementById('diffLinesB').innerHTML = bHtml.join('');
-      document.getElementById('diffHeaderA').textContent = nameA.replace(/\.md$/, '');
-      document.getElementById('diffHeaderB').textContent = nameB.replace(/\.md$/, '');
-
-      summaryEl.innerHTML = `
-        <span class="stat added">+${addedCount} added</span>
-        <span class="stat removed">-${removedCount} removed</span>
-        <span class="stat unchanged">${unchangedCount} unchanged</span>
-        <span style="color:#6b7280;margin-left:auto;font-size:12px;">Comparing line-by-line • markdown format</span>
-      `;
-
-      emptyEl.style.display = 'none';
-      viewEl.style.display = 'grid';
-      summaryEl.style.display = 'flex';
-    }
-
-    function diffLineHtml(type, lineNum, marker, text) {
-      const ln = lineNum !== null ? lineNum : '';
-      return `<div class="diff-line ${type}"><span class="ln">${ln}</span><span class="marker">${escapeHtml(marker)}</span>${escapeHtml(text)}</div>`;
-    }
-
-    function clearDiff() {
-      document.getElementById('diffLinesA').innerHTML = '';
-      document.getElementById('diffLinesB').innerHTML = '';
-      document.getElementById('diffView').style.display = 'none';
-      document.getElementById('diffSummaryBar').style.display = 'none';
-      document.getElementById('diffEmpty').textContent = 'Select two reports above and click Compare Reports.';
-      document.getElementById('diffEmpty').style.display = 'block';
-      document.getElementById('compareSelectA').value = '';
-      document.getElementById('compareSelectB').value = '';
-    }
-
-    // Simplified patience/LCS diff
-    function computeDiff(a, b) {
-      const ops = [];
-      const memo = {};
-
-      function lcs(i, j) {
-        const key = i + ',' + j;
-        if (key in memo) return memo[key];
-        if (i >= a.length || j >= b.length) return memo[key] = 0;
-        if (a[i] === b[j]) return memo[key] = 1 + lcs(i+1, j+1);
-        return memo[key] = Math.max(lcs(i+1, j), lcs(i, j+1));
-      }
-
-      function build(i, j) {
-        if (i >= a.length && j >= b.length) return;
-        if (i < a.length && j < b.length && a[i] === b[j]) {
-          const last = ops[ops.length - 1];
-          if (last && last.type === 'equal') last.lines.push(a[i]);
-          else ops.push({ type: 'equal', lines: [a[i]] });
-          build(i+1, j+1);
-        } else if (j < b.length && (i >= a.length || lcs(i, j+1) >= lcs(i+1, j))) {
-          const last = ops[ops.length - 1];
-          if (last && last.type === 'insert') last.lines.push(b[j]);
-          else ops.push({ type: 'insert', lines: [b[j]] });
-          build(i, j+1);
-        } else {
-          const last = ops[ops.length - 1];
-          if (last && last.type === 'delete') last.lines.push(a[i]);
-          else ops.push({ type: 'delete', lines: [a[i]] });
-          build(i+1, j);
-        }
-      }
-
-      // For large files cap the LCS to avoid stack overflow - use linear diff
-      if (a.length + b.length > 1500) {
-        return linearDiff(a, b);
-      }
-      build(0, 0);
-      return ops;
-    }
-
-    // O(n) line diff fallback for large files (no LCS, just changed blocks)
-    function linearDiff(a, b) {
-      const ops = [];
-      const maxLen = Math.max(a.length, b.length);
-      for (let i = 0; i < maxLen; i++) {
-        const la = i < a.length ? a[i] : null;
-        const lb = i < b.length ? b[i] : null;
-        if (la === lb) {
-          const last = ops[ops.length - 1];
-          if (last && last.type === 'equal') last.lines.push(la);
-          else ops.push({ type: 'equal', lines: [la] });
-        } else {
-          if (la !== null) ops.push({ type: 'delete', lines: [la] });
-          if (lb !== null) ops.push({ type: 'insert', lines: [lb] });
-        }
-      }
-      return ops;
-    }
   </script>
 </body>
 </html>
+
     """
 
 
