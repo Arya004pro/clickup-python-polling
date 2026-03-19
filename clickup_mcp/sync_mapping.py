@@ -121,6 +121,44 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
 
 
+def _normalize_entity_name(name: str) -> str:
+    """
+    Normalize names for robust matching across user input and cached API values.
+
+    Handles:
+        - leading/trailing whitespace
+        - repeated internal whitespace
+        - hyphen/en dash/em dash variance
+    """
+    value = (name or "").strip().lower()
+    value = value.replace("\u2013", "-").replace("\u2014", "-")
+    value = re.sub(r"\s*-\s*", " - ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
+def _semantic_entity_key(name: str) -> str:
+    """
+    Build a tolerant matching key for entity names.
+
+    Treats "&" and "and" as equivalent and ignores non-alphanumeric
+    punctuation differences like dots or slashes.
+    """
+    value = _normalize_entity_name(name)
+    value = re.sub(r"\s*&\s*", " and ", value)
+    value = re.sub(r"\b&\b", " and ", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _entity_names_match(left: str, right: str) -> bool:
+    """Return True when two names refer to the same entity string-wise."""
+    return _normalize_entity_name(left) == _normalize_entity_name(right) or (
+        _semantic_entity_key(left) != ""
+        and _semantic_entity_key(left) == _semantic_entity_key(right)
+    )
+
+
 def _api_get(endpoint: str, params: dict = None) -> Optional[dict]:
     """Generic API GET wrapper — delegates to shared client for connection pooling."""
     try:
@@ -198,8 +236,7 @@ def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[d
     """Recursively search for an entity by name in a structure."""
     if not structure or not search_name:
         return None
-    search_lower = search_name.lower().strip()
-    if structure.get("name", "").lower() == search_lower:
+    if _entity_names_match(structure.get("name", ""), search_name):
         return {
             "id": structure["id"],
             "name": structure["name"],
@@ -208,7 +245,7 @@ def _search_entity_in_structure(structure: dict, search_name: str) -> Optional[d
             "found_at": "root",
         }
     for child in structure.get("children", []):
-        if child.get("name", "").lower() == search_lower:
+        if _entity_names_match(child.get("name", ""), search_name):
             return {
                 "id": child["id"],
                 "name": child["name"],
@@ -738,16 +775,13 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
     """
     if not entity_name:
         return None
-    search_lower = entity_name.lower().strip()
-
     # 1. Search in mapped projects
     for alias, data in db.projects.items():
         structure = data.get("structure", {})
-        if search_lower in [
-            alias.lower(),
-            data.get("alias", "").lower(),
-            structure.get("name", "").lower(),
-        ]:
+        if any(
+            _entity_names_match(candidate, entity_name)
+            for candidate in (alias, data.get("alias", ""), structure.get("name", ""))
+        ):
             return {
                 "id": data["clickup_id"],
                 "name": structure.get("name", alias),
@@ -773,7 +807,7 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
         return None
 
     for space in spaces_data.get("spaces", []):
-        if space["name"].lower() == search_lower:
+        if _entity_names_match(space["name"], entity_name):
             return {
                 "id": space["id"],
                 "name": space["name"],
@@ -785,7 +819,7 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
         folders_data = _api_get(f"/space/{space['id']}/folder")
         if folders_data:
             for folder in folders_data.get("folders", []):
-                if folder["name"].lower() == search_lower:
+                if _entity_names_match(folder["name"], entity_name):
                     return {
                         "id": folder["id"],
                         "name": folder["name"],
@@ -800,7 +834,7 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
                 lists_data = _api_get(f"/folder/{folder['id']}/list")
                 if lists_data:
                     for lst in lists_data.get("lists", []):
-                        if lst["name"].lower() == search_lower:
+                        if _entity_names_match(lst["name"], entity_name):
                             return {
                                 "id": lst["id"],
                                 "name": lst["name"],
@@ -822,7 +856,7 @@ def find_entity_anywhere(entity_name: str) -> Optional[dict]:
         lists_data = _api_get(f"/space/{space['id']}/list")
         if lists_data:
             for lst in lists_data.get("lists", []):
-                if lst["name"].lower() == search_lower:
+                if _entity_names_match(lst["name"], entity_name):
                     return {
                         "id": lst["id"],
                         "name": lst["name"],
@@ -1060,7 +1094,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
                     found = False
 
                     for s in all_spaces:
-                        if s["name"].lower() == id.lower():
+                        if _entity_names_match(s["name"], id):
                             resolved_id = s["id"]
                             found = True
                             break
@@ -1412,7 +1446,7 @@ def register_sync_mapping_tools(mcp: FastMCP):
 
         replaced = False
         for i, existing in enumerate(report_spaces):
-            if str(existing.get("name", "")).strip().lower() == canonical_name.lower():
+            if _entity_names_match(str(existing.get("name", "")), canonical_name):
                 report_spaces[i] = entry
                 replaced = True
                 break
@@ -1448,10 +1482,10 @@ def register_sync_mapping_tools(mcp: FastMCP):
 
         keep = []
         removed = None
-        target = (space_name or "").strip().lower()
+        target = (space_name or "").strip()
         for item in report_spaces:
             name = str(item.get("name", "")).strip()
-            if name.lower() == target and removed is None:
+            if _entity_names_match(name, target) and removed is None:
                 removed = item
                 continue
             keep.append(item)
