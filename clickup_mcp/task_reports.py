@@ -14,7 +14,7 @@ All period-based tools support:
   today | yesterday | this_week | last_week | this_month | last_month |
   this_year | last_30_days | rolling (+rolling_days) | custom (+custom_start/end YYYY-MM-DD)
 
-OVERTIME FIX (2025-02-25):
+OVERTIME FIX (2026-02-25):
   Parent tasks now use est_total / tracked_total (rollup-consistent).
   Subtasks continue to use est_direct / tracked_direct.
   Per-user overage is proportional share of total task overage,
@@ -248,6 +248,49 @@ def _list_ids_for_project(project_name: str) -> List[str]:
     _monitored = _load_monitored_list_ids(project_name)
     if _monitored is not None:
         return _monitored
+
+    project_value = (project_name or "").strip()
+    if project_value.isdigit():
+        # Guardrail: some LLM calls pass resolved entity IDs into project_name.
+        # Accept list/folder/space IDs directly to avoid false "not found" errors.
+        list_data, _ = _api_call("GET", f"/list/{project_value}")
+        if list_data and str(list_data.get("id") or "") == project_value:
+            return [project_value]
+
+        folder_lists, _ = _api_call("GET", f"/folder/{project_value}/list")
+        if folder_lists and isinstance(folder_lists.get("lists"), list):
+            folder_ids = [
+                str(lst.get("id")) for lst in folder_lists["lists"] if lst.get("id")
+            ]
+            if folder_ids:
+                return list(dict.fromkeys(folder_ids))
+
+        space_list_ids: List[str] = []
+        folderless_lists, _ = _api_call("GET", f"/space/{project_value}/list")
+        if folderless_lists and isinstance(folderless_lists.get("lists"), list):
+            space_list_ids.extend(
+                [
+                    str(lst.get("id"))
+                    for lst in folderless_lists["lists"]
+                    if lst.get("id")
+                ]
+            )
+
+        space_folders, _ = _api_call("GET", f"/space/{project_value}/folder")
+        if space_folders and isinstance(space_folders.get("folders"), list):
+            for folder in space_folders["folders"]:
+                fl_resp, _ = _api_call("GET", f"/folder/{folder['id']}/list")
+                if fl_resp and isinstance(fl_resp.get("lists"), list):
+                    space_list_ids.extend(
+                        [
+                            str(lst.get("id"))
+                            for lst in fl_resp["lists"]
+                            if lst.get("id")
+                        ]
+                    )
+
+        if space_list_ids:
+            return list(dict.fromkeys(space_list_ids))
 
     from .pm_analytics import _resolve_to_list_ids
 
@@ -548,7 +591,7 @@ def register_task_report_tools(mcp: FastMCP):
     @mcp.tool()
     def get_space_task_report(
         space_name: str,
-        period_type: str = "today",
+        period_type: Optional[str] = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -590,6 +633,7 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
+            period_type = (period_type or "today").strip()
             if not job_id:
 
                 def _work():
@@ -963,7 +1007,7 @@ def register_task_report_tools(mcp: FastMCP):
     @mcp.tool()
     def get_project_task_report(
         project_name: str,
-        period_type: str = "yesterday",
+        period_type: Optional[str] = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -1010,6 +1054,7 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
+            period_type = (period_type or "today").strip()
             print(f"⌛ Project task report: '{project_name}' / {period_type}")
             sys.stdout.flush()
 
@@ -1066,7 +1111,9 @@ def register_task_report_tools(mcp: FastMCP):
             timed = [t for t in all_tasks if int(t.get("time_spent") or 0) > 0]
             # No date params: ClickUp drops manual (empty-intervals) entries from
             # date-filtered /task/{id}/time responses. Client-side filtering handles the range.
-            entries_map = _fetch_time_entries_smart([t["id"] for t in timed], start_ms, end_ms)
+            entries_map = _fetch_time_entries_smart(
+                [t["id"] for t in timed], start_ms, end_ms
+            )
             metrics = _calculate_task_metrics(all_tasks)
 
             # Build per-member report with task detail
@@ -1298,7 +1345,7 @@ def register_task_report_tools(mcp: FastMCP):
         member_name: str,
         project_name: Optional[str] = None,
         space_name: Optional[str] = None,
-        period_type: str = "yesterday",
+        period_type: Optional[str] = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -1334,6 +1381,7 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
+            period_type = (period_type or "today").strip()
             print(f"⌛ Member task report: '{member_name}' / {period_type}")
             sys.stdout.flush()
 
@@ -1447,7 +1495,9 @@ def register_task_report_tools(mcp: FastMCP):
                 return {"error": f"Failed to fetch time entries: {entries_err}"}
 
             raw_entries = entries_resp.get("data", [])
-            print(f"[DEBUG] Team time entries API: {len(raw_entries)} entries for {member_name}")
+            print(
+                f"[DEBUG] Team time entries API: {len(raw_entries)} entries for {member_name}"
+            )
             sys.stdout.flush()
 
             # Step 3: Build task_id → tracked_ms from intervals
@@ -1475,12 +1525,18 @@ def register_task_report_tools(mcp: FastMCP):
                         if iv_time <= 0:
                             continue
                         iv_id = iv.get("id")
-                        fp = f"id:{iv_id}" if iv_id else f"t:{iv_start}:{iv_end}:{iv_time}"
+                        fp = (
+                            f"id:{iv_id}"
+                            if iv_id
+                            else f"t:{iv_start}:{iv_end}:{iv_time}"
+                        )
                         if fp in seen_fps:
                             continue
                         seen_fps.add(fp)
                         task_tracked[task_id] = task_tracked.get(task_id, 0) + iv_time
-                        task_days_map.setdefault(task_id, set()).add(_ms_to_date_ist(iv_start))
+                        task_days_map.setdefault(task_id, set()).add(
+                            _ms_to_date_ist(iv_start)
+                        )
                         total_ms += iv_time
                 else:
                     # No intervals — use entry-level fields
@@ -1490,19 +1546,27 @@ def register_task_report_tools(mcp: FastMCP):
                         fp = f"entry:{entry.get('id', e_start)}"
                         if fp not in seen_fps:
                             seen_fps.add(fp)
-                            task_tracked[task_id] = task_tracked.get(task_id, 0) + e_duration
-                            task_days_map.setdefault(task_id, set()).add(_ms_to_date_ist(e_start))
+                            task_tracked[task_id] = (
+                                task_tracked.get(task_id, 0) + e_duration
+                            )
+                            task_days_map.setdefault(task_id, set()).add(
+                                _ms_to_date_ist(e_start)
+                            )
                             total_ms += e_duration
 
             # Step 4: Fetch task details only for tasks with tracked time (small set)
             task_details: Dict[str, Dict] = {}
             if task_tracked:
+
                 def _fetch_task_detail(tid: str):
                     data, _ = _api_call("GET", f"/task/{tid}")
                     return tid, data
 
                 with ThreadPoolExecutor(max_workers=min(20, len(task_tracked))) as pool:
-                    futures = {pool.submit(_fetch_task_detail, tid): tid for tid in task_tracked}
+                    futures = {
+                        pool.submit(_fetch_task_detail, tid): tid
+                        for tid in task_tracked
+                    }
                     for fut in as_completed(futures):
                         try:
                             tid, data = fut.result()
@@ -1522,13 +1586,17 @@ def register_task_report_tools(mcp: FastMCP):
                 task_data = task_details.get(tid, {})
                 est = int(task_data.get("time_estimate") or 0)
                 total_est_ms += est
-                task_list.append({
-                    "task_name": task_data.get("name", f"Task {tid}"),
-                    "status": _extract_status_name(task_data) if task_data else "unknown",
-                    "time_tracked": _format_duration(tracked_ms),
-                    "time_estimate": _format_duration(est),
-                    "time_tracked_ms": tracked_ms,
-                })
+                task_list.append(
+                    {
+                        "task_name": task_data.get("name", f"Task {tid}"),
+                        "status": _extract_status_name(task_data)
+                        if task_data
+                        else "unknown",
+                        "time_tracked": _format_duration(tracked_ms),
+                        "time_estimate": _format_duration(est),
+                        "time_tracked_ms": tracked_ms,
+                    }
+                )
 
             task_list.sort(key=lambda x: x.pop("time_tracked_ms"), reverse=True)
 
@@ -1576,7 +1644,7 @@ def register_task_report_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_low_hours_report(
-        period_type: str = "this_week",
+        period_type: str = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -1623,6 +1691,7 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
+            period_type = (period_type or "today").strip()
             print(f"⌛ Low hours report / {period_type} / threshold={min_hours}h")
             sys.stdout.flush()
 
@@ -1876,7 +1945,7 @@ def register_task_report_tools(mcp: FastMCP):
     def get_missing_estimation_report(
         project_name: Optional[str] = None,
         space_name: Optional[str] = None,
-        period_type: Optional[str] = None,
+        period_type: Optional[str] = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -1897,8 +1966,8 @@ def register_task_report_tools(mcp: FastMCP):
         worked on during the period are correctly included regardless of when
         they were created.
 
-        When no period_type is given the report falls back to scanning every task
-        in scope and groups them by task assignee instead.
+        If period_type is omitted, the default period is "today".
+        Use period_type="all_time" to scan every task in scope and group by assignee.
 
         Args:
             project_name:   Narrow to a specific project/folder (optional)
@@ -1906,8 +1975,7 @@ def register_task_report_tools(mcp: FastMCP):
             period_type:    Filter by the date time was TRACKED (not task creation):
                             today | yesterday | this_week | last_week |
                             this_month | last_month | this_year | last_30_days |
-                            rolling | custom
-                            Leave None to include all tasks regardless of date.
+                            rolling | custom | all_time
             custom_start:   YYYY-MM-DD (required when period_type="custom")
             custom_end:     YYYY-MM-DD (required when period_type="custom")
             rolling_days:   Number of days for rolling window (1-365)
@@ -1946,14 +2014,15 @@ def register_task_report_tools(mcp: FastMCP):
 
                 return _dispatch(_work, async_job)
 
-            # --- Parse period filter (optional) ---
+            # --- Parse period filter (default: today) ---
             start_ms: Optional[int] = None
             end_ms: Optional[int] = None
             period_label = "all time"
 
-            if period_type:
+            normalized_period = (period_type or "today").strip().lower()
+            if normalized_period not in {"all_time", "all", "all-time"}:
                 start_date, end_date = parse_time_period_filter(
-                    period_type=period_type,
+                    period_type=normalized_period,
                     custom_start=custom_start,
                     custom_end=custom_end,
                     rolling_days=rolling_days,
@@ -2279,6 +2348,7 @@ def register_task_report_tools(mcp: FastMCP):
             return {
                 "scope": scope,
                 "period": period_label,
+                "period_type": normalized_period,
                 "total_tasks_checked": checked_count,
                 "total_missing_estimate": total_missing,
                 "total_ratio_flagged": ratio_total,
@@ -2309,7 +2379,7 @@ def register_task_report_tools(mcp: FastMCP):
     # =========================================================================
     # 6. OVERTIME REPORT — Tracked > Estimated
     #
-    # FIX (2025-02-26): Use hierarchy-level metric pair:
+    # FIX (2026-02-26): Use hierarchy-level metric pair:
     #   • Main task (no parent): est_total vs tracked_total
     #   • Subtask (any depth):   est_direct vs tracked_direct
     #
@@ -2323,7 +2393,7 @@ def register_task_report_tools(mcp: FastMCP):
     def get_overtracked_report(
         project_name: Optional[str] = None,
         space_name: Optional[str] = None,
-        period_type: str = "this_week",
+        period_type: Optional[str] = "today",
         custom_start: Optional[str] = None,
         custom_end: Optional[str] = None,
         rolling_days: Optional[int] = None,
@@ -2373,6 +2443,7 @@ def register_task_report_tools(mcp: FastMCP):
             }
         """
         try:
+            period_type = (period_type or "today").strip()
             print(f"⌛ Overtime report / {period_type}")
             sys.stdout.flush()
 

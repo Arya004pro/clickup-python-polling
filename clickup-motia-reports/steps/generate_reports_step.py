@@ -271,40 +271,10 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
     generation_started_epoch_ms = int(time.time() * 1000)
     generation_started_iso = datetime.now(timezone.utc).isoformat()
 
-    # --- Single-run guard: prevent overlapping generation batches ---
     run_marker_key = "global"
-    now_epoch_s = time.time()
-    existing_run = await ctx.state.get("report_generation_in_progress", run_marker_key)
-    if isinstance(existing_run, dict):
-        started_at = float(existing_run.get("started_at_epoch_s") or 0)
-        age = max(0.0, now_epoch_s - started_at)
-        if age < _RUN_LOCK_STALE_S:
-            ctx.logger.warn(
-                "[DEDUP] Skipping trigger because another report generation run is active "
-                f"(age={age:.0f}s, source={existing_run.get('trigger_source')}, "
-                f"label={existing_run.get('schedule_label')})"
-            )
-            return
-    # -------------------------------------------------------------------------
-
-    # --- Idempotency guard: skip if the same schedule already fired recently ---
-    # This prevents duplicate emails when both the iii CronModule and the motia
-    # Python worker fire the same cron step (two triggers → one email).
     dedup_key = f"{schedule_label}::{period}"
     if period == "custom" and custom_start and custom_end:
         dedup_key = f"{dedup_key}::{custom_start}::{custom_end}"
-    last_run = await ctx.state.get("report_last_run", dedup_key)
-    now_ts = time.time()
-    if last_run is not None:
-        elapsed = now_ts - float(last_run)
-        if elapsed < _DEDUP_WINDOW_S:
-            ctx.logger.warn(
-                f"[DEDUP] Skipping duplicate trigger for '{dedup_key}' "
-                f"(last ran {elapsed:.0f}s ago, window={_DEDUP_WINDOW_S}s)"
-            )
-            return
-    await ctx.state.set("report_last_run", dedup_key, now_ts)
-    # -------------------------------------------------------------------------
     requested_spaces = input_data.get("spaces")
     requested_spaces_list = [
         str(name).strip() for name in (requested_spaces or []) if str(name).strip()
@@ -516,6 +486,39 @@ async def handler(input_data: dict, ctx: FlowContext[Any]) -> None:
 
     reports_markdown: list[dict] = []
     async with _RUN_LOCK:
+        # --- Single-run guard: prevent overlapping generation batches ---
+        now_epoch_s = time.time()
+        existing_run = await ctx.state.get(
+            "report_generation_in_progress", run_marker_key
+        )
+        if isinstance(existing_run, dict):
+            started_at = float(existing_run.get("started_at_epoch_s") or 0)
+            age = max(0.0, now_epoch_s - started_at)
+            if age < _RUN_LOCK_STALE_S:
+                ctx.logger.warn(
+                    "[DEDUP] Skipping trigger because another report generation run is active "
+                    f"(age={age:.0f}s, source={existing_run.get('trigger_source')}, "
+                    f"label={existing_run.get('schedule_label')})"
+                )
+                return
+        # ---------------------------------------------------------------------
+
+        # --- Idempotency guard: skip if the same schedule already fired recently ---
+        # Running this inside _RUN_LOCK avoids race conditions where two queued
+        # generate events pass dedup checks before either one sets report_last_run.
+        last_run = await ctx.state.get("report_last_run", dedup_key)
+        now_ts = time.time()
+        if last_run is not None:
+            elapsed = now_ts - float(last_run)
+            if elapsed < _DEDUP_WINDOW_S:
+                ctx.logger.warn(
+                    f"[DEDUP] Skipping duplicate trigger for '{dedup_key}' "
+                    f"(last ran {elapsed:.0f}s ago, window={_DEDUP_WINDOW_S}s)"
+                )
+                return
+        await ctx.state.set("report_last_run", dedup_key, now_ts)
+        # ---------------------------------------------------------------------
+
         await ctx.state.set(
             "report_generation_in_progress",
             run_marker_key,

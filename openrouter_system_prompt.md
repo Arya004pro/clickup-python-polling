@@ -68,6 +68,33 @@ If report-scope management applies, skip this section.
 - Call `find_project_anywhere("DevOps and networking")` → client auto-retries → returns `name: "DevOps & Networking"`.
 - Then call `get_space_task_report(space_name="DevOps & Networking", ...)`.
 
+**Rule 7 — Hyphenated project names MUST NOT be split**
+If the project/folder name contains hyphens (e.g., `Taxation - CPA Assistant`,
+`DevOps & Networking`), the full name INCLUDING hyphens must be passed verbatim
+to `find_project_anywhere`. NEVER split at `-` or `–`.
+
+- "no time estimation in Taxation - CPA Assistant" → `find_project_anywhere("Taxation - CPA Assistant")`
+- "report in AI Photo Manager" → `find_project_anywhere("AI Photo Manager")`
+- WRONG: `find_project_anywhere("Taxation")` ← truncated at hyphen
+
+**Rule 8 — "in [project]" and "for [project]" patterns are equivalent**
+The prepositions "in", "for", "from", "of", "within" all indicate the target entity.
+Always extract the COMPLETE phrase following these prepositions as the entity name,
+including any hyphens, spaces, or special characters.
+
+Pattern: `[report type] in/for/from/within [FULL entity name]`
+
+Examples:
+- "missing estimation report for this month in Taxation - CPA Assistant"
+  → entity = "Taxation - CPA Assistant" (everything after "in")
+- "low hours report for last week from Avinashi Chat"
+  → entity = "Avinashi Chat"
+- "space report in DevOps & Networking"
+  → entity = "DevOps & Networking"
+
+**Extraction rule:** When time period words appear (today, yesterday, this month,
+last week, etc.), they are NOT part of the entity name. Strip them before extracting.
+
 ## Output Behavior
 
 - If `formatted_output` exists: output only that content, unchanged.
