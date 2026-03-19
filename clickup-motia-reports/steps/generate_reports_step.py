@@ -62,9 +62,25 @@ def _looks_like_report_markdown(text: str) -> bool:
         "## missing estimation report",
         "## overtime report",
     )
-    if not any(h in lowered for h in report_headers):
+    has_header_style_report = any(h in lowered for h in report_headers)
+
+    # Some deployments return table-first markdown instead of heading-first markdown.
+    # Accept both so valid reports are not incorrectly rejected.
+    table_signals = (
+        "| **space name** |",
+        "| **period** |",
+        "| **grand total time tracked** |",
+        "| **grand total time estimate** |",
+        "| **projects** |",
+    )
+    has_table_style_report = sum(1 for s in table_signals if s in lowered) >= 3
+
+    if not (has_header_style_report or has_table_style_report):
         return False
-    if "**period:**" not in lowered and "|  **period:**" not in lowered:
+
+    has_period_colon_style = "**period:**" in lowered or "|  **period:**" in lowered
+    has_period_table_style = "| **period** |" in lowered
+    if not (has_period_colon_style or has_period_table_style):
         return False
     return True
 
