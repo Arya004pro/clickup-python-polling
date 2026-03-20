@@ -118,6 +118,24 @@ _CONFIG_VERBS = (
 )
 
 
+def _is_report_intent(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    report_keywords = (
+        "report",
+        "missing time estimation",
+        "missing estimation",
+        "low hours",
+        "overtracked",
+        "more time tracked than estimated",
+        "space task report",
+        "project report",
+        "member report",
+    )
+    return any(k in lowered for k in report_keywords)
+
+
 @dataclass
 class SessionStats:
     total_input_tokens: int = 0
@@ -867,6 +885,8 @@ class OpenRouterMCPClient:
             *self.conversation,
         ]
         poll_count = 0
+        report_intent = _is_report_intent(user_message)
+        forced_tool_retry_used = False
 
         while True:
             response = await self.llm_call_with_tools(messages, tools_for_query)
@@ -874,6 +894,24 @@ class OpenRouterMCPClient:
 
             if not msg.tool_calls:
                 text = msg.content or ""
+                # Safety: report requests must be grounded in MCP tool output.
+                if report_intent and not forced_tool_retry_used:
+                    forced_tool_retry_used = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "For this report request, do not answer from memory. "
+                                "Call one appropriate MCP report tool now and use only real tool output."
+                            ),
+                        }
+                    )
+                    continue
+                if report_intent and forced_tool_retry_used:
+                    text = (
+                        "I could not fetch report data from MCP tools in this turn, "
+                        "so I am not returning a synthetic report. Please retry."
+                    )
                 self.conversation.append({"role": "assistant", "content": text})
                 return text
 

@@ -82,9 +82,9 @@ if not any(
 class QueryRequest(BaseModel):
     question: str
     model: Optional[str] = None
-    reset_conversation: bool = (
-        False  # Clear conversation history before this query (use for batch reports)
-    )
+    # None means "use server default". This keeps API compatibility while allowing
+    # stateless-by-default behavior for shared dashboard deployments.
+    reset_conversation: Optional[bool] = None
 
 
 class QueryResponse(BaseModel):
@@ -1399,7 +1399,7 @@ async def dashboard():
         const response = await fetch('/query', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question, reset_conversation: true }),
         });
         const data = await response.json();
         loader.classList.remove('show');
@@ -1486,7 +1486,15 @@ async def query_ai(req: QueryRequest):
             error="Question cannot be empty.",
         )
 
-    if req.reset_conversation:
+    default_reset = (
+        os.getenv("QUERY_RESET_CONVERSATION_DEFAULT", "true").strip().lower()
+        not in {"0", "false", "no"}
+    )
+    should_reset = req.reset_conversation
+    if should_reset is None:
+        should_reset = default_reset
+
+    if should_reset:
         client.conversation = []
 
     before_saved = client.stats.reports_saved
