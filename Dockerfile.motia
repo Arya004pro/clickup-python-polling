@@ -15,11 +15,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 ENV TZ=Asia/Kolkata
 
-# Install motia engine globally (provides motia-iii CLI)
+# Install Motia CLI (used by Python worker process inside iii ExecModule)
 RUN npm install -g motia@1.0.0-rc.24
 
-# Install iii engine CLI (the backend runtime that Python workers connect to)
-RUN curl -fsSL https://install.iii.dev/iii-cli/main/install.sh | bash
+# Install iii runtime engine CLI (current binary name: iii)
+RUN curl -fsSL https://install.iii.dev/iii/main/install.sh | sh
 
 WORKDIR /app
 
@@ -37,5 +37,5 @@ ENV PYTHONPATH=/app
 # Data directories for iii state/stream persistence
 RUN mkdir -p data/streams_store
 
-# Start iii engine — it manages Python workers via ExecModule in iii-config.yaml
-CMD ["iii-cli", "start", "-c", "iii-config.yaml"]
+# Start iii engine using explicit config.
+CMD ["iii", "-c", "iii-config.yaml"]

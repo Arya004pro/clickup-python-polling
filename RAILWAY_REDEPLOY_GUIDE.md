@@ -53,7 +53,7 @@ python api_server.py
 
 ### C) `motia-reports`
 - Dockerfile path: `Dockerfile.motia`
-- Start command: keep image default (`iii-cli start -c iii-config.yaml`)
+- Start command: keep image default (`iii -c iii-config.yaml`)
 - Expose/public domain: optional
   - required only if you trigger `POST /trigger-report` externally
 
