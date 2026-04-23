@@ -430,5 +430,3 @@ This table is generated from current code decorators in `clickup_mcp/*.py`.
 - use diagnostics that print only `SET/EMPTY` for secret checks
 
 ---
-
-If you add or rename tools/endpoints, regenerate this README tool table so docs stay accurate.
